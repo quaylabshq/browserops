@@ -1,0 +1,31 @@
+{
+  "name": "browser-exp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Claude Code plugin that drives a live Chrome browser",
+  "type": "module",
+  "engines": {
+    "node": ">=20.10",
+    "pnpm": ">=9"
+  },
+  "packageManager": "pnpm@9.12.0",
+  "scripts": {
+    "dev": "concurrently -n shared,bridge,ext -c cyan,green,magenta \"pnpm -F @browser-exp/shared dev\" \"pnpm -F @browser-exp/bridge dev\" \"pnpm -F @browser-exp/extension dev\"",
+    "build": "pnpm -r --sequential build",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "test": "pnpm -r test",
+    "test:integration": "pnpm --filter @browser-exp/bridge test:integration",
+    "test:smoke": "pnpm --filter @browser-exp/extension test:smoke",
+    "clean": "pnpm -r clean && rm -rf node_modules"
+  },
+  "devDependencies": {
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "concurrently": "^9.0.0",
+    "eslint": "^9.0.0",
+    "prettier": "^3.0.0",
+    "typescript": "^5.4.0"
+  }
+}
