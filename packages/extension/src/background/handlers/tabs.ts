@@ -60,7 +60,7 @@ async function waitForTabIdAssignment(
 export function registerTabHandlers(router: Router, opts: TabsOpts): void {
   const { tabIdMap, chromeIdToTabId } = opts;
 
-  router.register("list_tabs", async (): Promise<{ tabs: TabSummary[] }> => {
+  router.register("browser.list_tabs", async (): Promise<{ tabs: TabSummary[] }> => {
     const tabs = await chrome.tabs.query({});
     const summaries: TabSummary[] = [];
     for (const tab of tabs) {
@@ -72,7 +72,7 @@ export function registerTabHandlers(router: Router, opts: TabsOpts): void {
     return { tabs: summaries };
   });
 
-  router.register("current_tab", async (): Promise<TabSummary> => {
+  router.register("browser.current_tab", async (): Promise<TabSummary> => {
     const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
     const tab = tabs[0];
     if (tab === undefined || tab.id === undefined) {
@@ -85,7 +85,7 @@ export function registerTabHandlers(router: Router, opts: TabsOpts): void {
     return toSummary(tab, tabId);
   });
 
-  router.register("new_tab", async (params): Promise<{ tab_id: string; url?: string }> => {
+  router.register("browser.new_tab", async (params): Promise<{ tab_id: string; url?: string }> => {
     const rawUrl = params["url"];
     const rawActive = params["active"];
     const createProps: chrome.tabs.CreateProperties = {};
@@ -100,14 +100,14 @@ export function registerTabHandlers(router: Router, opts: TabsOpts): void {
     return url !== undefined && url !== "" ? { tab_id: tabId, url } : { tab_id: tabId };
   });
 
-  router.register("close_tab", async (params): Promise<{ closed: true }> => {
+  router.register("browser.close_tab", async (params): Promise<{ closed: true }> => {
     const chromeId = resolveChromeId(tabIdMap, params["tab_id"]);
     await chrome.tabs.remove(chromeId);
     return { closed: true };
   });
 
   router.register(
-    "switch_tab",
+    "browser.switch_tab",
     async (params): Promise<{ tab_id: string; active: true }> => {
       const tabIdParam = params["tab_id"];
       if (typeof tabIdParam !== "string") {

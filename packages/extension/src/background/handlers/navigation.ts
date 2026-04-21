@@ -52,7 +52,7 @@ async function readTabUrl(chromeTabId: number): Promise<string> {
 export function registerNavigationHandlers(router: Router, opts: NavigationOpts): void {
   const { tabIdMap } = opts;
 
-  router.register("navigate", async (params): Promise<{ final_url: string }> => {
+  router.register("browser.navigate", async (params): Promise<{ final_url: string }> => {
     const chromeId = resolveChromeId(tabIdMap, params["tab_id"]);
     const url = params["url"];
     if (typeof url !== "string") {
@@ -68,19 +68,19 @@ export function registerNavigationHandlers(router: Router, opts: NavigationOpts)
     return { final_url: finalUrl };
   });
 
-  router.register("back", async (params): Promise<Record<string, never>> => {
+  router.register("browser.back", async (params): Promise<Record<string, never>> => {
     const chromeId = resolveChromeId(tabIdMap, params["tab_id"]);
     await chrome.tabs.goBack(chromeId);
     return {};
   });
 
-  router.register("forward", async (params): Promise<Record<string, never>> => {
+  router.register("browser.forward", async (params): Promise<Record<string, never>> => {
     const chromeId = resolveChromeId(tabIdMap, params["tab_id"]);
     await chrome.tabs.goForward(chromeId);
     return {};
   });
 
-  router.register("reload", async (params): Promise<Record<string, never>> => {
+  router.register("browser.reload", async (params): Promise<Record<string, never>> => {
     const chromeId = resolveChromeId(tabIdMap, params["tab_id"]);
     const hardRaw = params["hard"];
     const bypassCache = hardRaw === true;
@@ -89,7 +89,7 @@ export function registerNavigationHandlers(router: Router, opts: NavigationOpts)
   });
 
   router.register(
-    "wait_for",
+    "browser.wait_for",
     async (params): Promise<{ matched: "url_pattern"; elapsed_ms: number }> => {
       const chromeId = resolveChromeId(tabIdMap, params["tab_id"]);
       const urlPattern = params["url_pattern"];
