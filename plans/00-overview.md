@@ -1,4 +1,4 @@
-# Browser-Exp — End-to-End Plan Overview
+# BrowserOps — End-to-End Plan Overview
 
 > Claude Code plugin that drives a live Chrome browser. Claude Code calls MCP tools → a local Node process forwards them to a Chrome extension over WebSocket → the extension uses `chrome.tabs`, `chrome.scripting`, and `chrome.debugger` to control the user's real browsing session.
 
@@ -29,7 +29,7 @@ This document is the connective tissue. Every sub-plan (01–08) refers back to 
 ```
 ┌──────────────┐   stdio MCP    ┌───────────────────────┐   WebSocket   ┌─────────────────────┐
 │              │ ─────────────> │                       │ ────────────> │                     │
-│ Claude Code  │                │  browser-exp-bridge   │               │  Chrome extension   │
+│ Claude Code  │                │  browserops-bridge   │               │  Chrome extension   │
 │              │ <───────────── │  (single Node/TS      │ <──────────── │  (MV3, background   │
 └──────────────┘   tool results │   process)            │   events      │   service worker)   │
                                 └───────────────────────┘               └──────────┬──────────┘
@@ -68,7 +68,7 @@ Example: Claude calls `browser.click({ tab_id: "t_17", ref: 42 })`.
 7. **Extension — execute.** Use `chrome.debugger` (CDP `Input.dispatchMouseEvent`) or a content-script synthetic click depending on element type.
 8. **Extension → Bridge.** Send a `Response` envelope with the result or error.
 9. **Bridge → Claude Code.** Return the MCP tool result.
-10. **Logging.** Every step is appended to `~/.browser-exp/log.jsonl`.
+10. **Logging.** Every step is appended to `~/.browserops/log.jsonl`.
 
 A `read` call is the same flow except the extension builds and returns a fresh a11y snapshot (and caches it keyed by tab id for later `click`/`type` ref resolution).
 
@@ -90,7 +90,7 @@ Each WebSocket text frame carries **exactly one** JSON document, UTF-8, no trail
 // Extension → Bridge, first frame after socket opens
 type Hello = {
   type: "hello";
-  token: string;            // shared secret from ~/.browser-exp/token
+  token: string;            // shared secret from ~/.browserops/token
   extension_version: string;
   protocol_version: number; // see §4.7
 };
@@ -186,7 +186,7 @@ Integer, starts at `1`. Bumped only on breaking envelope changes. `HelloAck` car
 
 ### 4.6 Log format
 
-`~/.browser-exp/log.jsonl` — one JSON object per line:
+`~/.browserops/log.jsonl` — one JSON object per line:
 
 ```json
 {"ts":"2026-04-21T10:00:00.000Z","dir":"mcp_in","id":"...","method":"click","params":{...}}
@@ -199,8 +199,8 @@ Integer, starts at `1`. Bumped only on breaking envelope changes. `HelloAck` car
 
 ## 5. Runtime & security posture
 
-- **Transport between bridge and extension:** WebSocket on `127.0.0.1:8765` (default, configurable via `BROWSER_EXP_PORT`). **Never** bound to `0.0.0.0`.
-- **Shared secret.** On first run, the bridge generates a token written to `~/.browser-exp/token` (mode 0600). The user pastes the same token into the extension's options page; it is stored in `chrome.storage.local`. The token is sent **only** in the extension's first frame (`Hello`); the subsequent persistent socket is the ongoing auth boundary. Mismatch → bridge closes with code 4001.
+- **Transport between bridge and extension:** WebSocket on `127.0.0.1:8765` (default, configurable via `BROWSEROPS_PORT`). **Never** bound to `0.0.0.0`.
+- **Shared secret.** On first run, the bridge generates a token written to `~/.browserops/token` (mode 0600). The user pastes the same token into the extension's options page; it is stored in `chrome.storage.local`. The token is sent **only** in the extension's first frame (`Hello`); the subsequent persistent socket is the ongoing auth boundary. Mismatch → bridge closes with code 4001.
 - **Origin check.** Bridge accepts only WebSocket upgrades with `Origin: chrome-extension://<our-extension-id>`, enforced on the HTTP `upgrade` event *before* `handleUpgrade` (so rejected connections get 403 and never reach application code).
 - **No telemetry.** All logs local.
 
@@ -237,7 +237,7 @@ Sub-plans can be drafted in parallel (they all consume this overview), but **01 
 ## 8. Repository layout
 
 ```
-browser-exp/
+browserops/
 ├── package.json                 # pnpm workspace root
 ├── pnpm-workspace.yaml
 ├── tsconfig.base.json

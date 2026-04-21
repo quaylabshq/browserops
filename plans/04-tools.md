@@ -6,7 +6,7 @@
 
 ## 1. Scope
 
-This plan specifies the exact set of MCP tools exposed by the `browser-exp-bridge` MCP server, their input/output JSON Schemas, the error codes each tool may return, their rate-limit weight, and whether they trigger the risky-action confirmation gate. It does **not** cover how the MCP server registers tools (see `01-mcp-server.md`), how the bridge forwards them to the extension (see `02-bridge-protocol.md`), how refs are generated and resolved (see `05-element-refs.md`), or how risky actions are confirmed (see `06-autonomy-safety.md`). It defines the contract both the bridge-side adapter and the extension-side handlers must honour.
+This plan specifies the exact set of MCP tools exposed by the `browserops-bridge` MCP server, their input/output JSON Schemas, the error codes each tool may return, their rate-limit weight, and whether they trigger the risky-action confirmation gate. It does **not** cover how the MCP server registers tools (see `01-mcp-server.md`), how the bridge forwards them to the extension (see `02-bridge-protocol.md`), how refs are generated and resolved (see `05-element-refs.md`), or how risky actions are confirmed (see `06-autonomy-safety.md`). It defines the contract both the bridge-side adapter and the extension-side handlers must honour.
 
 ## 2. Inputs from other plans
 

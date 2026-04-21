@@ -1,5 +1,5 @@
 {
-  "name": "@browser-exp/shared",
+  "name": "@browserops/shared",
   "version": "0.1.0",
   "private": true,
   "type": "module",

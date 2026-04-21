@@ -8,7 +8,7 @@ build/
 *.tsbuildinfo
 
 # Runtime state
-.browser-exp/
+.browserops/
 
 # Editor
 .vscode/

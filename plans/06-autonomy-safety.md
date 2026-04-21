@@ -13,7 +13,7 @@ This plan covers:
 - The `isRisky(tool, params, tab)` heuristic and its configurable sensitive-domain list.
 - The confirmation UX surfaced by the extension popup + browser notification + toolbar badge.
 - The kill-switch (toolbar right-click → Disconnect) and reconnection flow.
-- The `~/.browser-exp/log.jsonl` audit log: schema hooks, levels, truncation policy.
+- The `~/.browserops/log.jsonl` audit log: schema hooks, levels, truncation policy.
 - Where the bridge (plan 01) and extension (plan 03) invoke these primitives.
 
 Out of scope: tool schemas themselves (plan 04), ref resolution (plan 05), MCP/WS transport (plans 01/02), and the extension's UI scaffolding beyond the confirmation modal (plan 03). This plan does not introduce new error codes beyond those already declared in `00-overview.md §4.3`.
@@ -36,7 +36,7 @@ Out of scope: tool schemas themselves (plan 04), ref resolution (plan 05), MCP/W
 
 - **To 01 (bridge):** `RateLimiter` class and `Safety` facade with `tryConsume(tab_id, weight)`, `checkRisky(tool, params, tab)`, and `awaitConfirmation(decisionId)`. Called before forwarding any `Request` to the WS.
 - **To 03 (extension):** a required `safety_prompt` inbound WS `Request` (bridge → ext) and a `safety_decision` outbound WS `Response` (ext → bridge). `safety_decision` is a `Response` (overview §4.2) to the `safety_prompt` Request — shares the same `id`, carries `result: { decision_id, allow: boolean }`. It is NOT an Event. Plus the `Disconnect` toolbar action that closes the WS with code `4006` (overview §4.3.1 reserves 4006 for user-initiated kill switch; 4003 is reserved for Hello timeout).
-- **To 08 (testing):** deterministic hooks for time (`now()` injectable), clock-skew tests for the token bucket, and a CLI env var `BROWSER_EXP_AUTOCONFIRM=allow|deny` used in e2e fixtures.
+- **To 08 (testing):** deterministic hooks for time (`now()` injectable), clock-skew tests for the token bucket, and a CLI env var `BROWSEROPS_AUTOCONFIRM=allow|deny` used in e2e fixtures.
 
 ---
 
@@ -108,7 +108,7 @@ export class RateLimiter {
   constructor(
     private readonly perTabCap = 16,
     private readonly perTabRefill = 16 / 60,
-    globalCap = Number(process.env.BROWSER_EXP_GLOBAL_CAP ?? 60),
+    globalCap = Number(process.env.BROWSEROPS_GLOBAL_CAP ?? 60),
     private readonly now: () => number = () => Date.now()
   ) {
     this.global = new Bucket(globalCap, globalCap / 60, now());
@@ -138,7 +138,7 @@ export class RateLimiter {
 
 ### 4.2 Global limiter
 
-A second bucket with the same algorithm, shared across all tabs. Default `capacity = 60`, `refill = 60/60 = 1 tok/s`. Tunable via env `BROWSER_EXP_GLOBAL_CAP`. Rationale: per-tab alone doesn't protect against a runaway that fans out across 10 tabs. On denial, `error.details.scope = "global"`; Claude gets the same `RATE_LIMITED` code.
+A second bucket with the same algorithm, shared across all tabs. Default `capacity = 60`, `refill = 60/60 = 1 tok/s`. Tunable via env `BROWSEROPS_GLOBAL_CAP`. Rationale: per-tab alone doesn't protect against a runaway that fans out across 10 tabs. On denial, `error.details.scope = "global"`; Claude gets the same `RATE_LIMITED` code.
 
 ### 4.3 Risky-action heuristic
 
@@ -181,9 +181,9 @@ All other cases: `{ risky: false }`.
  "1password.com","bitwarden.com","*.coinbase.com","robinhood.com"]
 ```
 
-Users extend via `~/.browser-exp/risky-domains.json`. Glob only — no regex, no substring. Leading `*.` = any subdomain. No other wildcards.
+Users extend via `~/.browserops/risky-domains.json`. Glob only — no regex, no substring. Leading `*.` = any subdomain. No other wildcards.
 
-User overrides live in `~/.browser-exp/risky-domains.json`:
+User overrides live in `~/.browserops/risky-domains.json`:
 
 ```json
 { "add": ["brokerage.example.com"], "remove": ["venmo.com"] }
@@ -221,7 +221,7 @@ When `isRisky` returns `risky: true`, the bridge:
 - No "remember this domain" / "always allow". Every risky action re-prompts. Reason: risky actions are by definition financial/auth, where silent re-consent is the failure mode we're avoiding.
 - No auto-allow on user activity in the tab. The human must interact with the popup.
 
-**Test hook.** Env var `BROWSER_EXP_AUTOCONFIRM=allow|deny` short-circuits step 2–6 (bridge resolves immediately) — used by e2e only; the bridge logs a warning line on startup if set. When autoconfirm is enabled, the bridge writes a startup warning to **stderr** (stdout is reserved for MCP JSON-RPC; anything on stdout corrupts the MCP stream).
+**Test hook.** Env var `BROWSEROPS_AUTOCONFIRM=allow|deny` short-circuits step 2–6 (bridge resolves immediately) — used by e2e only; the bridge logs a warning line on startup if set. When autoconfirm is enabled, the bridge writes a startup warning to **stderr** (stdout is reserved for MCP JSON-RPC; anything on stdout corrupts the MCP stream).
 
 ### 4.5 Kill switch
 
@@ -238,9 +238,9 @@ When `isRisky` returns `risky: true`, the bridge:
 
 ### 4.6 Audit log
 
-Extends `00-overview §4.6`. All writes are appended to `~/.browser-exp/log.jsonl` from the bridge process only (the extension does not write the log directly — it ships events over WS that the bridge folds in). One JSON object per line, UTC ISO timestamps.
+Extends `00-overview §4.6`. All writes are appended to `~/.browserops/log.jsonl` from the bridge process only (the extension does not write the log directly — it ships events over WS that the bridge folds in). One JSON object per line, UTC ISO timestamps.
 
-**Levels.** Set via env `BROWSER_EXP_LOG_LEVEL`:
+**Levels.** Set via env `BROWSEROPS_LOG_LEVEL`:
 
 - `normal` (default) — truncates any string field > 200 chars to `"<first 200>…[truncated:N]"` where `N` is the dropped-char count. Applies to `params`, `result`, `details`.
 - `audit` — full payloads, no truncation. Recommended for incident review; not recommended as default because page content may include PII.
@@ -255,7 +255,7 @@ Extends `00-overview §4.6`. All writes are appended to `~/.browser-exp/log.json
 {"ts":"...","dir":"safety","event":"connected"}
 ```
 
-Log rotation is not in scope (deferred to 07-dev-setup.md); this plan only requires append-writes under `fs.createWriteStream('~/.browser-exp/log.jsonl', { flags: 'a' })`.
+Log rotation is not in scope (deferred to 07-dev-setup.md); this plan only requires append-writes under `fs.createWriteStream('~/.browserops/log.jsonl', { flags: 'a' })`.
 
 ### 4.7 Invocation points
 
@@ -317,7 +317,7 @@ Ordering rationale: rate-limit before the risky check so a runaway loop can't fl
 - [ ] Extension toolbar right-click shows "Disconnect"; clicking it closes WS with code `4006` and sets the "off" badge.
 - [ ] Reconnect path requires opening options page; popup has no reconnect control.
 - [ ] A risky action produces: WS `safety_prompt`, red badge, `chrome.notifications` entry, popup modal with Allow/Deny; 30 s of no-response yields `RISKY_ACTION_DENIED` with `details.timeout === true`.
-- [ ] `BROWSER_EXP_AUTOCONFIRM=allow|deny` short-circuits the prompt and emits a startup warning log line.
+- [ ] `BROWSEROPS_AUTOCONFIRM=allow|deny` short-circuits the prompt and emits a startup warning log line.
 - [ ] `log.jsonl` contains the safety event records listed in §4.6 under both levels; `normal` truncates fields > 200 chars with `…[truncated:N]` suffix.
 - [ ] Bridge tool-call handler invocation order matches §4.7 exactly; test verifies that a rate-limited call never triggers a risky prompt.
 - [ ] No new error codes or envelope fields introduced beyond those declared in `00-overview.md`.

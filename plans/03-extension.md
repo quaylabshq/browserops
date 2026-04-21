@@ -20,7 +20,7 @@ Target: a single unpacked MV3 extension under `packages/extension/`, loaded via 
 - **Supported methods & events.** The extension exposes handlers for every method in `04-tools.md` and emits events `tab_created`, `tab_closed`, `page_navigated`, `page_loaded`, `debugger_detached`. Rate limiting lives entirely in the bridge; the extension does not emit rate-limit events.
 - **`safety_prompt` Request handler** (per `06-autonomy-safety.md`): the background SW surfaces the prompt in the extension popup and returns a `Response` with matching `id` carrying `{ decision_id, allow: boolean }`. This is consumed by plan 06's confirmation flow.
 - **Session state surface.** `chrome.storage.session` keys documented below (`refCache:*`, `inflight`, `tabMap`) — consumed only within this extension but documented so hot-reload / debug tools don't collide.
-- **Token file expectation.** The user pastes the bridge's token from `~/.browser-exp/token` into the options page; the extension stores it in `chrome.storage.local` under `token`. (The bridge is not responsible for delivering it.)
+- **Token file expectation.** The user pastes the bridge's token from `~/.browserops/token` into the options page; the extension stores it in `chrome.storage.local` under `token`. (The bridge is not responsible for delivering it.)
 
 ## Design
 
@@ -31,12 +31,12 @@ MV3, `manifest_version: 3`. Chrome minimum version: **120** (required for stable
 ```jsonc
 {
   "manifest_version": 3,
-  "name": "browser-exp",
+  "name": "browserops",
   "version": "0.1.0",
   "minimum_chrome_version": "120",
   "key": "<base64 pubkey committed to repo under /packages/extension/dev-key.pub>",
   "background": { "service_worker": "sw.js", "type": "module" },
-  "action": { "default_popup": "popup.html", "default_title": "browser-exp" },
+  "action": { "default_popup": "popup.html", "default_title": "browserops" },
   "options_page": "options.html",
   "permissions": [
     "tabs",
@@ -171,7 +171,7 @@ type RefCache = Map<tab_id, {
 - Bridge URL field (default `ws://127.0.0.1:8765/`, rarely changed).
 - Token paste field with `type="password"` + "show" toggle; saves to `chrome.storage.local.token` on blur.
 - "Reconnect now" button → messages SW to close+reopen WS.
-- Line explaining: "Paste the token from `~/.browser-exp/token`".
+- Line explaining: "Paste the token from `~/.browserops/token`".
 
 **`popup.html`** (toolbar icon) — three things:
 1. Big red **Kill switch** button → messages SW to close WS; WS remains closed until user clicks "Reconnect" in options or the popup. While killed, badge shows "OFF".

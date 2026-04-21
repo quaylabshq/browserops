@@ -11,8 +11,8 @@ It does **not** cover the MCP stdio surface (that's `01-mcp-server.md`), any `ch
 - `00-overview.md` §4.2 — `Request` / `Response` / `Event` envelope shapes. This plan extends them (adds `hello`, `hello_ack`, `ping`, `pong`) but does not mutate them.
 - `00-overview.md` §4.3 — `ErrorCode` enum. This plan is the site that raises `EXTENSION_DISCONNECTED`.
 - `00-overview.md` §4.5 — default timeouts (30 s / 45 s / 120 s) used as defaults for `Request.timeout_ms`.
-- `00-overview.md` §5 — bind address `127.0.0.1:8765`, shared token at `~/.browser-exp/token`, origin check against the installed extension id.
-- `07-dev-setup.md` (TBD) — env-var plumbing for `BROWSER_EXP_PORT`, `BROWSER_EXP_TOKEN_PATH`, `BROWSER_EXP_EXTENSION_ID`.
+- `00-overview.md` §5 — bind address `127.0.0.1:8765`, shared token at `~/.browserops/token`, origin check against the installed extension id.
+- `07-dev-setup.md` (TBD) — env-var plumbing for `BROWSEROPS_PORT`, `BROWSEROPS_TOKEN_PATH`, `BROWSEROPS_EXTENSION_ID`.
 
 ## Outputs to other plans
 
@@ -28,7 +28,7 @@ It does **not** cover the MCP stdio surface (that's `01-mcp-server.md`), any `ch
 - **Node (bridge) side:** [`ws`](https://github.com/websockets/ws) v8. Battle-tested, no transitive native deps, supports per-message deflate (already `false` by default — see D3), and cleanly exposes the upgrade request so we can enforce the `Origin` check before accepting.
 - **Extension side:** the global `WebSocket` constructor available in the MV3 service worker. No extra dependency. Note: WebSocket connections from an MV3 service worker are not subject to `host_permissions`; no `<all_urls>` is needed for the WS connection itself.
 - **Direction:** the **extension is the client**, the **bridge is the server**. This matters because (a) the bridge boots first and outlives the extension's service-worker lifecycle, (b) extensions cannot reliably bind listening sockets, and (c) the extension already has a natural "reconnect" story via service-worker wakeups.
-- **Bind address:** `127.0.0.1:8765` by default. Configurable via env var `BROWSER_EXP_PORT`. The bridge **must** pass `host: "127.0.0.1"` to `new WebSocketServer({ host, port })` — never `0.0.0.0`, never omitted (Node's default is all-interfaces). A startup assertion logs the bound address and aborts if it resolves to anything non-loopback.
+- **Bind address:** `127.0.0.1:8765` by default. Configurable via env var `BROWSEROPS_PORT`. The bridge **must** pass `host: "127.0.0.1"` to `new WebSocketServer({ host, port })` — never `0.0.0.0`, never omitted (Node's default is all-interfaces). A startup assertion logs the bound address and aborts if it resolves to anything non-loopback.
 - **Origin check.** Enforced on the HTTP `upgrade` event **before** `handleUpgrade` (per overview §5) — not after `'connection'`, which would mean the handshake has already completed. Construct the `WebSocketServer` with `noServer: true` and wire it up like:
   ```js
   server.on('upgrade', (req, socket, head) => {
@@ -40,7 +40,7 @@ It does **not** cover the MCP stdio surface (that's `01-mcp-server.md`), any `ch
     wss.handleUpgrade(req, socket, head, ws => wss.emit('connection', ws, req));
   });
   ```
-  `expectedOrigin` must exactly equal `chrome-extension://<BROWSER_EXP_EXTENSION_ID>`. The extension id is baked into the bridge via env var (set by the install script once the user loads the unpacked extension and pastes its id).
+  `expectedOrigin` must exactly equal `chrome-extension://<BROWSEROPS_EXTENSION_ID>`. The extension id is baked into the bridge via env var (set by the install script once the user loads the unpacked extension and pastes its id).
 - **TLS.** None. Loopback only. Adding TLS would force the extension to trust a self-signed cert, which is worse UX than the current shared-secret + origin-pin model.
 
 ### D2. Handshake
@@ -50,7 +50,7 @@ Three-step lifecycle before normal traffic:
 1. **TCP + WS upgrade.** Bridge accepts only if `Origin` matches (above). Otherwise 403, no WS established.
 2. **`hello` from extension (first frame after open).** The extension must send, as its very first frame, exactly one JSON object:
    ```ts
-   { type: "hello", token: "<contents of ~/.browser-exp/token>", extension_version: "0.3.1" }
+   { type: "hello", token: "<contents of ~/.browserops/token>", extension_version: "0.3.1" }
    ```
    The bridge arms a 5-second timer on `open`; if no `hello` arrives in that window it closes with code **4003** (`HELLO_TIMEOUT`).
 3. **`hello_ack` from bridge.** On valid token + compatible protocol:
@@ -374,7 +374,7 @@ onFrame(raw):
 
 ## Risks & mitigations
 
-1. **Another local process squats on 8765.** Mitigation: on bind failure, probe +1/+2/+3 up to 8770, pick the first free port, and write the chosen port to `~/.browser-exp/port` for the extension to read on next connect attempt.
+1. **Another local process squats on 8765.** Mitigation: on bind failure, probe +1/+2/+3 up to 8770, pick the first free port, and write the chosen port to `~/.browserops/port` for the extension to read on next connect attempt.
 2. **Token exfiltration by a malicious local process.** The token file is world-readable by default on macOS. Mitigation: `fs.chmod(tokenPath, 0o600)` on write, verify mode on read, refuse to start if it's group/other-readable. Combined with the origin pin, exfiltration requires also spoofing the extension id in the Origin header, which a non-extension process cannot do against a real Chrome (Chrome sets the header, not the extension).
 3. **MV3 service worker gets evicted mid-request.** Mitigation: `chrome.alarms` at 30 s to keep it warm, plus the reconnect loop. In-flight requests reject with `EXTENSION_DISCONNECTED` (D6) — Claude retries at its discretion. We accept occasional spurious failures rather than persisting a request queue across worker deaths (that would risk double-executing side effects).
 4. **Orphan responses after a timeout.** Mitigation: D4 policy — drop-and-log, don't tear down the connection. The alternative (close on orphan) would amplify transient issues into long reconnect storms.
@@ -385,15 +385,15 @@ onFrame(raw):
 
 - All envelope types and close codes are canonical in overview §4.2 and §4.3.1; this plan mirrors them.
 - **Should `extension_paused` be a `Response` field instead of an event?** If Claude tries to act during a pause, is a per-request `RISKY_ACTION_DENIED` enough? Current design keeps it as an event so the MCP layer can reject immediately without a round-trip.
-- **Log rotation.** `~/.browser-exp/log.jsonl` growth is not bounded by this plan. Belongs in 07.
-- **Port-probing fallback (Risk 1).** Does the extension poll `~/.browser-exp/port` on every reconnect, or is the port pinned at install time? Leaning toward poll-on-every-reconnect; confirm with 03.
+- **Log rotation.** `~/.browserops/log.jsonl` growth is not bounded by this plan. Belongs in 07.
+- **Port-probing fallback (Risk 1).** Does the extension poll `~/.browserops/port` on every reconnect, or is the port pinned at install time? Leaning toward poll-on-every-reconnect; confirm with 03.
 - **Do we ever need server-pushed requests from the bridge to initiate a `hello` re-auth** (e.g. after token rotation)? Not in v1; deferred.
 
 ## Acceptance checklist
 
 - [ ] `packages/shared/src/protocol.ts` exists and exports every type / constant listed in D8, with no `any`.
 - [ ] Bridge binds to `127.0.0.1:8765` (or env-overridden port), rejects `0.0.0.0`, and logs the bound address on startup.
-- [ ] Bridge 403s any upgrade whose `Origin` header doesn't match `chrome-extension://<BROWSER_EXP_EXTENSION_ID>`; unit-tested with a raw HTTP request.
+- [ ] Bridge 403s any upgrade whose `Origin` header doesn't match `chrome-extension://<BROWSEROPS_EXTENSION_ID>`; unit-tested with a raw HTTP request.
 - [ ] Handshake: valid `hello` → `hello_ack`; bad token → close 4001; bad protocol_version → 4002; no hello in 5 s → 4003; malformed first frame → 4004; second connect while one is active → old closes 4005.
 - [ ] Request/response: a 100-request round-trip test completes with correct `id` correlation, no orphans, all within budget.
 - [ ] Timeout: a request with `timeout_ms: 200` against a handler that sleeps 500 ms rejects with `TIMEOUT`, and the late response is logged as an orphan and dropped (not crashing the bridge).
