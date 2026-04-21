@@ -8,7 +8,7 @@
       html, body { margin: 0; padding: 0; }
       body {
         width: 320px;
-        height: 200px;
+        min-height: 200px;
         font-family: -apple-system, system-ui, sans-serif;
         background: #f7f6f2;
         color: #1b1b1b;
@@ -45,6 +45,8 @@
       }
       button:hover { background: #a00f19; }
       button:disabled { background: #d8b0b3; cursor: default; }
+      button.allow { background: #1b6b37; }
+      button.allow:hover { background: #145029; }
       .spacer { flex: 1; }
       a {
         font-size: 12px;
@@ -55,17 +57,59 @@
         cursor: pointer;
       }
       a:hover { color: #000; }
+
+      #safety {
+        display: none;
+        flex-direction: column;
+        gap: 10px;
+        border: 1px solid #e2c7c8;
+        background: #fff6f6;
+        border-radius: 8px;
+        padding: 12px;
+      }
+      #safety.active { display: flex; }
+      .safety-title {
+        font-size: 13px;
+        font-weight: 600;
+        color: #8a1a1a;
+      }
+      .safety-tool {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12px;
+        color: #333;
+      }
+      .safety-reason {
+        font-size: 12px;
+        color: #1b1b1b;
+      }
+      .safety-actions {
+        display: flex;
+        gap: 8px;
+      }
+      .safety-actions button { flex: 1; }
+      #main.hidden { display: none; }
     </style>
   </head>
   <body>
     <h1>BrowserOps</h1>
-    <div class="status">
-      <span>Bridge:</span>
-      <span id="status" class="pill off">disconnected</span>
+    <div id="safety">
+      <div class="safety-title">Confirm risky action</div>
+      <div class="safety-tool" id="safety-tool"></div>
+      <div class="safety-reason" id="safety-reason"></div>
+      <div class="safety-actions">
+        <button id="safety-allow" class="allow" type="button">Allow</button>
+        <button id="safety-deny" type="button">Deny</button>
+      </div>
     </div>
-    <div class="spacer"></div>
-    <button id="kill" type="button">Disconnect</button>
-    <a id="options">Open options</a>
+    <div id="main">
+      <div class="status">
+        <span>Bridge:</span>
+        <span id="status" class="pill off">disconnected</span>
+      </div>
+      <div class="spacer"></div>
+      <button id="kill" type="button">Disconnect</button>
+      <a id="options">Open options</a>
+    </div>
     <script type="module" src="./index.ts"></script>
   </body>
 </html>

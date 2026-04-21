@@ -8,6 +8,7 @@ import { registerNavigationHandlers } from "./handlers/navigation.js";
 import { registerScreenshotHandler } from "./handlers/screenshot.js";
 import { registerReadHandler } from "./handlers/read.js";
 import { registerInputHandlers } from "./handlers/input.js";
+import { registerSafetyHandler, resolveSafetyDecision } from "./handlers/safety.js";
 
 const EXTENSION_VERSION = chrome.runtime.getManifest().version;
 
@@ -38,6 +39,7 @@ registerNavigationHandlers(router, { tabIdMap: tabIdToChromeId });
 registerScreenshotHandler(router, { tabIdMap: tabIdToChromeId });
 registerReadHandler(router, { tabIdMap: tabIdToChromeId, refCache });
 registerInputHandlers(router, { tabIdMap: tabIdToChromeId, refCache });
+registerSafetyHandler(router, { restoreBadge: () => setBadge(currentConnected) });
 
 router.register("assign_tab_id", async (params) => {
   const chromeTabId = params["chrome_tab_id"];
@@ -55,12 +57,15 @@ router.register("assign_tab_id", async (params) => {
 
 const resolveTabId = (chromeTabId: number): string | undefined => chromeIdToTabId.get(chromeTabId);
 
+let currentConnected = false;
+
 function setBadge(connected: boolean): void {
   chrome.action.setBadgeText({ text: connected ? "" : "!" }).catch(() => {});
   if (!connected) chrome.action.setBadgeBackgroundColor({ color: "#c1121f" }).catch(() => {});
 }
 
 function onConnectionChange(connected: boolean): void {
+  currentConnected = connected;
   setBadge(connected);
   // Expose connection state to the options/popup UIs, which poll this key.
   chrome.storage.local.set({ connected }).catch(() => {});
@@ -186,6 +191,15 @@ chrome.runtime.onMessage.addListener((msg: unknown, _sender, sendResponse) => {
   if (tag === "reconnect") {
     void startClient().then(() => sendResponse({ ok: true }));
     return true;
+  }
+  if (tag === "safety_decision") {
+    const mm = m as { decision_id?: unknown; allow?: unknown };
+    const ok =
+      typeof mm.decision_id === "string" &&
+      typeof mm.allow === "boolean" &&
+      resolveSafetyDecision(mm.decision_id, mm.allow);
+    sendResponse({ ok });
+    return false;
   }
   return false;
 });
