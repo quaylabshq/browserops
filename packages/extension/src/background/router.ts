@@ -1,11 +1,13 @@
 import { isErrorCode, type ErrorCode, type Request, type Response } from "@browserops/shared";
 import type { EventName, EventMap } from "@browserops/shared";
+import type { RefCache } from "./ref-cache.js";
 
 export type Handler = (params: Record<string, unknown>, ctx: Context) => Promise<unknown>;
 
 export interface Context {
   emitEvent: <N extends EventName>(name: N, payload: EventMap[N]) => void;
-  // TODO: inject ref-cache accessor and debugger-session manager in a later PR.
+  refCache: RefCache;
+  // TODO: inject debugger-session manager in a later PR.
 }
 
 export class Router {
