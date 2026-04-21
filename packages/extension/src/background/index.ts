@@ -2,10 +2,12 @@ import { DEFAULT_WS_HOST, DEFAULT_WS_PORT, type Request, type Response } from "@
 import type { EventName, EventMap } from "@browserops/shared";
 import { WsClient } from "./ws-client.js";
 import { Router, type Context } from "./router.js";
+import { RefCache } from "./ref-cache.js";
 import { registerTabHandlers } from "./handlers/tabs.js";
 import { registerNavigationHandlers } from "./handlers/navigation.js";
 import { registerScreenshotHandler } from "./handlers/screenshot.js";
 import { registerReadHandler } from "./handlers/read.js";
+import { registerInputHandlers } from "./handlers/input.js";
 
 const EXTENSION_VERSION = chrome.runtime.getManifest().version;
 
@@ -15,12 +17,14 @@ const tabIdToChromeId = new Map<string, number>();
 const chromeIdToTabId = new Map<number, string>();
 
 const router = new Router();
+const refCache = new RefCache();
 let wsClient: WsClient | null = null;
 
 const ctx: Context = {
   emitEvent: <N extends EventName>(name: N, payload: EventMap[N]) => {
     wsClient?.sendEvent(name, payload);
   },
+  refCache,
 };
 
 async function persistTabMap(): Promise<void> {
@@ -32,7 +36,8 @@ async function persistTabMap(): Promise<void> {
 registerTabHandlers(router, { tabIdMap: tabIdToChromeId, chromeIdToTabId });
 registerNavigationHandlers(router, { tabIdMap: tabIdToChromeId });
 registerScreenshotHandler(router, { tabIdMap: tabIdToChromeId });
-registerReadHandler(router, { tabIdMap: tabIdToChromeId });
+registerReadHandler(router, { tabIdMap: tabIdToChromeId, refCache });
+registerInputHandlers(router, { tabIdMap: tabIdToChromeId, refCache });
 
 router.register("assign_tab_id", async (params) => {
   const chromeTabId = params["chrome_tab_id"];
@@ -119,6 +124,7 @@ chrome.tabs.onRemoved.addListener((chromeTabId) => {
   const tabId = chromeIdToTabId.get(chromeTabId);
   if (tabId === undefined) return;
   ctx.emitEvent("tab_closed", { tab_id: tabId });
+  refCache.invalidate(tabId);
   tabIdToChromeId.delete(tabId);
   chromeIdToTabId.delete(chromeTabId);
   void persistTabMap();
@@ -145,6 +151,7 @@ chrome.webNavigation.onCommitted.addListener((d) => {
   if (d.frameId !== 0) return;
   const tabId = resolveTabId(d.tabId);
   if (tabId === undefined) return;
+  refCache.invalidate(tabId);
   ctx.emitEvent("page_navigated", { tab_id: tabId, url: d.url, transition_type: d.transitionType });
 });
 
@@ -152,6 +159,7 @@ chrome.webNavigation.onHistoryStateUpdated.addListener((d) => {
   if (d.frameId !== 0) return;
   const tabId = resolveTabId(d.tabId);
   if (tabId === undefined) return;
+  refCache.invalidate(tabId);
   ctx.emitEvent("page_navigated", { tab_id: tabId, url: d.url, transition_type: d.transitionType });
 });
 
@@ -186,5 +194,17 @@ chrome.runtime.onMessage.addListener((msg: unknown, _sender, sendResponse) => {
 
 void (async () => {
   await rehydrate();
+  // RefCache rehydration depends on the tabIdMap being restored so we can
+  // compare stored snapshot URLs against the tab's live URL.
+  await refCache.rehydrate(async (tabId: string): Promise<string | undefined> => {
+    const chromeId = tabIdToChromeId.get(tabId);
+    if (chromeId === undefined) return undefined;
+    try {
+      const tab = await chrome.tabs.get(chromeId);
+      return typeof tab.url === "string" ? tab.url : undefined;
+    } catch {
+      return undefined;
+    }
+  });
   await startClient();
 })();
