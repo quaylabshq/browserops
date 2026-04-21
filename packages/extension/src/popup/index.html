@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>BrowserOps</title>
+    <style>
+      :root { color-scheme: light; }
+      html, body { margin: 0; padding: 0; }
+      body {
+        width: 320px;
+        height: 200px;
+        font-family: -apple-system, system-ui, sans-serif;
+        background: #f7f6f2;
+        color: #1b1b1b;
+        padding: 16px;
+        box-sizing: border-box;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      h1 { font-size: 14px; margin: 0; font-weight: 600; }
+      .status {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 13px;
+      }
+      .pill {
+        padding: 3px 10px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 500;
+      }
+      .pill.on { background: #dcf5e3; color: #1b6b37; }
+      .pill.off { background: #fde2e2; color: #8a1a1a; }
+      button {
+        padding: 10px 12px;
+        border: 0;
+        border-radius: 8px;
+        background: #c1121f;
+        color: #fff;
+        font-size: 13px;
+        font-weight: 500;
+        cursor: pointer;
+      }
+      button:hover { background: #a00f19; }
+      button:disabled { background: #d8b0b3; cursor: default; }
+      .spacer { flex: 1; }
+      a {
+        font-size: 12px;
+        color: #444;
+        text-decoration: none;
+        border-bottom: 1px dotted #999;
+        align-self: flex-start;
+        cursor: pointer;
+      }
+      a:hover { color: #000; }
+    </style>
+  </head>
+  <body>
+    <h1>BrowserOps</h1>
+    <div class="status">
+      <span>Bridge:</span>
+      <span id="status" class="pill off">disconnected</span>
+    </div>
+    <div class="spacer"></div>
+    <button id="kill" type="button">Disconnect</button>
+    <a id="options">Open options</a>
+    <script type="module" src="./index.ts"></script>
+  </body>
+</html>
