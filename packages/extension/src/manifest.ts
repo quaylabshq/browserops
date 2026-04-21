@@ -20,7 +20,4 @@ export default defineManifest({
     page: "src/options/index.html",
     open_in_tab: true,
   },
-  icons: {
-    "128": "src/assets/icon-128.png",
-  },
 });

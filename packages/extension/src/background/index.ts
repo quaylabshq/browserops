@@ -2,12 +2,10 @@ import { DEFAULT_WS_HOST, DEFAULT_WS_PORT, type Request, type Response } from "@
 import type { EventName, EventMap } from "@browserops/shared";
 import { WsClient } from "./ws-client.js";
 import { Router, type Context } from "./router.js";
-
-// TODO: register tool handlers here when they land. Expected modules:
-//   ./handlers/tabs.js, ./handlers/navigation.js, ./handlers/read.js,
-//   ./handlers/input.js, ./handlers/screenshot.js, ./handlers/safety.js.
-// Each exports `registerHandlers(router, ctx)`; call them right below
-// the inline assign_tab_id registration.
+import { registerTabHandlers } from "./handlers/tabs.js";
+import { registerNavigationHandlers } from "./handlers/navigation.js";
+import { registerScreenshotHandler } from "./handlers/screenshot.js";
+import { registerReadHandler } from "./handlers/read.js";
 
 const EXTENSION_VERSION = chrome.runtime.getManifest().version;
 
@@ -31,6 +29,11 @@ async function persistTabMap(): Promise<void> {
 
 // Inline assign_tab_id handler (plans/03-extension.md §D5). Other handlers
 // will be registered by their own modules in a later PR.
+registerTabHandlers(router, { tabIdMap: tabIdToChromeId, chromeIdToTabId });
+registerNavigationHandlers(router, { tabIdMap: tabIdToChromeId });
+registerScreenshotHandler(router, { tabIdMap: tabIdToChromeId });
+registerReadHandler(router, { tabIdMap: tabIdToChromeId });
+
 router.register("assign_tab_id", async (params) => {
   const chromeTabId = params["chrome_tab_id"];
   const tabId = params["tab_id"];
@@ -51,6 +54,15 @@ function setBadge(connected: boolean): void {
   chrome.action.setBadgeText({ text: connected ? "" : "!" }).catch(() => {});
   if (!connected) chrome.action.setBadgeBackgroundColor({ color: "#c1121f" }).catch(() => {});
 }
+
+function onConnectionChange(connected: boolean): void {
+  setBadge(connected);
+  // Expose connection state to the options/popup UIs, which poll this key.
+  chrome.storage.local.set({ connected }).catch(() => {});
+}
+
+// Initial state on SW boot — UIs can read this before the first WS attempt.
+chrome.storage.local.set({ connected: false }).catch(() => {});
 
 async function rehydrate(): Promise<void> {
   const { tabMap } = await chrome.storage.session.get("tabMap");
@@ -73,7 +85,7 @@ async function startClient(): Promise<void> {
   const host = typeof stored["host"] === "string" ? stored["host"] : DEFAULT_WS_HOST;
   const port = typeof stored["port"] === "number" ? stored["port"] : DEFAULT_WS_PORT;
   if (token === "") {
-    setBadge(false);
+    onConnectionChange(false);
     console.warn("[bg] no token; awaiting options page");
     return;
   }
@@ -83,7 +95,7 @@ async function startClient(): Promise<void> {
     token,
     extensionVersion: EXTENSION_VERSION,
     onRequest: (req: Request): Promise<Response> => router.dispatch(req, ctx),
-    onConnectionChange: setBadge,
+    onConnectionChange,
   });
   wsClient.start();
 }
@@ -155,14 +167,15 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 
 chrome.runtime.onMessage.addListener((msg: unknown, _sender, sendResponse) => {
   if (typeof msg !== "object" || msg === null) return false;
-  const kind = (msg as { kind?: unknown }).kind;
-  if (kind === "kill_switch") {
+  const m = msg as { kind?: unknown; type?: unknown };
+  const tag = typeof m.type === "string" ? m.type : typeof m.kind === "string" ? m.kind : "";
+  if (tag === "kill_switch") {
     wsClient?.stop(true);
-    setBadge(false);
+    onConnectionChange(false);
     sendResponse({ ok: true });
     return false;
   }
-  if (kind === "reconnect") {
+  if (tag === "reconnect") {
     void startClient().then(() => sendResponse({ ok: true }));
     return true;
   }
