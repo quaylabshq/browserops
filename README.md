@@ -80,11 +80,18 @@ Observation (no rate cost): `browser.list_tabs`, `browser.current_tab`, `browser
 
 Navigation: `browser.new_tab`, `browser.close_tab`, `browser.switch_tab`, `browser.navigate`, `browser.back`, `browser.forward`, `browser.reload`
 
-Content: `browser.screenshot` (viewport), `browser.read` (`text` / `markdown` / `sanitized_html`)
+Content: `browser.screenshot` (viewport), `browser.read` (`text` / `markdown` / `sanitized_html` / `a11y_tree`)
+
+Input: `browser.click`, `browser.type`, `browser.press`, `browser.scroll`, `browser.hover`, `browser.execute_js`
 
 See `plans/04-tools.md` for full schemas.
 
-**Deferred to v2** (return `INTERNAL` with `"deferred to v2"` message): `browser.click`, `browser.type`, `browser.press`, `browser.scroll`, `browser.hover`, `browser.execute_js`, `browser.read` with `mode: "a11y_tree"`, `browser.screenshot` with `full_page: true`. These require a CDP-based ref system; see `plans/05-element-refs.md`.
+**How click/type work.** First call `browser.read` with `mode: "a11y_tree"` on the tab — you get back a numbered tree of interactive elements and their refs. Then call `browser.click({tab_id, ref})` or `browser.type({tab_id, ref, text})` using those refs. Refs invalidate on navigation (same-doc or cross-doc) — re-read the tree after a navigation.
+
+**v1 limitations:**
+- Click / type fire synthetic DOM events (`isTrusted: false`). Sites that hard-check trusted events (reCAPTCHA, some banks) will refuse them. The plan-05 CDP path is the v2 fix for trusted events.
+- `browser.screenshot` with `full_page: true` returns `INTERNAL` — viewport-only in v1.
+- Risky actions (`execute_js` always, click/type on financial domains) currently deny after the 30 s confirmation timeout because the extension popup doesn't yet render the confirmation UI. Set `BROWSEROPS_AUTOCONFIRM=1` to bypass during testing.
 
 ## Safety defaults
 
