@@ -473,6 +473,22 @@ const click: ToolDef = {
     properties: {
       clicked: { const: true },
       navigated: { type: "boolean" },
+      // Present when the click coordinate hit-tested to a different element
+      // (overlay, modal scrim, etc.). Caller should consider re-reading and
+      // dismissing the overlay before retrying.
+      occluded: { type: "boolean" },
+      occluder: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          tag: { type: "string" },
+          text: { type: "string" },
+          role: { type: ["string", "null"] },
+        },
+      },
+      // True when the selector landed on a non-interactive descendant and
+      // we walked up to the nearest interactive ancestor to dispatch on.
+      retargeted: { type: "boolean" },
     },
   },
   action_weight: 1,

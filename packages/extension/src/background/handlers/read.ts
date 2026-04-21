@@ -196,12 +196,25 @@ function injectedA11yWalk(): { entries: Array<{ ref: number; selector: string; r
     return trimmed.slice(0, NAME_MAX - 1) + "…";
   };
 
-  const isVisible = (el: Element): boolean => {
+  // Two separate questions:
+  //   canEmit  — should this element itself be surfaced as a ref?
+  //   canDescend — should we walk into this element's subtree?
+  // They diverge for `display: contents` wrappers, React animation wrappers
+  // with aria-hidden, and similar patterns where the element has no box of
+  // its own but descendants render normally.
+  const canEmit = (el: Element): boolean => {
     const rect = el.getBoundingClientRect();
     if (rect.width === 0 && rect.height === 0) return false;
     const style = window.getComputedStyle(el);
     if (style.visibility === "hidden" || style.display === "none") return false;
-    if (el.getAttribute("aria-hidden") === "true") return false;
+    if (style.opacity === "0") return false;
+    return true;
+  };
+  const canDescend = (el: Element): boolean => {
+    const style = window.getComputedStyle(el);
+    if (style.display === "none") return false;
+    // `visibility: hidden` on a parent can be overridden by child
+    // `visibility: visible`, so don't block descent on it.
     return true;
   };
 
@@ -353,9 +366,9 @@ function injectedA11yWalk(): { entries: Array<{ ref: number; selector: string; r
   let refCounter = 0;
 
   const walk = (el: Element, depth: number): void => {
-    if (!isVisible(el)) return;
+    if (!canDescend(el)) return;
     const role = roleFor(el);
-    const keep = shouldKeep(el, role);
+    const keep = shouldKeep(el, role) && canEmit(el);
     let childDepth = depth;
     if (keep && role !== null) {
       if (refCounter >= MAX_REFS) {
@@ -376,6 +389,13 @@ function injectedA11yWalk(): { entries: Array<{ ref: number; selector: string; r
     }
     for (const child of Array.from(el.children)) {
       walk(child, childDepth);
+    }
+    // Pierce open shadow roots. Closed shadow roots are intentionally opaque
+    // and there's nothing we can do about those from script.
+    if (el.shadowRoot !== null) {
+      for (const child of Array.from(el.shadowRoot.children)) {
+        walk(child, childDepth);
+      }
     }
   };
 
