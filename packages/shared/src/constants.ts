@@ -1,6 +1,3 @@
-import { homedir } from "node:os";
-import { join } from "node:path";
-
 /**
  * WebSocket transport defaults. See plans/00-overview.md §5 and plans/02-bridge-protocol.md.
  */
@@ -36,23 +33,13 @@ export const RATE_LIMIT_GLOBAL_PER_MIN_DEFAULT = 60;
 export const RISKY_CONFIRM_TIMEOUT_MS = 30_000;
 
 /**
- * Runtime state directory under the user's home.
+ * Relative paths under the state directory. The bridge resolves these
+ * against ~/.browserops/ at runtime; the extension does not import any of them.
  */
-export function stateDir(): string {
-  return join(homedir(), ".browserops");
-}
-
-export function tokenPath(): string {
-  return join(stateDir(), "token");
-}
-
-export function logPath(): string {
-  return join(stateDir(), "log.jsonl");
-}
-
-export function riskyDomainsPath(): string {
-  return join(stateDir(), "risky-domains.json");
-}
+export const STATE_DIR_NAME = ".browserops";
+export const TOKEN_FILENAME = "token";
+export const LOG_FILENAME = "log.jsonl";
+export const RISKY_DOMAINS_FILENAME = "risky-domains.json";
 
 /**
  * Environment variable names read by the bridge.
