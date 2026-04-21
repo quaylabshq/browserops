@@ -8,7 +8,7 @@
     "dev": "vite build --watch --mode development",
     "typecheck": "tsc -b --noEmit",
     "clean": "rm -rf dist *.tsbuildinfo",
-    "test": "vitest run"
+    "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
     "@browserops/shared": "workspace:*"
