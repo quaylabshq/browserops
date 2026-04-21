@@ -10,13 +10,13 @@ This plan covers the **MCP half** of the single bridge process that lives in `pa
 
 ## 2. Inputs from other plans
 
-- **From `00-overview.md`:** tool name prefix (`browser.`), `Request`/`Response` envelope shape, error code table, default 30 s tool timeout (45 s for `navigate`, up to 120 s for `wait_for`), log file path `~/.browser-exp/log.jsonl`, repo layout (`packages/bridge/`).
+- **From `00-overview.md`:** tool name prefix (`browser.`), `Request`/`Response` envelope shape, error code table, default 30 s tool timeout (45 s for `navigate`, up to 120 s for `wait_for`), log file path `~/.browserops/log.jsonl`, repo layout (`packages/bridge/`).
 - **From `02-bridge-protocol.md`:** an internal TypeScript interface `BridgeCore` exposing at minimum:
   - `callExtension(method: string, params: object, timeoutMs: number): Promise<Response>` — returns the parsed `Response` envelope, or rejects with a typed `BridgeError` that already carries an `ErrorCode`.
   - `isExtensionConnected(): boolean`
   - `on("connect" | "disconnect", cb): void`
   - `start(): Promise<void>` / `stop(): Promise<void>` for lifecycle.
-- **From `04-tools.md`:** the canonical list of tool definitions — an array of `{ name, description, inputSchema }` objects. This plan imports it as `TOOL_DEFS` from `@browser-exp/shared`.
+- **From `04-tools.md`:** the canonical list of tool definitions — an array of `{ name, description, inputSchema }` objects. This plan imports it as `TOOL_DEFS` from `@browserops/shared`.
 - **From `06-autonomy-safety.md`:** two pure-ish modules:
   - `rateLimiter.charge(tabId: string, toolName: string): { ok: true } | { ok: false, retryAfterMs: number }`
   - `riskyGate.check(toolName: string, params: object): Promise<{ allow: true } | { allow: false, reason: string }>` — note this is async because some checks (e.g. password-field detection, confirmation popup) round-trip through the extension. The gate is allowed to call `BridgeCore.callExtension` internally for those checks.
@@ -50,16 +50,16 @@ packages/bridge/
     │   ├── errors.ts         # ErrorCode ↔ McpError mapping
     │   └── schema.ts         # Ajv-based inputSchema validator
     ├── logging/
-    │   └── jsonl.ts          # append-only writer for ~/.browser-exp/log.jsonl
+    │   └── jsonl.ts          # append-only writer for ~/.browserops/log.jsonl
     ├── lifecycle.ts          # stdin-close, signal handling, shutdown
     └── ws/                   # (owned by plan 02; referenced, not defined here)
 ```
 
 ### 4.2 Dependencies
 
-- `@modelcontextprotocol/sdk` ≥1.13 (current stable v1.29) — official TypeScript SDK. The ≥1.13 floor is required because that release introduced `structuredContent` + `outputSchema` alongside the 2025-06-18 protocol revision. We use `Server` from `@modelcontextprotocol/sdk/server/index.js` and `StdioServerTransport` from `@modelcontextprotocol/sdk/server/stdio.js`. Request schemas (`ListToolsRequestSchema`, `CallToolRequestSchema`) and error types (`McpError`, `ErrorCode`) come from `@modelcontextprotocol/sdk/types.js`. We use the low-level `Server` from `@modelcontextprotocol/sdk/server/index.js` rather than the higher-level `McpServer` from `/server/mcp.js` because our tool registry is a single dynamic source-of-truth (`TOOL_DEFS` from @browser-exp/shared), not a static list of registered tools.
+- `@modelcontextprotocol/sdk` ≥1.13 (current stable v1.29) — official TypeScript SDK. The ≥1.13 floor is required because that release introduced `structuredContent` + `outputSchema` alongside the 2025-06-18 protocol revision. We use `Server` from `@modelcontextprotocol/sdk/server/index.js` and `StdioServerTransport` from `@modelcontextprotocol/sdk/server/stdio.js`. Request schemas (`ListToolsRequestSchema`, `CallToolRequestSchema`) and error types (`McpError`, `ErrorCode`) come from `@modelcontextprotocol/sdk/types.js`. We use the low-level `Server` from `@modelcontextprotocol/sdk/server/index.js` rather than the higher-level `McpServer` from `/server/mcp.js` because our tool registry is a single dynamic source-of-truth (`TOOL_DEFS` from @browserops/shared), not a static list of registered tools.
 - `ajv` + `ajv-formats` — runtime JSON Schema validation of tool params. Each tool's `inputSchema` is compiled once at server construction.
-- `pino` (or plain `fs.appendFile`) — JSONL logging. **Must not** write to stdout; stdout is reserved for MCP. Logger writes to `~/.browser-exp/log.jsonl` and to stderr for human-readable lines.
+- `pino` (or plain `fs.appendFile`) — JSONL logging. **Must not** write to stdout; stdout is reserved for MCP. Logger writes to `~/.browserops/log.jsonl` and to stderr for human-readable lines.
 
 ### 4.3 Entrypoint — `src/index.ts`
 
@@ -74,7 +74,7 @@ import { createMcpServer } from "./mcp/server.js";
 import { installLifecycle } from "./lifecycle.js";
 
 async function main() {
-  const logger = await createLogger();                    // opens ~/.browser-exp/log.jsonl
+  const logger = await createLogger();                    // opens ~/.browserops/log.jsonl
   const bridge = createBridgeCore({ logger });
   await bridge.start();                                   // starts WS server (plan 02)
 
@@ -92,7 +92,7 @@ async function main() {
 
 main().catch((err) => {
   // Last-ditch: write to stderr, never stdout.
-  process.stderr.write(`[browser-exp-bridge] fatal: ${err?.stack ?? err}\n`);
+  process.stderr.write(`[browserops-bridge] fatal: ${err?.stack ?? err}\n`);
   process.exit(1);
 });
 ```
@@ -109,7 +109,7 @@ import {
   McpError,
   ErrorCode as McpErrorCode,
 } from "@modelcontextprotocol/sdk/types.js";
-import { TOOL_DEFS } from "@browser-exp/shared";
+import { TOOL_DEFS } from "@browserops/shared";
 import { compileSchemas } from "./schema.js";
 import { dispatch } from "./dispatch.js";
 
@@ -120,7 +120,7 @@ export function createMcpServer(deps: {
   logger: Logger;
 }) {
   const server = new Server(
-    { name: "browser-exp", version: "0.1.0" },
+    { name: "browserops", version: "0.1.0" },
     { capabilities: { tools: {} } },
   );
 
@@ -300,9 +300,9 @@ Bridge emits `on("disconnect")`; for any in-flight call the WebSocket half is re
 
 ### 4.11 Logging — `src/logging/jsonl.ts`
 
-- Opens `~/.browser-exp/log.jsonl` with `fs.createWriteStream(..., { flags: "a" })` at startup. Creates `~/.browser-exp/` with `0700` if missing.
+- Opens `~/.browserops/log.jsonl` with `fs.createWriteStream(..., { flags: "a" })` at startup. Creates `~/.browserops/` with `0700` if missing.
 - One JSON object per line, fields per overview §4.6: `ts`, `dir` (`mcp_in` | `ws_out` | `ws_in` | `mcp_out` | `evt`), `id`, plus method/params/ok/code as applicable.
-- Human-readable mirror goes to `stderr` at info level, gated by `BROWSER_EXP_LOG=debug|info|warn|error` (default `info`).
+- Human-readable mirror goes to `stderr` at info level, gated by `BROWSEROPS_LOG=debug|info|warn|error` (default `info`).
 - Flushed on every write; closed on shutdown.
 - **Never touches stdout.**
 
@@ -350,7 +350,7 @@ Claude Code signals end-of-session by closing the bridge's stdin. That's our pri
 ## 5. Risks & mitigations
 
 1. **stdout pollution breaks MCP framing.** A stray `console.log` anywhere in the process (or a dependency) silently corrupts JSON-RPC, manifesting as "Claude sees no tools." *Mitigation:* eslint `no-console`, a runtime shim that redirects `console.*` to stderr, and a smoke test in `08` that pipes stdout through a JSON-RPC parser.
-2. **Schema drift between `04-tools.md` and the extension handlers.** Schema accepts a param the extension doesn't implement, or vice versa. *Mitigation:* both sides import `TOOL_DEFS` from `@browser-exp/shared`; CI contract test calls every tool against a mock extension that asserts it was handed the schema-declared keys.
+2. **Schema drift between `04-tools.md` and the extension handlers.** Schema accepts a param the extension doesn't implement, or vice versa. *Mitigation:* both sides import `TOOL_DEFS` from `@browserops/shared`; CI contract test calls every tool against a mock extension that asserts it was handed the schema-declared keys.
 3. **A slow or hung extension call blocks Claude's session.** If the WebSocket call never resolves, the MCP request hangs and Claude stalls. *Mitigation:* dispatch enforces per-tool timeouts (§4.7) in a `Promise.race` against `setTimeout`, returning a `TIMEOUT` tool error; the bridge also cancels the pending WS request so the extension can GC it.
 4. **Risky-gate popup hangs on user inaction.** A confirmation dialog with no user present would deadlock the tool call. *Mitigation:* the gate has its own 30 s deadline (overview §6), after which it resolves as denied; dispatch surfaces `RISKY_ACTION_DENIED`.
 5. **Extension reconnects mid-call with a new session, orphaning in-flight ids.** A zombie response could land after the MCP call already timed out. *Mitigation:* bridge keeps a pending-request map keyed by UUID; reconnect clears it and rejects all pending with `EXTENSION_DISCONNECTED`; late responses to unknown ids are logged and dropped.
@@ -379,7 +379,7 @@ Claude Code signals end-of-session by closing the bridge's stdin. That's our pri
 - [ ] Risky-gate denial returns `isError: true`, `code: "RISKY_ACTION_DENIED"`, and the bridge is **not** called (beyond any extension calls the gate itself made).
 - [ ] Calls issued while `isExtensionConnected()` is false short-circuit with `EXTENSION_DISCONNECTED` without charging the rate limiter.
 - [ ] Per-tool timeouts are enforced: a fake bridge that never resolves produces `TIMEOUT` within 30 s for default tools, 45 s for `navigate`, and ≤ 120 s for `wait_for`.
-- [ ] `~/.browser-exp/log.jsonl` contains exactly four lines for a successful click call: `mcp_in`, `ws_out`, `ws_in`, `mcp_out`, all sharing one `id`.
+- [ ] `~/.browserops/log.jsonl` contains exactly four lines for a successful click call: `mcp_in`, `ws_out`, `ws_in`, `mcp_out`, all sharing one `id`.
 - [ ] No bytes are written to stdout except MCP JSON-RPC frames (verified by a test that pipes stdout through `JSON.parse` line-by-line).
 - [ ] Closing stdin causes the process to call `server.close()`, `bridge.stop()`, flush the log, and exit 0 in under 1 s.
 - [ ] SIGINT and SIGTERM follow the same graceful path.

@@ -1,5 +1,5 @@
 {
-  "name": "browser-exp",
+  "name": "browserops",
   "version": "0.1.0",
   "private": true,
   "description": "Claude Code plugin that drives a live Chrome browser",
@@ -10,14 +10,14 @@
   },
   "packageManager": "pnpm@9.12.0",
   "scripts": {
-    "dev": "concurrently -n shared,bridge,ext -c cyan,green,magenta \"pnpm -F @browser-exp/shared dev\" \"pnpm -F @browser-exp/bridge dev\" \"pnpm -F @browser-exp/extension dev\"",
+    "dev": "concurrently -n shared,bridge,ext -c cyan,green,magenta \"pnpm -F @browserops/shared dev\" \"pnpm -F @browserops/bridge dev\" \"pnpm -F @browserops/extension dev\"",
     "build": "pnpm -r --sequential build",
     "typecheck": "pnpm -r typecheck",
     "lint": "eslint .",
     "format": "prettier --write .",
     "test": "pnpm -r test",
-    "test:integration": "pnpm --filter @browser-exp/bridge test:integration",
-    "test:smoke": "pnpm --filter @browser-exp/extension test:smoke",
+    "test:integration": "pnpm --filter @browserops/bridge test:integration",
+    "test:smoke": "pnpm --filter @browserops/extension test:smoke",
     "clean": "pnpm -r clean && rm -rf node_modules"
   },
   "devDependencies": {

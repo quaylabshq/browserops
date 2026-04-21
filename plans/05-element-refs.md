@@ -6,7 +6,7 @@
 
 ## 1. Scope
 
-This plan specifies the a11y-tree snapshot algorithm, the ref numbering scheme, the per-tab snapshot store, the ref→element resolution path, and the staleness model. It is the single source of truth for what a "ref" is in the browser-exp system.
+This plan specifies the a11y-tree snapshot algorithm, the ref numbering scheme, the per-tab snapshot store, the ref→element resolution path, and the staleness model. It is the single source of truth for what a "ref" is in the browserops system.
 
 **Out of scope:** the MCP tool signatures themselves (see `04-tools.md`), the WebSocket envelope (see `00-overview.md` §4.2), the extension's general architecture (see `03-extension.md`), and the safety/risky-action layer (see `06-autonomy-safety.md`). This plan describes the *mechanism*; the tools plan describes the *surface*.
 
@@ -151,7 +151,7 @@ type SnapshotEntry = {
 
 type Snapshot = {
   id: string;                 // "s_<uuid>"
-  tabId: string;              // browser-exp tab_id, not chrome tabId
+  tabId: string;              // browserops tab_id, not chrome tabId
   chromeTabId: number;
   createdAt: number;          // epoch ms
   navigationId: number;       // chrome tabs' navigation counter at capture

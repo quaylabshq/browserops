@@ -2,7 +2,7 @@
 
 ## Scope
 
-This plan defines the end-to-end testing strategy for browser-exp: unit tests for the isolated pieces of logic in each package, integration tests that exercise the bridge against a mock WebSocket extension client (no browser), and live-Chrome smoke tests that load the real MV3 extension into a real Chromium and drive fixture pages. It also covers CI wiring, flakiness controls, coverage targets, and a short manual-test checklist for things genuinely resistant to automation. It deliberately does **not** redefine the protocol, tools, or component internals — it only describes how we prove them correct.
+This plan defines the end-to-end testing strategy for browserops: unit tests for the isolated pieces of logic in each package, integration tests that exercise the bridge against a mock WebSocket extension client (no browser), and live-Chrome smoke tests that load the real MV3 extension into a real Chromium and drive fixture pages. It also covers CI wiring, flakiness controls, coverage targets, and a short manual-test checklist for things genuinely resistant to automation. It deliberately does **not** redefine the protocol, tools, or component internals — it only describes how we prove them correct.
 
 ---
 
@@ -151,12 +151,12 @@ jobs:
 - **smoke** starts as `continue-on-error: true`; once green for 20 consecutive main-branch runs, we flip it to required. Tracked as a concrete follow-up issue.
 - Cache: pnpm store + Playwright browsers (`~/Library/Caches/ms-playwright`).
 - Before the smoke job runs tests, execute `npx playwright install --with-deps chromium` (gated on cache miss). Without this step, a cold cache causes the first CI run to fail finding the browser.
-- Artifact upload on smoke failure: trace zips, screenshots, bridge log (`~/.browser-exp/log.jsonl`), extension service-worker console.
+- Artifact upload on smoke failure: trace zips, screenshots, bridge log (`~/.browserops/log.jsonl`), extension service-worker console.
 
 ### Flakiness strategy
 
 - **Retries.** Playwright `retries: 2` for smoke only. Unit and integration: zero retries — a retry there is a bug.
-- **Logging on failure.** Playwright trace (`trace: 'on-first-retry'`), video (`video: 'retain-on-failure'`), screenshot on failure. Bridge log attached as test artifact via a Playwright fixture that copies `~/.browser-exp/log.jsonl` into the test output dir on failure.
+- **Logging on failure.** Playwright trace (`trace: 'on-first-retry'`), video (`video: 'retain-on-failure'`), screenshot on failure. Bridge log attached as test artifact via a Playwright fixture that copies `~/.browserops/log.jsonl` into the test output dir on failure.
 - **Timeouts.** Per-test 60s smoke, 15s integration, 5s unit. No `page.waitForTimeout` — only event-based waits.
 - **Determinism.** Random user-data-dir per run; fixture server on port 0; extension token regenerated per run.
 - **Quarantine mechanism.** A `smoke-quarantine/` directory; tests moved there when flaky, with a linked issue and a 2-week SLA before either fixing or deleting.
@@ -181,7 +181,7 @@ Lives at `docs/release-checklist.md` (created by the release plan later; this pl
 2. **Kill switch.** While a `navigate` is in flight, click the extension toolbar icon. Verify the in-flight call returns `EXTENSION_DISCONNECTED` in the bridge log within 1 s. Verify reconnection works after toggling back on.
 3. **Risky-action popup.** Trigger `execute_js`. Confirm popup renders, both "Allow once" and "Deny" work, and 30-second no-response defaults to deny.
 4. **Cross-profile isolation.** Launch Chrome with a second profile; verify the extension does not appear there (user installed it on profile A only).
-5. **Token rotation.** Delete `~/.browser-exp/token`; restart bridge; paste new token into extension options. Verify old token no longer authenticates.
+5. **Token rotation.** Delete `~/.browserops/token`; restart bridge; paste new token into extension options. Verify old token no longer authenticates.
 6. **Gmail sanity.** Open Gmail, run `read`, confirm sanitized content returns within 5s and does not include `<script>` fragments.
 
 Each item: pass/fail + a line of notes. Release blocks on any fail without an attached waiver.
