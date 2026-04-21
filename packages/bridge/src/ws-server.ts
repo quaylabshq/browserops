@@ -28,6 +28,7 @@ export interface WSBridgeOptions {
   bridgeVersion: string;
   logger: Logger;
   onEvent: (name: string, payload: Record<string, unknown>) => void;
+  onConnectionChange?: (connected: boolean) => void;
 }
 
 interface Pending {
@@ -55,10 +56,12 @@ export class WSBridge {
   private readonly bridgeVersion: string;
   private readonly logger: Logger;
   private readonly onEvent: (name: string, payload: Record<string, unknown>) => void;
+  private readonly onConnectionChange?: (connected: boolean) => void;
 
   private http?: HttpServer;
   private wss?: WebSocketServer;
   private activeSocket?: WebSocket;
+  private lastNotifiedConnected = false;
   private readonly pending = new Map<string, Pending>();
 
   readonly confirmation: ConfirmationChannel;
@@ -73,6 +76,7 @@ export class WSBridge {
     this.bridgeVersion = opts.bridgeVersion;
     this.logger = opts.logger;
     this.onEvent = opts.onEvent;
+    this.onConnectionChange = opts.onConnectionChange;
 
     this.confirmation = {
       awaitConfirmation: async (input) => {
@@ -140,6 +144,7 @@ export class WSBridge {
     if (this.activeSocket) {
       try { this.activeSocket.close(1000, "bridge_stop"); } catch { /* ignore */ }
       this.activeSocket = undefined;
+      this.notifyConnChange();
     }
     if (this.wss) {
       await new Promise<void>((r) => this.wss!.close(() => r()));
@@ -278,6 +283,7 @@ export class WSBridge {
         }
         this.activeSocket = ws;
         state = "ready";
+        this.notifyConnChange();
         const ack: HelloAck = {
           type: "hello_ack",
           bridge_version: this.bridgeVersion,
@@ -338,6 +344,7 @@ export class WSBridge {
           p.reject(new CodedError("EXTENSION_DISCONNECTED", "socket closed"));
           this.pending.delete(id);
         }
+        this.notifyConnChange();
       }
     });
 
@@ -388,6 +395,14 @@ export class WSBridge {
   private closeWith(ws: WebSocket, code: number, reason: string): void {
     try { ws.close(code, reason); } catch { /* ignore */ }
     void this.logger.write({ dir: "system", event: "close", code, reason });
+  }
+
+  private notifyConnChange(): void {
+    if (!this.onConnectionChange) return;
+    const current = this.isConnected();
+    if (current === this.lastNotifiedConnected) return;
+    this.lastNotifiedConnected = current;
+    try { this.onConnectionChange(current); } catch { /* ignore */ }
   }
 }
 
