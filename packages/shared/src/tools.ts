@@ -479,7 +479,8 @@ const read: ToolDef = {
 
 const click: ToolDef = {
   name: "browser.click",
-  description: "Click an element identified by ref.",
+  description:
+    "Click an element identified by ref. Two dispatch modes: 'synthetic' (default, DOM-only — fires pointer/mouse events in the page's main world; works on >90% of real pages), 'trusted' (CDP Input.dispatchMouseEvent — real trusted events; required for sites that gate on isTrusted like Cloudflare Turnstile, canvas widgets, and some e-commerce CAPTCHA layers). Trusted mode attaches chrome.debugger which briefly shows the \"being controlled by automation\" banner.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -487,6 +488,12 @@ const click: ToolDef = {
     properties: {
       tab_id: tabIdSchema,
       ref: refSchema,
+      mode: {
+        description:
+          "Dispatch mode. Use 'trusted' only when synthetic has been observed to fail on the target.",
+        enum: ["synthetic", "trusted"] as const,
+        default: "synthetic",
+      },
       button: { enum: ["left", "middle", "right"] as const, default: "left" },
       click_count: { type: "integer", minimum: 1, maximum: 3, default: 1 },
       modifiers: modifiersSchema,
@@ -498,6 +505,7 @@ const click: ToolDef = {
     required: ["clicked"] as const,
     properties: {
       clicked: { const: true },
+      mode: { enum: ["synthetic", "trusted"] as const },
       navigated: { type: "boolean" },
       // Present when the click coordinate hit-tested to a different element
       // (overlay, modal scrim, etc.). Caller should consider re-reading and
@@ -519,12 +527,56 @@ const click: ToolDef = {
   },
   action_weight: 1,
   risky: "conditional",
+  // REF_CODES already includes CDP_ATTACH_FAILED — surfaced when mode=trusted
+  // and chrome.debugger.attach fails (DevTools already open, another debugger).
   errorCodes: [
     ...BASE_CODES,
     ...TAB_CODES,
     ...REF_CODES,
     ...MUTATING_CODES,
     ...RISKY_CODES,
+  ] as const,
+} as const;
+
+const clickAt: ToolDef = {
+  name: "browser.click_at",
+  description:
+    "Click at viewport coordinates (x, y) — no ref required. Escape hatch for canvas, maps, games, and anything the a11y walker can't address. Supports the same synthetic/trusted modes as browser.click.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["tab_id", "x", "y"] as const,
+    properties: {
+      tab_id: tabIdSchema,
+      x: { type: "number", minimum: 0 },
+      y: { type: "number", minimum: 0 },
+      mode: {
+        enum: ["synthetic", "trusted"] as const,
+        default: "synthetic",
+      },
+      button: { enum: ["left", "middle", "right"] as const, default: "left" },
+      modifiers: modifiersSchema,
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["clicked", "x", "y"] as const,
+    properties: {
+      clicked: { const: true },
+      mode: { enum: ["synthetic", "trusted"] as const },
+      x: { type: "number" },
+      y: { type: "number" },
+    },
+  },
+  action_weight: 1,
+  risky: "conditional",
+  errorCodes: [
+    ...BASE_CODES,
+    ...TAB_CODES,
+    ...MUTATING_CODES,
+    ...RISKY_CODES,
+    "CDP_ATTACH_FAILED",
   ] as const,
 } as const;
 
@@ -622,6 +674,7 @@ const typeTool: ToolDef = {
     required: ["typed"] as const,
     properties: {
       typed: { type: "integer", minimum: 0 },
+      mode: { enum: ["keystroke", "paste", "trusted"] as const },
       submitted: { type: "boolean" },
       navigated: { type: "boolean" },
     },
@@ -851,6 +904,7 @@ export const TOOL_DEFS: readonly ToolDef[] = [
   screenshot,
   read,
   click,
+  clickAt,
   clickByText,
   typeTool,
   press,
