@@ -47,6 +47,7 @@ interface ReadResult {
 interface A11yWalkResult {
   entries: RefEntry[];
   tree: string;
+  matched: boolean;
 }
 
 function codedError(code: ErrorCode, message: string): Error {
@@ -262,7 +263,7 @@ function injectedReadMarkdown(selector: string | null): string | null {
  * Pruning: keep interactive or structural elements that are visible.
  * Numbering: 1-based refs assigned in DFS order. Capped at 500.
  */
-function injectedA11yWalk(verbose: boolean): { entries: Array<{ ref: number; selector: string; role: string; name: string; attrs: Record<string, string> }>; tree: string } {
+function injectedA11yWalk(verbose: boolean, selector: string | null): { entries: Array<{ ref: number; selector: string; role: string; name: string; attrs: Record<string, string> }>; tree: string; matched: boolean } {
   const MAX_REFS = 500;
   const MAX_SELECTOR_DEPTH = 6;
   const NAME_MAX = 80;
@@ -502,8 +503,12 @@ function injectedA11yWalk(verbose: boolean): { entries: Array<{ ref: number; sel
     }
     return anyChildMarked;
   };
-  if (!verbose && document.body !== null) {
-    markPass(document.body);
+  const rootEl: Element | null = selector !== null
+    ? document.querySelector(selector)
+    : document.body;
+
+  if (!verbose && rootEl !== null) {
+    markPass(rootEl);
   }
 
   const entries: Array<{ ref: number; selector: string; role: string; name: string; attrs: Record<string, string> }> = [];
@@ -548,15 +553,16 @@ function injectedA11yWalk(verbose: boolean): { entries: Array<{ ref: number; sel
     }
   };
 
-  if (document.body !== null) {
-    walk(document.body, 0);
+  const matched = rootEl !== null;
+  if (rootEl !== null) {
+    walk(rootEl, 0);
   }
 
   if (truncated) {
     treeLines.push(`[... ${truncatedCount} more refs elided]`);
   }
 
-  return { entries, tree: treeLines.join("\n") };
+  return { entries, tree: treeLines.join("\n"), matched };
 }
 
 async function execInTab<T>(
@@ -608,9 +614,11 @@ function narrowWalkResult(raw: unknown): A11yWalkResult {
   const obj = raw as Record<string, unknown>;
   const tree = obj["tree"];
   const rawEntries = obj["entries"];
+  const matchedRaw = obj["matched"];
   if (typeof tree !== "string" || !Array.isArray(rawEntries)) {
     throw codedError("INTERNAL", "a11y walker result malformed");
   }
+  const matched = typeof matchedRaw === "boolean" ? matchedRaw : true;
   const entries: RefEntry[] = [];
   for (const item of rawEntries) {
     if (typeof item !== "object" || item === null) continue;
@@ -641,7 +649,7 @@ function narrowWalkResult(raw: unknown): A11yWalkResult {
       : { ref, selector, role, name, attrs: attrsClean };
     entries.push(entry);
   }
-  return { entries, tree };
+  return { entries, tree, matched };
 }
 
 /**
@@ -742,12 +750,16 @@ export function registerReadHandler(
     const title = typeof tab.title === "string" ? tab.title : "";
 
     const effectiveLength = Math.min(params.length, params.max_length);
+    const selectorArg = params.selector ?? null;
 
     if (params.mode === "a11y_tree") {
-      const raw: unknown = await execInTabWithArgs<readonly [boolean], unknown>(
+      const raw: unknown = await execInTabWithArgs<
+        readonly [boolean, string | null],
+        unknown
+      >(
         chromeTabId,
         injectedA11yWalk,
-        [params.verbose],
+        [params.verbose, selectorArg],
         "ISOLATED",
       );
       const walk = narrowWalkResult(raw);
@@ -774,10 +786,12 @@ export function registerReadHandler(
         start: params.start,
         length: sliced.slice.length,
       };
+      if (params.selector !== undefined) {
+        result.matched_selector = walk.matched;
+      }
       return result;
     }
 
-    const selectorArg = params.selector ?? null;
     let content: string;
     let matched = true;
     if (params.mode === "text") {
