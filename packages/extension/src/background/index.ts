@@ -85,7 +85,26 @@ async function rehydrate(): Promise<void> {
   }
 }
 
+// The user's "Disconnect" intent must survive SW restart (alarms, event
+// wakeups) but not browser restart — storage.session matches that lifetime.
+// plans/03-extension.md §D9 and plans/06-autonomy-safety.md §4.5.
+const KILLED_KEY = "killed";
+
+async function isKilled(): Promise<boolean> {
+  const s = await chrome.storage.session.get(KILLED_KEY);
+  return s[KILLED_KEY] === true;
+}
+
+async function setKilled(v: boolean): Promise<void> {
+  if (v) await chrome.storage.session.set({ [KILLED_KEY]: true });
+  else await chrome.storage.session.remove(KILLED_KEY);
+}
+
 async function startClient(): Promise<void> {
+  if (await isKilled()) {
+    onConnectionChange(false);
+    return;
+  }
   const stored = await chrome.storage.local.get({
     token: "",
     host: DEFAULT_WS_HOST,
@@ -173,7 +192,11 @@ chrome.webNavigation.onHistoryStateUpdated.addListener((d) => {
 chrome.alarms.create("ws-keepalive", { periodInMinutes: 0.5 });
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name !== "ws-keepalive") return;
-  if (wsClient === null || !wsClient.isConnected()) void startClient();
+  if (wsClient !== null && wsClient.isConnected()) return;
+  void (async () => {
+    if (await isKilled()) return;
+    await startClient();
+  })();
 });
 
 // --- popup / options messages --------------------------------------------
@@ -183,13 +206,15 @@ chrome.runtime.onMessage.addListener((msg: unknown, _sender, sendResponse) => {
   const m = msg as { kind?: unknown; type?: unknown };
   const tag = typeof m.type === "string" ? m.type : typeof m.kind === "string" ? m.kind : "";
   if (tag === "kill_switch") {
-    wsClient?.stop(true);
-    onConnectionChange(false);
-    sendResponse({ ok: true });
-    return false;
+    void setKilled(true).then(() => {
+      wsClient?.stop(true);
+      onConnectionChange(false);
+      sendResponse({ ok: true });
+    });
+    return true;
   }
   if (tag === "reconnect") {
-    void startClient().then(() => sendResponse({ ok: true }));
+    void setKilled(false).then(() => startClient()).then(() => sendResponse({ ok: true }));
     return true;
   }
   if (tag === "safety_decision") {
