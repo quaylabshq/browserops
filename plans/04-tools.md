@@ -404,7 +404,7 @@ These are assumed referenced (`$ref: "#/$defs/tab_id"` etc.) in each schema belo
 
 #### 4.3.10 `browser.screenshot`
 
-**Description.** Capture a PNG or JPEG of the tab and return it base64-encoded.
+**Description.** Capture a JPEG (default) or PNG of the tab and return it base64-encoded. Default is JPEG quality 40, downscaled so the longest edge is ≤ 1024 px — typically 30–50k base64 chars, down from ~200k at full fidelity. Set `full_quality: true` to bypass downscale and use quality 95; override `max_dimension` or `quality` individually for finer control.
 
 **`params`**
 ```json
@@ -413,10 +413,12 @@ These are assumed referenced (`$ref: "#/$defs/tab_id"` etc.) in each schema belo
   "additionalProperties": false,
   "required": ["tab_id"],
   "properties": {
-    "tab_id":    { "type": "string", "pattern": "^t_[0-9a-z]+$" },
-    "full_page": { "type": "boolean", "default": false },
-    "format":    { "enum": ["png", "jpeg"], "default": "png" },
-    "quality":   { "type": "integer", "minimum": 0, "maximum": 100 }
+    "tab_id":        { "type": "string", "pattern": "^t_[0-9a-z]+$" },
+    "full_page":     { "type": "boolean", "default": false },
+    "format":        { "enum": ["png", "jpeg"], "default": "jpeg" },
+    "quality":       { "type": "integer", "minimum": 0, "maximum": 100, "default": 40 },
+    "max_dimension": { "type": "integer", "minimum": 1, "maximum": 8192, "default": 1024 },
+    "full_quality":  { "type": "boolean", "default": false }
   }
 }
 ```
@@ -442,7 +444,7 @@ These are assumed referenced (`$ref: "#/$defs/tab_id"` etc.) in each schema belo
 
 **`risky`** `false`.
 
-**Implementation note.** If `full_page` is false, extension uses `chrome.tabs.captureVisibleTab` (fast, no debugger attach). If `full_page` is true, it attaches the debugger and uses CDP `Page.captureScreenshot { captureBeyondViewport: true }`. `quality` is forwarded only for `jpeg`. Returned buffer is base64-encoded as-is.
+**Implementation note.** Extension uses `chrome.tabs.captureVisibleTab` (fast, no debugger attach). Captured bytes are decoded via `createImageBitmap`, drawn onto an `OffscreenCanvas` scaled so the longest edge equals `max_dimension`, and re-encoded as JPEG at `quality/100`. When `full_quality: true` the pipeline is bypassed: we forward `format`/`quality` to `captureVisibleTab` directly and return the raw capture (`quality` defaults to 95 in that branch). Explicit `format: "png"` without `full_quality` still returns JPEG by design — the point of the downscale path is byte reduction. `full_page: true` requires a CDP attach and is deferred in v1.
 
 **Design decision — no chunking in v1.** Full-page screenshots comfortably fit within the 16 MiB WebSocket frame cap from plan 02 (a 4K PNG is ≈ 4–11 MB even after base64 expansion). No transport-layer chunking is implemented in v1. If a page exceeds the cap, `browser.screenshot` returns `INTERNAL` with message `"screenshot too large; use full_page: false"`, and the caller can fall back to viewport-only capture.
 

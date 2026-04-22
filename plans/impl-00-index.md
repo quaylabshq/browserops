@@ -24,4 +24,5 @@ Work through them in this order unless you have a specific reason to reprioritiz
 
 ## Status
 
-All plans: **drafted, not implemented**. Started: —. Shipped: —.
+- impl-01 (screenshot defaults): **shipped** — 5 commits.
+- impl-02, 03, 04, 05: drafted, not implemented.
