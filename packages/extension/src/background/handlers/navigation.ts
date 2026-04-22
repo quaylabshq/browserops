@@ -101,24 +101,24 @@ export function registerNavigationHandlers(router: Router, opts: NavigationOpts)
     return { final_url: finalUrl };
   });
 
-  router.register("browser.back", async (params): Promise<Record<string, never>> => {
+  router.register("browser.back", async (params): Promise<{ final_url: string }> => {
     const chromeId = resolveChromeId(tabIdMap, params["tab_id"]);
     await chrome.tabs.goBack(chromeId);
-    return {};
+    return { final_url: await readTabUrl(chromeId) };
   });
 
-  router.register("browser.forward", async (params): Promise<Record<string, never>> => {
+  router.register("browser.forward", async (params): Promise<{ final_url: string }> => {
     const chromeId = resolveChromeId(tabIdMap, params["tab_id"]);
     await chrome.tabs.goForward(chromeId);
-    return {};
+    return { final_url: await readTabUrl(chromeId) };
   });
 
-  router.register("browser.reload", async (params): Promise<Record<string, never>> => {
+  router.register("browser.reload", async (params): Promise<{ final_url: string }> => {
     const chromeId = resolveChromeId(tabIdMap, params["tab_id"]);
     const hardRaw = params["hard"];
     const bypassCache = hardRaw === true;
     await chrome.tabs.reload(chromeId, { bypassCache });
-    return {};
+    return { final_url: await readTabUrl(chromeId) };
   });
 
   router.register(
