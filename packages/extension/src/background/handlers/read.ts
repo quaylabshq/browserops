@@ -491,6 +491,81 @@ function narrowWalkResult(raw: unknown): A11yWalkResult {
   return { entries, tree };
 }
 
+/**
+ * Injected: describe an element's current state. Runs in MAIN world so it
+ * can see framework-controlled `value` on React inputs (a getter on the
+ * prototype still reports the native value, so ISOLATED would work too,
+ * but MAIN matches the click/type dispatch world for consistency).
+ */
+function injectedDescribe(selector: string): {
+  found: boolean;
+  role?: string;
+  name?: string;
+  tag?: string;
+  visible?: boolean;
+  disabled?: boolean;
+  focused?: boolean;
+  checked?: boolean;
+  value?: string;
+  attrs?: Record<string, string>;
+  aria?: Record<string, string>;
+  rect?: { x: number; y: number; width: number; height: number };
+} {
+  const el = document.querySelector(selector) as HTMLElement | null;
+  if (el === null) return { found: false };
+  const tag = el.tagName.toLowerCase();
+  const role = el.getAttribute("role") ?? "";
+  const aria: Record<string, string> = {};
+  for (const a of el.getAttributeNames()) {
+    if (a.startsWith("aria-")) {
+      const v = el.getAttribute(a);
+      if (v !== null) aria[a] = v;
+    }
+  }
+  const attrs: Record<string, string> = {};
+  for (const a of ["id", "class", "name", "type", "href", "placeholder", "data-testid"]) {
+    const v = el.getAttribute(a);
+    if (v !== null) attrs[a] = v;
+  }
+  const rect = el.getBoundingClientRect();
+  const style = window.getComputedStyle(el);
+  const visible =
+    rect.width > 0 &&
+    rect.height > 0 &&
+    style.visibility !== "hidden" &&
+    style.display !== "none" &&
+    style.opacity !== "0";
+  const disabled =
+    (el as HTMLButtonElement).disabled === true ||
+    el.getAttribute("aria-disabled") === "true";
+  const focused = document.activeElement === el;
+  const checked =
+    (el as HTMLInputElement).checked === true ||
+    el.getAttribute("aria-checked") === "true";
+  const valueField = (el as HTMLInputElement).value;
+  const value = typeof valueField === "string" ? valueField : undefined;
+  let name = el.getAttribute("aria-label") ?? "";
+  if (name === "") {
+    const text = (el.textContent ?? "").trim();
+    if (text.length > 0) name = text;
+  }
+
+  return {
+    found: true,
+    role,
+    name: name.slice(0, 200),
+    tag,
+    visible,
+    disabled,
+    focused,
+    checked,
+    value: value !== undefined ? value.slice(0, 1024) : undefined,
+    attrs,
+    aria,
+    rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+  };
+}
+
 export function registerReadHandler(
   router: Router,
   opts: { tabIdMap: Map<string, number>; refCache: RefCache },
@@ -554,5 +629,53 @@ export function registerReadHandler(
       title,
     };
     return result;
+  });
+
+  router.register("browser.describe_ref", async (rawParams) => {
+    const tab_id = rawParams["tab_id"];
+    const refRaw = rawParams["ref"];
+    if (typeof tab_id !== "string") {
+      throw codedError("INVALID_PARAMS", "tab_id must be a string");
+    }
+    if (typeof refRaw !== "number" || !Number.isInteger(refRaw) || refRaw < 1) {
+      throw codedError("INVALID_PARAMS", "ref must be a positive integer");
+    }
+    const chromeTabId = opts.tabIdMap.get(tab_id);
+    if (chromeTabId === undefined) {
+      throw codedError("TAB_NOT_FOUND", `unknown tab_id: ${tab_id}`);
+    }
+    const snap = opts.refCache.get(tab_id);
+    if (snap === undefined) {
+      throw codedError("REF_STALE", `no a11y snapshot for tab ${tab_id}; call browser.read first`);
+    }
+    const entry = snap.entries.get(refRaw);
+    if (entry === undefined) {
+      throw codedError("REF_NOT_FOUND", `ref ${refRaw} not present in current snapshot for ${tab_id}`);
+    }
+    const results = (await chrome.scripting.executeScript({
+      target: { tabId: chromeTabId },
+      world: "MAIN",
+      func: injectedDescribe,
+      args: [entry.selector],
+    })) as chrome.scripting.InjectionResult[];
+    const first = results[0];
+    const res = first?.result as ReturnType<typeof injectedDescribe> | undefined;
+    if (res === undefined || res.found === false) {
+      throw codedError("REF_STALE", `ref ${refRaw} no longer resolves in tab ${tab_id}`);
+    }
+    return {
+      ref: refRaw,
+      role: res.role ?? entry.role,
+      name: res.name ?? entry.name,
+      tag: res.tag ?? "",
+      visible: res.visible ?? false,
+      ...(res.disabled !== undefined ? { disabled: res.disabled } : {}),
+      ...(res.focused !== undefined ? { focused: res.focused } : {}),
+      ...(res.checked !== undefined ? { checked: res.checked } : {}),
+      ...(res.value !== undefined ? { value: res.value } : {}),
+      ...(res.attrs !== undefined ? { attrs: res.attrs } : {}),
+      ...(res.aria !== undefined ? { aria: res.aria } : {}),
+      ...(res.rect !== undefined ? { rect: res.rect } : {}),
+    };
   });
 }

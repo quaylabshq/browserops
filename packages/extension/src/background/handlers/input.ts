@@ -1039,6 +1039,65 @@ function injectedFocusSelector(selector: string): { found: boolean } {
   return { found: true };
 }
 
+/**
+ * Best-effort overlay dismissal: press ESC, then if we can identify the
+ * occluding element, search it (and its ancestors up to 3 levels) for a
+ * close-looking control. Returns true if we believe we dismissed something.
+ *
+ * The close-button hunt is intentionally conservative — aria-label/title
+ * containing "close" | "dismiss", or a button whose text is × / ✕ / "Close".
+ * Misfires on carousels labelled "Close preview" etc. are acceptable; they
+ * don't typically break the subsequent retry-click.
+ */
+function injectedDismissOverlay(targetSelector: string): { dismissed: boolean } {
+  // 1) ESC — many modals listen for it at the document level.
+  const escInit: KeyboardEventInit = {
+    key: "Escape",
+    code: "Escape",
+    bubbles: true,
+    cancelable: true,
+  };
+  document.dispatchEvent(new KeyboardEvent("keydown", escInit));
+  document.dispatchEvent(new KeyboardEvent("keyup", escInit));
+
+  // 2) Re-hit-test the target coordinate to find what's covering it, then
+  // hunt for a close-looking control within that occluder's tree.
+  const el = document.querySelector(targetSelector) as HTMLElement | null;
+  if (el === null) return { dismissed: false };
+  const rect = el.getBoundingClientRect();
+  const x = rect.left + rect.width / 2;
+  const y = rect.top + rect.height / 2;
+  const occluder = document.elementFromPoint(x, y) as HTMLElement | null;
+  if (occluder === null || occluder === el || el.contains(occluder) || occluder.contains(el)) {
+    // Either no occluder, or ESC already dismissed it.
+    return { dismissed: false };
+  }
+
+  const isCloseLike = (el: Element): boolean => {
+    const label = (el.getAttribute("aria-label") ?? "").toLowerCase();
+    if (/\b(close|dismiss)\b/.test(label)) return true;
+    const title = (el.getAttribute("title") ?? "").toLowerCase();
+    if (/\b(close|dismiss)\b/.test(title)) return true;
+    const text = (el.textContent ?? "").replace(/\s+/g, "").toLowerCase();
+    if (text === "×" || text === "✕" || text === "x" || text === "close") return true;
+    return false;
+  };
+
+  // Walk ancestors up to 3 levels so we also find close controls in a
+  // header sibling of the occluder.
+  let scope: Element | null = occluder;
+  for (let depth = 0; depth < 3 && scope !== null; depth += 1) {
+    const candidates = scope.querySelectorAll("button, [role='button'], a");
+    for (const c of Array.from(candidates)) {
+      if (!isCloseLike(c)) continue;
+      (c as HTMLElement).click();
+      return { dismissed: true };
+    }
+    scope = scope.parentElement;
+  }
+  return { dismissed: false };
+}
+
 function injectedClickAtPoint(
   x: number,
   y: number,
@@ -1193,20 +1252,39 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       }
 
       const mods = modifierFlags(modifiers);
-      const res = await execInTab(chromeId, injectedClick, [selector, button, mods] as const);
+      const dismissOverlay = raw["dismiss_overlay"] === true;
+      let res = await execInTab(chromeId, injectedClick, [selector, button, mods] as const);
       if (res.found === false) {
         throw codedError(
           "REF_STALE",
           `ref ${params.ref} no longer resolves in tab ${params.tab_id}`,
         );
       }
+      let dismissedOverlay = false;
+      if (dismissOverlay && res.occluded === true) {
+        const dismiss = await execInTab(chromeId, injectedDismissOverlay, [selector] as const);
+        if (dismiss.dismissed) {
+          dismissedOverlay = true;
+          // One retry. If it's still occluded, surface that — the caller can
+          // decide whether to escalate to trusted mode, navigate away, etc.
+          res = await execInTab(chromeId, injectedClick, [selector, button, mods] as const);
+          if (res.found === false) {
+            throw codedError(
+              "REF_STALE",
+              `ref ${params.ref} became stale after overlay dismissal in tab ${params.tab_id}`,
+            );
+          }
+        }
+      }
       const result: {
         clicked: true;
         mode: ClickMode;
+        dismissed_overlay?: boolean;
         occluded?: boolean;
         occluder?: { tag: string; text: string; role: string | null } | null;
         retargeted?: boolean;
       } = { clicked: true, mode };
+      if (dismissedOverlay) result.dismissed_overlay = true;
       if (res.occluded === true) {
         result.occluded = true;
         result.occluder = res.occluder ?? null;

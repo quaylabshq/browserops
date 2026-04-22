@@ -497,6 +497,12 @@ const click: ToolDef = {
       button: { enum: ["left", "middle", "right"] as const, default: "left" },
       click_count: { type: "integer", minimum: 1, maximum: 3, default: 1 },
       modifiers: modifiersSchema,
+      dismiss_overlay: {
+        description:
+          "If the click is occluded (an overlay/scrim intercepted it), try to dismiss the overlay (ESC, then a close-button hunt) and retry once. Off by default — on sites where the overlay IS the content, auto-dismiss would be wrong.",
+        type: "boolean",
+        default: false,
+      },
     },
   },
   outputSchema: {
@@ -507,6 +513,9 @@ const click: ToolDef = {
       clicked: { const: true },
       mode: { enum: ["synthetic", "trusted"] as const },
       navigated: { type: "boolean" },
+      // Set when dismiss_overlay was on and the initial click was occluded;
+      // indicates the overlay was dismissed and the click retried.
+      dismissed_overlay: { type: "boolean" },
       // Present when the click coordinate hit-tested to a different element
       // (overlay, modal scrim, etc.). Caller should consider re-reading and
       // dismissing the overlay before retrying.
@@ -803,6 +812,59 @@ const hover: ToolDef = {
   ] as const,
 } as const;
 
+const describeRef: ToolDef = {
+  name: "browser.describe_ref",
+  description:
+    "Return the live state of an element referenced by a prior browser.read(a11y_tree). Cheaper than re-reading the whole tree when you just need to check \"is the button enabled yet?\", \"did my input land?\", or \"is the focus where I expect?\". Does not mutate the page.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["tab_id", "ref"] as const,
+    properties: {
+      tab_id: tabIdSchema,
+      ref: refSchema,
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["ref", "role", "name", "tag", "visible"] as const,
+    properties: {
+      ref: refSchema,
+      role: { type: "string" },
+      name: { type: "string" },
+      tag: { type: "string" },
+      visible: { type: "boolean" },
+      disabled: { type: "boolean" },
+      focused: { type: "boolean" },
+      checked: { type: "boolean" },
+      value: { type: "string" },
+      attrs: {
+        type: "object",
+        additionalProperties: { type: "string" },
+      },
+      aria: {
+        type: "object",
+        additionalProperties: { type: "string" },
+      },
+      rect: {
+        type: "object",
+        additionalProperties: false,
+        required: ["x", "y", "width", "height"] as const,
+        properties: {
+          x: { type: "number" },
+          y: { type: "number" },
+          width: { type: "number" },
+          height: { type: "number" },
+        },
+      },
+    },
+  },
+  action_weight: 0,
+  risky: "never",
+  errorCodes: [...BASE_CODES, ...TAB_CODES, ...REF_CODES] as const,
+} as const;
+
 const waitFor: ToolDef = {
   name: "browser.wait_for",
   description:
@@ -842,6 +904,37 @@ const waitFor: ToolDef = {
     "REF_STALE",
     "REF_NOT_FOUND",
   ] as const,
+} as const;
+
+const waitForIdle: ToolDef = {
+  name: "browser.wait_for_idle",
+  description:
+    "Block until the tab has no in-flight HTTP requests for `quiet_ms` consecutive milliseconds, or until `timeout_ms` elapses. Use after navigate/click when the DOM is drawn but async data is still loading — browser.wait_for only sees DOM signals, this sees the network. Requires webRequest permission.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["tab_id"] as const,
+    properties: {
+      tab_id: tabIdSchema,
+      quiet_ms: { type: "integer", minimum: 100, maximum: 30000, default: 500 },
+      timeout_ms: { type: "integer", minimum: 100, maximum: 120000, default: 10000 },
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["idle", "elapsed_ms"] as const,
+    properties: {
+      idle: { const: true },
+      elapsed_ms: { type: "integer", minimum: 0 },
+      // Peak in-flight requests observed while waiting — useful for debugging
+      // why a page feels slow.
+      peak_in_flight: { type: "integer", minimum: 0 },
+    },
+  },
+  action_weight: 0,
+  risky: "never",
+  errorCodes: [...BASE_CODES, ...TAB_CODES] as const,
 } as const;
 
 const executeJs: ToolDef = {
@@ -911,6 +1004,8 @@ export const TOOL_DEFS: readonly ToolDef[] = [
   scroll,
   hover,
   waitFor,
+  waitForIdle,
+  describeRef,
   executeJs,
 ] as const;
 

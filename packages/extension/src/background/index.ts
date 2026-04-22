@@ -4,6 +4,7 @@ import { WsClient } from "./ws-client.js";
 import { Router, type Context } from "./router.js";
 import { RefCache } from "./ref-cache.js";
 import { CdpManager } from "./cdp.js";
+import { NetworkTracker } from "./network-tracker.js";
 import { registerTabHandlers } from "./handlers/tabs.js";
 import { registerNavigationHandlers } from "./handlers/navigation.js";
 import { registerScreenshotHandler } from "./handlers/screenshot.js";
@@ -21,6 +22,7 @@ const chromeIdToTabId = new Map<number, string>();
 const router = new Router();
 const refCache = new RefCache();
 const cdp = new CdpManager();
+const network = new NetworkTracker();
 let wsClient: WsClient | null = null;
 
 const ctx: Context = {
@@ -85,7 +87,7 @@ registerTabHandlers(router, {
   chromeIdToTabId,
   getPinnedTabId,
 });
-registerNavigationHandlers(router, { tabIdMap: tabIdToChromeId, refCache });
+registerNavigationHandlers(router, { tabIdMap: tabIdToChromeId, refCache, network });
 registerScreenshotHandler(router, { tabIdMap: tabIdToChromeId });
 registerReadHandler(router, { tabIdMap: tabIdToChromeId, refCache });
 registerInputHandlers(router, { tabIdMap: tabIdToChromeId, refCache, cdp });
@@ -228,6 +230,7 @@ chrome.tabs.onRemoved.addListener((chromeTabId) => {
   if (pinnedTabId === tabId) {
     void unpinTab();
   }
+  network.forgetTab(chromeTabId);
   void persistTabMap();
 });
 
