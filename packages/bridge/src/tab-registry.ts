@@ -30,6 +30,23 @@ export class TabRegistry {
     return rec;
   }
 
+  /**
+   * Inserts a record with a pre-allocated tab_id (no sequence bump). Used by
+   * secondary processes to mirror the primary's authoritative id.
+   */
+  inject(
+    chromeTabId: number,
+    tabId: string,
+    partial: Omit<TabRecord, "tab_id" | "chrome_tab_id">,
+  ): TabRecord {
+    const existing = this.byTabId.get(tabId);
+    if (existing) return existing;
+    const rec: TabRecord = { tab_id: tabId, chrome_tab_id: chromeTabId, ...partial };
+    this.byTabId.set(tabId, rec);
+    this.byChromeId.set(chromeTabId, tabId);
+    return rec;
+  }
+
   update(tab_id: string, patch: Partial<TabRecord>): TabRecord | undefined {
     const rec = this.byTabId.get(tab_id);
     if (!rec) return undefined;

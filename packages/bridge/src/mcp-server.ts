@@ -19,11 +19,24 @@ import {
   type ErrorCode,
   isErrorCode,
 } from "@browserops/shared";
-import type { WSBridge } from "./ws-server.js";
 import type { RateLimiter } from "./rate-limiter.js";
 import type { Safety, TabInfo } from "./safety.js";
 import type { TabRegistry } from "./tab-registry.js";
 import type { Logger } from "./logger.js";
+
+/**
+ * Minimal shape McpBridgeServer needs to talk to the extension. Implemented
+ * by {@link WSBridge} (primary) and RemoteWSBridge (secondary).
+ */
+export interface WSBridgeLike {
+  isConnected(): boolean;
+  callExtension<T = unknown>(
+    method: string,
+    params: Record<string, unknown>,
+    timeoutMs: number,
+    signal?: AbortSignal,
+  ): Promise<T>;
+}
 
 // ---------------------------------------------------------------------------
 // Stdout hygiene: console shim.
@@ -94,7 +107,7 @@ const addFormats: AddFormatsFn =
 // ---------------------------------------------------------------------------
 
 export interface McpBridgeDeps {
-  wsBridge: WSBridge;
+  wsBridge: WSBridgeLike;
   rateLimiter: RateLimiter;
   safety: Safety;
   tabs: TabRegistry;
@@ -142,7 +155,9 @@ export class McpBridgeServer {
       tools: TOOL_DEFS.map((d) => ({
         name: d.name,
         description: d.description,
-        inputSchema: d.inputSchema,
+        // Anthropic's tool API rejects top-level oneOf/allOf/anyOf. Strip them
+        // for the wire; ajv still enforces the full schema at dispatch time.
+        inputSchema: stripTopLevelUnions(d.inputSchema),
         outputSchema: d.outputSchema,
       })),
     }));
@@ -353,4 +368,14 @@ function formatAjvErrors(
 
 function randomId(): string {
   return globalThis.crypto.randomUUID();
+}
+
+function stripTopLevelUnions(schema: unknown): unknown {
+  if (!schema || typeof schema !== "object") return schema;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(schema as Record<string, unknown>)) {
+    if (k === "oneOf" || k === "anyOf" || k === "allOf") continue;
+    out[k] = v;
+  }
+  return out;
 }
