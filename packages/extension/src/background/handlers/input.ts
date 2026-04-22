@@ -787,6 +787,95 @@ function injectedClickByText(spec: ClickByTextSpec): {
   };
 }
 
+/**
+ * Injected: synthetic substring find-and-replace. Runs in MAIN world so the
+ * prototype-descriptor value setter reaches the React-controlled getter.
+ *
+ * Strategy per element kind:
+ *   - <input>/<textarea>: character offset into `.value`, splice via the
+ *     prototype setter, emit `beforeinput(insertReplacementText)` +
+ *     `input(insertReplacementText)`. Caret lands at end of replacement.
+ *   - contenteditable: Step 5.
+ *
+ * Returns a tagged result so the service-worker side can surface structured
+ * errors. The `occurrence === "all"` loop is added in Step 6; for now this
+ * function always replaces the first match.
+ */
+type FindReplaceSyntheticResult =
+  | { status: "ok"; replaced: number; used_fallback: boolean; kind: "input" | "textarea" | "contenteditable" }
+  | { status: "no_target" }
+  | { status: "not_found" }
+  | { status: "unsupported_kind"; tag: string }
+  | { status: "not_implemented"; kind: "contenteditable" };
+
+function injectedFindAndReplaceSynthetic(
+  selectorOrNull: string | null,
+  find: string,
+  replace: string,
+  occurrence: "first" | "all",
+  caseSensitive: boolean,
+): FindReplaceSyntheticResult {
+  void occurrence;
+  const root: Element | null =
+    selectorOrNull !== null
+      ? document.querySelector(selectorOrNull)
+      : document.activeElement;
+  if (root === null || !(root instanceof Element)) {
+    return { status: "no_target" };
+  }
+  const tag = root.tagName.toLowerCase();
+  if (tag === "input" || tag === "textarea") {
+    const field = root as HTMLInputElement | HTMLTextAreaElement;
+    const haystack = typeof field.value === "string" ? field.value : "";
+    const needle = find;
+    const idx = caseSensitive
+      ? haystack.indexOf(needle)
+      : haystack.toLowerCase().indexOf(needle.toLowerCase());
+    if (idx < 0) return { status: "not_found" };
+    field.focus();
+    field.selectionStart = idx;
+    field.selectionEnd = idx + needle.length;
+    try {
+      const evt = new InputEvent("beforeinput", {
+        inputType: "insertReplacementText",
+        data: replace,
+        cancelable: true,
+        bubbles: true,
+      });
+      field.dispatchEvent(evt);
+    } catch {
+      // older browsers: beforeinput constructor may reject unknown inputType;
+      // fall through and do the splice anyway.
+    }
+    const proto = tag === "input" ? HTMLInputElement.prototype : HTMLTextAreaElement.prototype;
+    const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+    const nextValue = haystack.slice(0, idx) + replace + haystack.slice(idx + needle.length);
+    if (setter !== undefined) {
+      setter.call(field, nextValue);
+    } else {
+      field.value = nextValue;
+    }
+    const caret = idx + replace.length;
+    field.selectionStart = caret;
+    field.selectionEnd = caret;
+    try {
+      const evt = new InputEvent("input", {
+        inputType: "insertReplacementText",
+        data: replace,
+        bubbles: true,
+      });
+      field.dispatchEvent(evt);
+    } catch {
+      field.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+    return { status: "ok", replaced: 1, used_fallback: false, kind: tag };
+  }
+  if ((root as HTMLElement).isContentEditable === true) {
+    return { status: "not_implemented", kind: "contenteditable" };
+  }
+  return { status: "unsupported_kind", tag };
+}
+
 function injectedExecuteJs(code: string): {
   thrown: boolean;
   value?: unknown;
@@ -1597,17 +1686,50 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
   router.register("browser.find_and_replace", async (raw) => {
     const params = parseFindAndReplace(raw);
     const chromeId = resolveChromeId(tabIdMap, params.tab_id);
-    // Stub: resolve tab and assert ref staleness up front so schema+wiring is
-    // exercised end-to-end without touching DOM state. Full implementation
-    // lands in Steps 4-7.
-    if (params.ref !== undefined) {
-      resolveSelector(refCache, params.tab_id, params.ref);
+    const selectorArg: string | null =
+      params.ref !== undefined
+        ? resolveSelector(refCache, params.tab_id, params.ref)
+        : null;
+    const mode: FindReplaceMode = params.mode ?? "synthetic";
+    if (mode === "trusted") {
+      throw codedError(
+        "INTERNAL",
+        "browser.find_and_replace trusted mode is not yet implemented (impl-04 Step 7)",
+      );
     }
-    void chromeId;
-    throw codedError(
-      "INTERNAL",
-      "browser.find_and_replace is not yet implemented (impl-04 Step 3 stub)",
-    );
+    const res = await execInTab(chromeId, injectedFindAndReplaceSynthetic, [
+      selectorArg,
+      params.find,
+      params.replace,
+      params.occurrence,
+      params.case_sensitive,
+    ] as const);
+    if (res.status === "no_target") {
+      throw codedError(
+        "INVALID_PARAMS",
+        "no target element (ref was not provided and document.activeElement is not editable)",
+      );
+    }
+    if (res.status === "not_found") {
+      throw codedError("TEXT_NOT_FOUND", `substring not found in target element`);
+    }
+    if (res.status === "unsupported_kind") {
+      throw codedError(
+        "INTERNAL",
+        `element <${res.tag}> is not editable (expected input, textarea, or contenteditable)`,
+      );
+    }
+    if (res.status === "not_implemented") {
+      throw codedError(
+        "INTERNAL",
+        `synthetic find_and_replace on ${res.kind} is not yet implemented (impl-04 Step 5)`,
+      );
+    }
+    return {
+      replaced: res.replaced,
+      mode,
+      used_fallback: res.used_fallback,
+    };
   });
 
   router.register("browser.execute_js", async (raw) => {
