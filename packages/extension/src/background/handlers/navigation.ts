@@ -1,10 +1,12 @@
 import { NAVIGATE_TIMEOUT_MS, WAIT_FOR_TIMEOUT_CAP_MS, type ErrorCode } from "@browserops/shared";
 import type { Router } from "../router.js";
 import type { RefCache } from "../ref-cache.js";
+import type { NetworkTracker } from "../network-tracker.js";
 
 interface NavigationOpts {
   tabIdMap: Map<string, number>;
   refCache: RefCache;
+  network: NetworkTracker;
 }
 
 const WAIT_FOR_POLL_DEFAULT_MS = 250;
@@ -83,7 +85,7 @@ function injectedCheckWaitFor(
 }
 
 export function registerNavigationHandlers(router: Router, opts: NavigationOpts): void {
-  const { tabIdMap, refCache } = opts;
+  const { tabIdMap, refCache, network } = opts;
 
   router.register("browser.navigate", async (params): Promise<{ final_url: string }> => {
     const chromeId = resolveChromeId(tabIdMap, params["tab_id"]);
@@ -230,6 +232,50 @@ export function registerNavigationHandlers(router: Router, opts: NavigationOpts)
         }
         const remaining = deadline - Date.now();
         const sleep = Math.min(pollMs, Math.max(remaining, 0));
+        if (sleep === 0) continue;
+        await new Promise<void>((r) => setTimeout(r, sleep));
+      }
+    },
+  );
+
+  router.register(
+    "browser.wait_for_idle",
+    async (
+      params,
+    ): Promise<{ idle: true; elapsed_ms: number; peak_in_flight: number }> => {
+      const chromeId = resolveChromeId(tabIdMap, params["tab_id"]);
+      const quietRaw = params["quiet_ms"];
+      const quietMs =
+        typeof quietRaw === "number" && Number.isFinite(quietRaw) ? quietRaw : 500;
+      const timeoutRaw = params["timeout_ms"];
+      const requestedTimeout =
+        typeof timeoutRaw === "number" && Number.isFinite(timeoutRaw) ? timeoutRaw : 10_000;
+      const timeoutMs = Math.min(Math.max(requestedTimeout, 100), WAIT_FOR_TIMEOUT_CAP_MS);
+      const started = Date.now();
+      const deadline = started + timeoutMs;
+
+      let peak = network.inFlight(chromeId);
+      let quietSince: number | null = null;
+      for (;;) {
+        const current = network.inFlight(chromeId);
+        if (current > peak) peak = current;
+        const now = Date.now();
+        if (current === 0) {
+          if (quietSince === null) quietSince = now;
+          if (now - quietSince >= quietMs) {
+            return { idle: true, elapsed_ms: now - started, peak_in_flight: peak };
+          }
+        } else {
+          quietSince = null;
+        }
+        if (now >= deadline) {
+          throw makeError(
+            "TIMEOUT",
+            `wait_for_idle did not see ${quietMs}ms of quiet within ${timeoutMs}ms (current=${current}, peak=${peak})`,
+          );
+        }
+        const remaining = deadline - now;
+        const sleep = Math.min(100, Math.max(remaining, 0));
         if (sleep === 0) continue;
         await new Promise<void>((r) => setTimeout(r, sleep));
       }
