@@ -23,6 +23,7 @@ type ReadMode = "a11y_tree" | "markdown" | "sanitized_html" | "text";
 interface ReadParams {
   tab_id: string;
   mode: ReadMode;
+  verbose: boolean;
 }
 
 interface ReadResult {
@@ -62,7 +63,15 @@ function parseParams(raw: Record<string, unknown>): ReadParams {
       `mode must be one of ${READ_MODES.join(", ")}`,
     );
   }
-  return { tab_id: tabId, mode: mode as ReadMode };
+  const verboseRaw = raw["verbose"];
+  let verbose = false;
+  if (verboseRaw !== undefined) {
+    if (typeof verboseRaw !== "boolean") {
+      throw codedError("INVALID_PARAMS", "verbose must be boolean");
+    }
+    verbose = verboseRaw;
+  }
+  return { tab_id: tabId, mode: mode as ReadMode, verbose };
 }
 
 function sanitizeHtml(html: string): string {
@@ -173,7 +182,9 @@ function injectedReadMarkdown(): string {
  * Pruning: keep interactive or structural elements that are visible.
  * Numbering: 1-based refs assigned in DFS order. Capped at 500.
  */
-function injectedA11yWalk(): { entries: Array<{ ref: number; selector: string; role: string; name: string; attrs: Record<string, string> }>; tree: string } {
+function injectedA11yWalk(_verbose: boolean): { entries: Array<{ ref: number; selector: string; role: string; name: string; attrs: Record<string, string> }>; tree: string } {
+  // _verbose will drive the compact-vs-legacy filter in Step 3. For now the
+  // walker ignores it and always emits the legacy (verbose) tree.
   const MAX_REFS = 500;
   const MAX_SELECTOR_DEPTH = 6;
   const NAME_MAX = 80;
@@ -448,6 +459,28 @@ async function execInTab<T>(
   return first.result as T;
 }
 
+async function execInTabWithArgs<A extends readonly unknown[], T>(
+  chromeTabId: number,
+  fn: (...args: A) => T,
+  args: A,
+  world: chrome.scripting.ExecutionWorld = "MAIN",
+): Promise<T> {
+  const results = await chrome.scripting.executeScript({
+    target: { tabId: chromeTabId },
+    func: fn as unknown as (...a: unknown[]) => T,
+    args: args as unknown as unknown[],
+    world,
+  });
+  if (!Array.isArray(results) || results.length === 0) {
+    throw codedError("INTERNAL", "executeScript returned no frames");
+  }
+  const first = results[0];
+  if (first === undefined) {
+    throw codedError("INTERNAL", "executeScript main-frame result missing");
+  }
+  return first.result as T;
+}
+
 function narrowWalkResult(raw: unknown): A11yWalkResult {
   if (typeof raw !== "object" || raw === null) {
     throw codedError("INTERNAL", "a11y walker returned non-object");
@@ -589,7 +622,12 @@ export function registerReadHandler(
     const title = typeof tab.title === "string" ? tab.title : "";
 
     if (params.mode === "a11y_tree") {
-      const raw: unknown = await execInTab<unknown>(chromeTabId, injectedA11yWalk, "ISOLATED");
+      const raw: unknown = await execInTabWithArgs<readonly [boolean], unknown>(
+        chromeTabId,
+        injectedA11yWalk,
+        [params.verbose],
+        "ISOLATED",
+      );
       const walk = narrowWalkResult(raw);
       const entriesMap = new Map<number, RefEntry>();
       for (const entry of walk.entries) {
