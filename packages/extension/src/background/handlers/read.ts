@@ -182,9 +182,7 @@ function injectedReadMarkdown(): string {
  * Pruning: keep interactive or structural elements that are visible.
  * Numbering: 1-based refs assigned in DFS order. Capped at 500.
  */
-function injectedA11yWalk(_verbose: boolean): { entries: Array<{ ref: number; selector: string; role: string; name: string; attrs: Record<string, string> }>; tree: string } {
-  // _verbose will drive the compact-vs-legacy filter in Step 3. For now the
-  // walker ignores it and always emits the legacy (verbose) tree.
+function injectedA11yWalk(verbose: boolean): { entries: Array<{ ref: number; selector: string; role: string; name: string; attrs: Record<string, string> }>; tree: string } {
   const MAX_REFS = 500;
   const MAX_SELECTOR_DEPTH = 6;
   const NAME_MAX = 80;
@@ -388,6 +386,46 @@ function injectedA11yWalk(_verbose: boolean): { entries: Array<{ ref: number; se
     return attrs;
   };
 
+  // Non-verbose filter: restricts emission to elements that (a) already pass
+  // shouldKeep && canEmit (today's eligible set) and additionally have a
+  // non-empty accessible name, a core interactive role, or an eligible
+  // descendant that survived. A pre-pass marks those; the main walk then
+  // emits only marked elements. In verbose mode the pre-pass is skipped and
+  // the legacy (shouldKeep && canEmit) gate is used.
+  const CORE_INTERACTIVE = new Set([
+    "button", "link", "textbox", "combobox", "checkbox", "radio", "menuitem", "tab",
+  ]);
+  const marked: WeakSet<Element> = new WeakSet();
+  const markPass = (el: Element): boolean => {
+    // Returns true iff this subtree contains any marked element.
+    if (!canDescend(el)) return false;
+    let anyChildMarked = false;
+    for (const child of Array.from(el.children)) {
+      if (markPass(child)) anyChildMarked = true;
+    }
+    if (el.shadowRoot !== null) {
+      for (const child of Array.from(el.shadowRoot.children)) {
+        if (markPass(child)) anyChildMarked = true;
+      }
+    }
+    const role = roleFor(el);
+    const eligible = role !== null && shouldKeep(el, role) && canEmit(el);
+    if (eligible) {
+      const name = nameOf(el);
+      const rule1 = name.length > 0;
+      const rule2 = CORE_INTERACTIVE.has(role);
+      const rule3 = anyChildMarked;
+      if (rule1 || rule2 || rule3) {
+        marked.add(el);
+        return true;
+      }
+    }
+    return anyChildMarked;
+  };
+  if (!verbose && document.body !== null) {
+    markPass(document.body);
+  }
+
   const entries: Array<{ ref: number; selector: string; role: string; name: string; attrs: Record<string, string> }> = [];
   const treeLines: string[] = [];
   let truncated = false;
@@ -397,7 +435,9 @@ function injectedA11yWalk(_verbose: boolean): { entries: Array<{ ref: number; se
   const walk = (el: Element, depth: number): void => {
     if (!canDescend(el)) return;
     const role = roleFor(el);
-    const keep = shouldKeep(el, role) && canEmit(el);
+    const keep = verbose
+      ? (shouldKeep(el, role) && canEmit(el))
+      : marked.has(el);
     let childDepth = depth;
     if (keep && role !== null) {
       if (refCounter >= MAX_REFS) {
