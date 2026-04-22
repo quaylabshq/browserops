@@ -58,18 +58,42 @@ router.register("assign_tab_id", async (params) => {
 const resolveTabId = (chromeTabId: number): string | undefined => chromeIdToTabId.get(chromeTabId);
 
 let currentConnected = false;
+let currentAutoApprove = false;
 
-function setBadge(connected: boolean): void {
-  chrome.action.setBadgeText({ text: connected ? "" : "!" }).catch(() => {});
-  if (!connected) chrome.action.setBadgeBackgroundColor({ color: "#c1121f" }).catch(() => {});
+function applyBadge(): void {
+  if (currentAutoApprove) {
+    chrome.action.setBadgeText({ text: "YOLO" }).catch(() => {});
+    chrome.action.setBadgeBackgroundColor({ color: "#c1121f" }).catch(() => {});
+    return;
+  }
+  chrome.action.setBadgeText({ text: currentConnected ? "" : "!" }).catch(() => {});
+  if (!currentConnected) {
+    chrome.action.setBadgeBackgroundColor({ color: "#c1121f" }).catch(() => {});
+  }
+}
+
+function setBadge(_connected: boolean): void {
+  applyBadge();
 }
 
 function onConnectionChange(connected: boolean): void {
   currentConnected = connected;
-  setBadge(connected);
+  applyBadge();
   // Expose connection state to the options/popup UIs, which poll this key.
   chrome.storage.local.set({ connected }).catch(() => {});
 }
+
+// Keep YOLO badge state synced across SW restart and popup toggles.
+void chrome.storage.session.get("autoApprove").then((s) => {
+  currentAutoApprove = s["autoApprove"] === true;
+  applyBadge();
+});
+chrome.storage.session.onChanged.addListener((changes) => {
+  if ("autoApprove" in changes) {
+    currentAutoApprove = changes["autoApprove"]?.newValue === true;
+    applyBadge();
+  }
+});
 
 // Initial state on SW boot — UIs can read this before the first WS attempt.
 chrome.storage.local.set({ connected: false }).catch(() => {});
@@ -206,11 +230,13 @@ chrome.runtime.onMessage.addListener((msg: unknown, _sender, sendResponse) => {
   const m = msg as { kind?: unknown; type?: unknown };
   const tag = typeof m.type === "string" ? m.type : typeof m.kind === "string" ? m.kind : "";
   if (tag === "kill_switch") {
-    void setKilled(true).then(() => {
+    void (async () => {
+      await setKilled(true);
+      await chrome.storage.session.remove("autoApprove");
       wsClient?.stop(true);
       onConnectionChange(false);
       sendResponse({ ok: true });
-    });
+    })();
     return true;
   }
   if (tag === "reconnect") {

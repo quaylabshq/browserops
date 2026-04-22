@@ -24,11 +24,17 @@ interface SafetyPromptParams {
 }
 
 const SESSION_KEY = "pendingSafetyPrompt";
+const AUTO_APPROVE_KEY = "autoApprove";
 
 const pending = new Map<
   string,
   (result: { decision_id: string; allow: boolean }) => void
 >();
+
+async function isAutoApprove(): Promise<boolean> {
+  const s = await chrome.storage.session.get(AUTO_APPROVE_KEY);
+  return s[AUTO_APPROVE_KEY] === true;
+}
 
 function codedError(code: ErrorCode, message: string): Error {
   const err = new Error(message) as Error & { code: ErrorCode };
@@ -73,6 +79,17 @@ export function registerSafetyHandler(
 ): void {
   router.register("safety_prompt", async (raw) => {
     const p = parse(raw);
+
+    if (await isAutoApprove()) {
+      // Extension-side "yolo" mode — session-scoped toggle in the popup.
+      // The paper trail lives in the bridge safety log (phase: decided,
+      // allow: true); we also emit a console warning so it's obvious in
+      // the service-worker devtools that the prompt was not user-seen.
+      console.warn(
+        `[safety] auto-approved ${p.tool} (decision_id=${p.decision_id}) — yolo mode on`,
+      );
+      return { decision_id: p.decision_id, allow: true };
+    }
 
     setPendingBadge();
     await chrome.storage.session.set({

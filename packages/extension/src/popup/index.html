@@ -88,6 +88,16 @@
       }
       .safety-actions button { flex: 1; }
       #main.hidden { display: none; }
+      .yolo-row {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        font-size: 12px;
+        color: #333;
+        cursor: pointer;
+        user-select: none;
+      }
+      .yolo-row input { margin: 0; }
     </style>
   </head>
   <body>
@@ -106,6 +116,10 @@
         <span>Bridge:</span>
         <span id="status" class="pill off">disconnected</span>
       </div>
+      <label class="yolo-row" title="Session only. Cleared on browser restart or Disconnect.">
+        <input type="checkbox" id="yolo" />
+        <span>Auto-approve risky actions (this session)</span>
+      </label>
       <div class="spacer"></div>
       <button id="kill" type="button">Disconnect</button>
       <a id="options">Open options</a>

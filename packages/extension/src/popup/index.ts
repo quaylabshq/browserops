@@ -9,6 +9,7 @@ const $ = <T extends HTMLElement>(id: string): T => {
 const statusPill = $<HTMLSpanElement>("status");
 const killBtn = $<HTMLButtonElement>("kill");
 const optionsLink = $<HTMLAnchorElement>("options");
+const yoloBox = $<HTMLInputElement>("yolo");
 const mainPane = $<HTMLDivElement>("main");
 const safetyPane = $<HTMLDivElement>("safety");
 const safetyTool = $<HTMLDivElement>("safety-tool");
@@ -47,7 +48,7 @@ function renderSafety(prompt: PendingSafetyPrompt | null): void {
 async function refresh(): Promise<void> {
   const [local, session] = await Promise.all([
     chrome.storage.local.get("connected"),
-    chrome.storage.session.get("pendingSafetyPrompt"),
+    chrome.storage.session.get(["pendingSafetyPrompt", "autoApprove"]),
   ]);
   renderStatus(local["connected"] === true);
   const raw = session["pendingSafetyPrompt"];
@@ -56,7 +57,17 @@ async function refresh(): Promise<void> {
       ? (raw as PendingSafetyPrompt)
       : null;
   renderSafety(prompt);
+  yoloBox.checked = session["autoApprove"] === true;
 }
+
+yoloBox.addEventListener("change", () => {
+  const next = yoloBox.checked;
+  // The background service worker listens on storage.onChanged to update the
+  // badge and to let the safety handler short-circuit future prompts.
+  void (next
+    ? chrome.storage.session.set({ autoApprove: true })
+    : chrome.storage.session.remove("autoApprove"));
+});
 
 function sendDecision(allow: boolean): void {
   void chrome.storage.session.get("pendingSafetyPrompt").then((s) => {
