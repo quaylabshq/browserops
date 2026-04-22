@@ -62,6 +62,18 @@ describe("TOOL_DEFS catalogue", () => {
   });
 });
 
+describe("browser.read schema", () => {
+  const read = TOOL_DEF_MAP["browser.read"];
+  const props = read?.inputSchema.properties as
+    | Record<string, Record<string, unknown>>
+    | undefined;
+
+  it("verbose defaults to false", () => {
+    expect(props?.verbose?.default).toBe(false);
+    expect(props?.verbose?.type).toBe("boolean");
+  });
+});
+
 describe("browser.screenshot schema", () => {
   const shot = TOOL_DEF_MAP["browser.screenshot"];
   const props = shot?.inputSchema.properties as

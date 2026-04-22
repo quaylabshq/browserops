@@ -417,7 +417,7 @@ const screenshot: ToolDef = {
 const read: ToolDef = {
   name: "browser.read",
   description:
-    "Read structured page content in one of four modes (a11y_tree, markdown, sanitized_html, text). a11y_tree is the canonical source of refs.",
+    "Read structured page content in one of four modes (a11y_tree, markdown, sanitized_html, text). a11y_tree is the canonical source of refs. By default a11y_tree returns a compact tree dropping role='generic' / name-less nodes; pass verbose:true for the legacy full tree.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -427,6 +427,7 @@ const read: ToolDef = {
       mode: { enum: ["a11y_tree", "markdown", "sanitized_html", "text"] as const },
       max_length: { type: "integer", minimum: 1024, maximum: 1048576, default: 131072 },
       viewport_only: { type: "boolean", default: false },
+      verbose: { type: "boolean", default: false },
     },
   },
   outputSchema: {
