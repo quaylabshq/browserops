@@ -389,6 +389,8 @@ const screenshot: ToolDef = {
       full_page: { type: "boolean", default: false },
       format: { enum: ["png", "jpeg"] as const, default: "png" },
       quality: { type: "integer", minimum: 0, maximum: 100 },
+      max_dimension: { type: "integer", minimum: 1, maximum: 8192 },
+      full_quality: { type: "boolean", default: false },
     },
   },
   outputSchema: {
