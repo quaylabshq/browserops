@@ -1,11 +1,15 @@
 import { NAVIGATE_TIMEOUT_MS, WAIT_FOR_TIMEOUT_CAP_MS, type ErrorCode } from "@browserops/shared";
 import type { Router } from "../router.js";
+import type { RefCache } from "../ref-cache.js";
 
 interface NavigationOpts {
   tabIdMap: Map<string, number>;
+  refCache: RefCache;
 }
 
-const WAIT_FOR_POLL_MS = 250;
+const WAIT_FOR_POLL_DEFAULT_MS = 250;
+const WAIT_FOR_POLL_MIN_MS = 50;
+const WAIT_FOR_POLL_MAX_MS = 5000;
 
 function makeError(code: ErrorCode, message: string): Error {
   return Object.assign(new Error(message), { code });
@@ -49,8 +53,37 @@ async function readTabUrl(chromeTabId: number): Promise<string> {
   return tab.url ?? tab.pendingUrl ?? "";
 }
 
+/**
+ * Injected into the target tab's MAIN world to check wait_for conditions
+ * for text/ref modes in a single round trip. Returns which (if any) matched.
+ *
+ * "text" matches if the substring appears anywhere in document.body.innerText.
+ * "ref" matches if the selector resolves to an element that is present,
+ * connected, and has a non-zero bounding box (a minimal visibility proxy
+ * consistent with the DOM-only v1 path — a fuller CDP-based visibility
+ * check is deferred; see plan 04 §4.3.17 for v2).
+ */
+function injectedCheckWaitFor(
+  selector: string | null,
+  text: string | null,
+): { matched: "ref" | "text" | null } {
+  if (text !== null) {
+    const body = document.body;
+    const hay = body === null ? "" : body.innerText;
+    if (hay.includes(text)) return { matched: "text" };
+  }
+  if (selector !== null) {
+    const el = document.querySelector(selector) as HTMLElement | null;
+    if (el !== null && el.isConnected) {
+      const rect = el.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) return { matched: "ref" };
+    }
+  }
+  return { matched: null };
+}
+
 export function registerNavigationHandlers(router: Router, opts: NavigationOpts): void {
-  const { tabIdMap } = opts;
+  const { tabIdMap, refCache } = opts;
 
   router.register("browser.navigate", async (params): Promise<{ final_url: string }> => {
     const chromeId = resolveChromeId(tabIdMap, params["tab_id"]);
@@ -90,50 +123,113 @@ export function registerNavigationHandlers(router: Router, opts: NavigationOpts)
 
   router.register(
     "browser.wait_for",
-    async (params): Promise<{ matched: "url_pattern"; elapsed_ms: number }> => {
-      const chromeId = resolveChromeId(tabIdMap, params["tab_id"]);
-      const urlPattern = params["url_pattern"];
-      const ref = params["ref"];
-      const text = params["text"];
-
-      if (ref !== undefined || text !== undefined) {
-        throw makeError("INTERNAL", "wait_for: ref/text modes not implemented in v1");
+    async (
+      params,
+    ): Promise<{ matched: "ref" | "text" | "url_pattern"; elapsed_ms: number }> => {
+      const tabIdRaw = params["tab_id"];
+      if (typeof tabIdRaw !== "string") {
+        throw makeError("INVALID_PARAMS", "tab_id must be a string");
       }
-      if (typeof urlPattern !== "string") {
-        throw makeError("INVALID_PARAMS", "wait_for requires url_pattern in v1");
+      const chromeId = resolveChromeId(tabIdMap, tabIdRaw);
+      const urlPattern = params["url_pattern"];
+      const refRaw = params["ref"];
+      const textRaw = params["text"];
+
+      if (urlPattern === undefined && refRaw === undefined && textRaw === undefined) {
+        throw makeError(
+          "INVALID_PARAMS",
+          "wait_for requires at least one of url_pattern, ref, text",
+        );
+      }
+      if (urlPattern !== undefined && typeof urlPattern !== "string") {
+        throw makeError("INVALID_PARAMS", "url_pattern must be a string");
+      }
+      if (textRaw !== undefined && typeof textRaw !== "string") {
+        throw makeError("INVALID_PARAMS", "text must be a string");
+      }
+      if (refRaw !== undefined) {
+        if (typeof refRaw !== "number" || !Number.isInteger(refRaw) || refRaw < 1) {
+          throw makeError("INVALID_PARAMS", "ref must be a positive integer");
+        }
       }
 
       const rawTimeout = params["timeout_ms"];
-      const requested = typeof rawTimeout === "number" && Number.isFinite(rawTimeout)
+      const requestedTimeout = typeof rawTimeout === "number" && Number.isFinite(rawTimeout)
         ? rawTimeout
         : 10_000;
-      const timeoutMs = Math.min(Math.max(requested, 0), WAIT_FOR_TIMEOUT_CAP_MS);
+      const timeoutMs = Math.min(Math.max(requestedTimeout, 0), WAIT_FOR_TIMEOUT_CAP_MS);
 
-      let regex: RegExp;
-      try {
-        regex = new RegExp(urlPattern);
-      } catch (err) {
-        throw makeError(
-          "INVALID_PARAMS",
-          `url_pattern is not a valid regex: ${(err as Error).message}`,
-        );
+      const rawPoll = params["poll_ms"];
+      const requestedPoll = typeof rawPoll === "number" && Number.isFinite(rawPoll)
+        ? rawPoll
+        : WAIT_FOR_POLL_DEFAULT_MS;
+      const pollMs = Math.min(
+        Math.max(requestedPoll, WAIT_FOR_POLL_MIN_MS),
+        WAIT_FOR_POLL_MAX_MS,
+      );
+
+      let regex: RegExp | undefined;
+      if (typeof urlPattern === "string") {
+        try {
+          regex = new RegExp(urlPattern);
+        } catch (err) {
+          throw makeError(
+            "INVALID_PARAMS",
+            `url_pattern is not a valid regex: ${(err as Error).message}`,
+          );
+        }
       }
+
+      let refSelector: string | null = null;
+      if (typeof refRaw === "number") {
+        const snap = refCache.get(tabIdRaw);
+        if (snap === undefined) {
+          throw makeError(
+            "REF_STALE",
+            `no a11y snapshot for tab ${tabIdRaw}; call browser.read first`,
+          );
+        }
+        const entry = snap.entries.get(refRaw);
+        if (entry === undefined) {
+          throw makeError(
+            "REF_NOT_FOUND",
+            `ref ${refRaw} not present in current snapshot for ${tabIdRaw}`,
+          );
+        }
+        refSelector = entry.selector;
+      }
+      const text = typeof textRaw === "string" ? textRaw : null;
 
       const started = Date.now();
       const deadline = started + timeoutMs;
       for (;;) {
-        const currentUrl = await readTabUrl(chromeId);
-        if (regex.test(currentUrl)) {
-          return { matched: "url_pattern", elapsed_ms: Date.now() - started };
+        if (regex !== undefined) {
+          const currentUrl = await readTabUrl(chromeId);
+          if (regex.test(currentUrl)) {
+            return { matched: "url_pattern", elapsed_ms: Date.now() - started };
+          }
+        }
+        if (refSelector !== null || text !== null) {
+          const results = (await chrome.scripting.executeScript({
+            target: { tabId: chromeId },
+            world: "MAIN",
+            func: injectedCheckWaitFor,
+            args: [refSelector, text],
+          })) as chrome.scripting.InjectionResult[];
+          const first = results[0];
+          const matched = first?.result?.matched;
+          if (matched === "ref" || matched === "text") {
+            return { matched, elapsed_ms: Date.now() - started };
+          }
         }
         if (Date.now() >= deadline) {
           throw makeError(
             "TIMEOUT",
-            `wait_for url_pattern did not match within ${timeoutMs}ms`,
+            `wait_for did not match within ${timeoutMs}ms`,
           );
         }
         const remaining = deadline - Date.now();
-        const sleep = Math.min(WAIT_FOR_POLL_MS, Math.max(remaining, 0));
+        const sleep = Math.min(pollMs, Math.max(remaining, 0));
         if (sleep === 0) continue;
         await new Promise<void>((r) => setTimeout(r, sleep));
       }

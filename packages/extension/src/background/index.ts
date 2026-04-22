@@ -35,7 +35,7 @@ async function persistTabMap(): Promise<void> {
 // Inline assign_tab_id handler (plans/03-extension.md §D5). Other handlers
 // will be registered by their own modules in a later PR.
 registerTabHandlers(router, { tabIdMap: tabIdToChromeId, chromeIdToTabId });
-registerNavigationHandlers(router, { tabIdMap: tabIdToChromeId });
+registerNavigationHandlers(router, { tabIdMap: tabIdToChromeId, refCache });
 registerScreenshotHandler(router, { tabIdMap: tabIdToChromeId });
 registerReadHandler(router, { tabIdMap: tabIdToChromeId, refCache });
 registerInputHandlers(router, { tabIdMap: tabIdToChromeId, refCache });
