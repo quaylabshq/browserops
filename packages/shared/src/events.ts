@@ -42,6 +42,18 @@ export interface ExtensionResumedPayload {
   extension_version: string;
 }
 
+export interface TabPinnedPayload {
+  tab_id: string;
+  url: string;
+  title: string;
+}
+
+export interface TabUnpinnedPayload {
+  /** Present when the unpin was driven by a tab closing or explicit action
+   *  on a specific tab; absent for "no tab is pinned now" bootstraps. */
+  tab_id?: string;
+}
+
 export type EventName =
   | "tab_created"
   | "tab_closed"
@@ -49,7 +61,9 @@ export type EventName =
   | "page_navigated"
   | "page_loaded"
   | "extension_paused"
-  | "extension_resumed";
+  | "extension_resumed"
+  | "tab_pinned"
+  | "tab_unpinned";
 
 export interface EventMap {
   tab_created: TabCreatedPayload;
@@ -59,4 +73,6 @@ export interface EventMap {
   page_loaded: PageLoadedPayload;
   extension_paused: ExtensionPausedPayload;
   extension_resumed: ExtensionResumedPayload;
+  tab_pinned: TabPinnedPayload;
+  tab_unpinned: TabUnpinnedPayload;
 }

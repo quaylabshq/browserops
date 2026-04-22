@@ -379,6 +379,246 @@ function injectedHover(selector: string): { found: boolean } {
   return { found: true };
 }
 
+interface ClickByTextSpec {
+  text: string;
+  matchMode: "exact" | "prefix" | "substring";
+  roleFilter: string | null;
+  caseSensitive: boolean;
+  button: number;
+  modifiers: { ctrl: boolean; alt: boolean; shift: boolean; meta: boolean };
+}
+
+/**
+ * Find the best visible element whose accessible name matches `text` and
+ * dispatch a synthetic click sequence on it. Mirrors injectedClick's dispatch
+ * logic but locates the target by text rather than selector — use this when
+ * the a11y walker didn't surface a ref for the target (SPA click-handler
+ * divs, off-screen-rendered components, etc.).
+ *
+ * Scoring (higher is better):
+ *   + exact name match          +100
+ *   + prefix name match          +60
+ *   + substring name match       +20
+ *   + role matches filter        +30  (only when roleFilter is set)
+ *   + interactive tag/role       +15
+ *   + has an onclick / cursor:pointer signal  +10
+ *   − per-100 pixels of area     −1    (prefer the leafiest match)
+ * Ties break on DOM order (first wins).
+ */
+function injectedClickByText(spec: ClickByTextSpec): {
+  found: boolean;
+  matched?: { role: string; name: string; tag: string };
+  occluded?: boolean;
+  occluder?: { tag: string; text: string; role: string | null } | null;
+} {
+  const INTERACTIVE_ROLES = new Set([
+    "button", "link", "textbox", "searchbox", "checkbox", "combobox",
+    "listbox", "option", "menuitem", "tab", "switch", "radio",
+  ]);
+  const INTERACTIVE_TAGS = new Set(["A", "BUTTON", "INPUT", "TEXTAREA", "SELECT"]);
+
+  const normalize = (s: string): string =>
+    (spec.caseSensitive ? s : s.toLowerCase()).replace(/\s+/g, " ").trim();
+  const needle = normalize(spec.text);
+
+  const nameOf = (el: Element): string => {
+    const aria = el.getAttribute("aria-label");
+    if (aria !== null && aria.trim().length > 0) return aria;
+    const lb = el.getAttribute("aria-labelledby");
+    if (lb !== null) {
+      const parts: string[] = [];
+      for (const id of lb.split(/\s+/)) {
+        if (id.length === 0) continue;
+        const ref = document.getElementById(id);
+        if (ref !== null) parts.push(ref.textContent ?? "");
+      }
+      const joined = parts.join(" ").trim();
+      if (joined.length > 0) return joined;
+    }
+    const tag = el.tagName.toLowerCase();
+    if (tag === "img") {
+      const alt = el.getAttribute("alt");
+      if (alt !== null && alt.length > 0) return alt;
+    }
+    if (tag === "input") {
+      const placeholder = el.getAttribute("placeholder");
+      if (placeholder !== null && placeholder.length > 0) return placeholder;
+      const v = (el as HTMLInputElement).value;
+      if (typeof v === "string" && v.length > 0) return v;
+    }
+    const title = el.getAttribute("title");
+    if (title !== null && title.length > 0) return title;
+    return (el.textContent ?? "").trim();
+  };
+
+  const roleOf = (el: Element): string => {
+    const explicit = el.getAttribute("role");
+    if (explicit !== null) return explicit.toLowerCase();
+    const t = el.tagName.toLowerCase();
+    if (t === "a") return el.hasAttribute("href") ? "link" : "";
+    if (t === "button") return "button";
+    if (t === "input") return "textbox";
+    if (t === "textarea") return "textbox";
+    if (t === "select") return "combobox";
+    return "";
+  };
+
+  const isVisible = (el: Element): boolean => {
+    const rect = el.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return false;
+    const style = window.getComputedStyle(el);
+    if (style.visibility === "hidden" || style.display === "none") return false;
+    if (style.opacity === "0") return false;
+    return true;
+  };
+
+  const matchScore = (name: string): number | null => {
+    const n = normalize(name);
+    if (n.length === 0) return null;
+    if (spec.matchMode === "exact") {
+      return n === needle ? 100 : null;
+    }
+    if (spec.matchMode === "prefix") {
+      return n.startsWith(needle) ? 60 + (n === needle ? 40 : 0) : null;
+    }
+    // substring
+    const idx = n.indexOf(needle);
+    if (idx < 0) return null;
+    return n === needle ? 100 : n.startsWith(needle) ? 60 : 20;
+  };
+
+  interface Candidate {
+    el: Element;
+    score: number;
+    name: string;
+    role: string;
+    tag: string;
+  }
+
+  const candidates: Candidate[] = [];
+  const all = document.querySelectorAll("*");
+  for (const el of Array.from(all)) {
+    if (!isVisible(el)) continue;
+    const name = nameOf(el);
+    if (name.length === 0) continue;
+    const baseScore = matchScore(name);
+    if (baseScore === null) continue;
+    const role = roleOf(el);
+    if (spec.roleFilter !== null && role !== spec.roleFilter) continue;
+    let score = baseScore;
+    if (spec.roleFilter !== null && role === spec.roleFilter) score += 30;
+    if (INTERACTIVE_ROLES.has(role) || INTERACTIVE_TAGS.has(el.tagName)) {
+      score += 15;
+    }
+    if (
+      el.hasAttribute("onclick") ||
+      window.getComputedStyle(el).cursor === "pointer"
+    ) {
+      score += 10;
+    }
+    const rect = el.getBoundingClientRect();
+    score -= Math.floor((rect.width * rect.height) / 100);
+    candidates.push({
+      el,
+      score,
+      name: name.replace(/\s+/g, " ").trim().slice(0, 120),
+      role,
+      tag: el.tagName.toLowerCase(),
+    });
+  }
+
+  if (candidates.length === 0) return { found: false };
+
+  candidates.sort((a, b) => b.score - a.score);
+  const winner = candidates[0];
+  if (winner === undefined) return { found: false };
+
+  let el = winner.el as HTMLElement;
+
+  const isInteractive = (node: Element): boolean => {
+    if (INTERACTIVE_TAGS.has(node.tagName)) return true;
+    const r = node.getAttribute("role");
+    if (r !== null && /^(button|link|menuitem|tab|switch|checkbox|radio|option)$/.test(r)) {
+      return true;
+    }
+    if (node.getAttribute("contenteditable") === "true") return true;
+    if (node.hasAttribute("onclick")) return true;
+    return window.getComputedStyle(node).cursor === "pointer";
+  };
+  if (!isInteractive(el)) {
+    let up: Element | null = el.parentElement;
+    while (up !== null && up !== document.body) {
+      if (isInteractive(up)) {
+        el = up as HTMLElement;
+        break;
+      }
+      up = up.parentElement;
+    }
+  }
+
+  try { el.scrollIntoView({ block: "center", inline: "center" }); } catch { /* ignore */ }
+
+  const rect = el.getBoundingClientRect();
+  const x = rect.left + rect.width / 2;
+  const y = rect.top + rect.height / 2;
+
+  const hit = document.elementFromPoint(x, y);
+  let occluded = false;
+  let occluder: { tag: string; text: string; role: string | null } | null = null;
+  if (hit !== null && hit !== el && !el.contains(hit) && !hit.contains(el)) {
+    occluded = true;
+    occluder = {
+      tag: hit.tagName.toLowerCase(),
+      text: (hit.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 80),
+      role: hit.getAttribute("role"),
+    };
+  }
+
+  const baseInit: MouseEventInit = {
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+    view: window,
+    button: spec.button,
+    buttons: spec.button === 0 ? 1 : spec.button === 1 ? 4 : 2,
+    clientX: x,
+    clientY: y,
+    screenX: x,
+    screenY: y,
+    ctrlKey: spec.modifiers.ctrl,
+    altKey: spec.modifiers.alt,
+    shiftKey: spec.modifiers.shift,
+    metaKey: spec.modifiers.meta,
+  };
+  const pointerInit: PointerEventInit = {
+    ...baseInit,
+    pointerId: 1,
+    pointerType: "mouse",
+    isPrimary: true,
+    width: 1,
+    height: 1,
+    pressure: 0.5,
+  };
+
+  el.dispatchEvent(new PointerEvent("pointerover", pointerInit));
+  el.dispatchEvent(new PointerEvent("pointerenter", { ...pointerInit, bubbles: false }));
+  el.dispatchEvent(new MouseEvent("mouseover", baseInit));
+  el.dispatchEvent(new MouseEvent("mouseenter", { ...baseInit, bubbles: false }));
+  el.dispatchEvent(new PointerEvent("pointerdown", pointerInit));
+  el.dispatchEvent(new MouseEvent("mousedown", baseInit));
+  try { el.focus(); } catch { /* ignore */ }
+  el.dispatchEvent(new PointerEvent("pointerup", pointerInit));
+  el.dispatchEvent(new MouseEvent("mouseup", baseInit));
+  el.click();
+
+  return {
+    found: true,
+    matched: { role: winner.role, name: winner.name, tag: winner.tag },
+    occluded,
+    occluder,
+  };
+}
+
 function injectedExecuteJs(code: string): {
   thrown: boolean;
   value?: unknown;
@@ -593,6 +833,76 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
         result.occluder = res.occluder ?? null;
       }
       if (res.retargeted === true) result.retargeted = true;
+      return result;
+    },
+  );
+
+  router.register(
+    "browser.click_by_text",
+    async (
+      raw,
+    ): Promise<{
+      clicked: true;
+      matched: { role: string; name: string; tag: string };
+      occluded?: boolean;
+      occluder?: { tag: string; text: string; role: string | null } | null;
+    }> => {
+      const tab_id = raw["tab_id"];
+      const text = raw["text"];
+      if (typeof tab_id !== "string") {
+        throw codedError("INVALID_PARAMS", "tab_id must be a string");
+      }
+      if (typeof text !== "string" || text.length === 0) {
+        throw codedError("INVALID_PARAMS", "text must be a non-empty string");
+      }
+      const match = raw["match"];
+      if (
+        match !== undefined &&
+        match !== "exact" &&
+        match !== "prefix" &&
+        match !== "substring"
+      ) {
+        throw codedError("INVALID_PARAMS", "match must be exact|prefix|substring");
+      }
+      const roleRaw = raw["role"];
+      if (roleRaw !== undefined && typeof roleRaw !== "string") {
+        throw codedError("INVALID_PARAMS", "role must be a string");
+      }
+      const caseSensitive = raw["case_sensitive"] === true;
+      const button = raw["button"];
+      if (button !== undefined && button !== "left" && button !== "middle" && button !== "right") {
+        throw codedError("INVALID_PARAMS", "button must be left|middle|right");
+      }
+      const mods = parseModifiers(raw["modifiers"]);
+      const chromeId = resolveChromeId(tabIdMap, tab_id);
+      const spec: ClickByTextSpec = {
+        text,
+        matchMode: (match as ClickByTextSpec["matchMode"]) ?? "substring",
+        roleFilter: typeof roleRaw === "string" && roleRaw.length > 0 ? roleRaw.toLowerCase() : null,
+        caseSensitive,
+        button: BUTTON_INDEX[(button as ClickParams["button"]) ?? "left"],
+        modifiers: modifierFlags(mods),
+      };
+      const res = await execInTab(chromeId, injectedClickByText, [spec] as const);
+      if (res.found === false) {
+        throw codedError(
+          "TEXT_NOT_FOUND",
+          `no visible element matched text "${text}" (${spec.matchMode}${spec.roleFilter ? `, role=${spec.roleFilter}` : ""})`,
+        );
+      }
+      const result: {
+        clicked: true;
+        matched: { role: string; name: string; tag: string };
+        occluded?: boolean;
+        occluder?: { tag: string; text: string; role: string | null } | null;
+      } = {
+        clicked: true,
+        matched: res.matched ?? { role: "", name: "", tag: "" },
+      };
+      if (res.occluded === true) {
+        result.occluded = true;
+        result.occluder = res.occluder ?? null;
+      }
       return result;
     },
   );

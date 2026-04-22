@@ -205,6 +205,30 @@ const closeTab: ToolDef = {
   errorCodes: [...BASE_CODES, ...TAB_CODES, ...MUTATING_CODES] as const,
 } as const;
 
+const pinnedTab: ToolDef = {
+  name: "browser.pinned_tab",
+  description:
+    "Return the user-selected \"home base\" tab (set via the extension popup \"Use this tab\" button). Call this FIRST when the user refers to \"this tab\" or is working on a specific page they already have open — thread the returned tab_id through the rest of the turn instead of opening a new tab. Errors with NO_PINNED_TAB if the user has not pinned one. Typically called from a navigator sub-agent.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {},
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["tab_id", "url", "title"] as const,
+    properties: {
+      tab_id: tabIdSchema,
+      url: { type: "string" },
+      title: { type: "string" },
+    },
+  },
+  action_weight: 0,
+  risky: "never",
+  errorCodes: [...BASE_CODES, "NO_PINNED_TAB"] as const,
+} as const;
+
 const switchTab: ToolDef = {
   name: "browser.switch_tab",
   description: "Make the given tab active and focus its window.",
@@ -504,6 +528,72 @@ const click: ToolDef = {
   ] as const,
 } as const;
 
+const clickByText: ToolDef = {
+  name: "browser.click_by_text",
+  description:
+    "Click the visible element whose accessible name matches the given text. Bypasses the a11y-tree ref mechanism — use this when browser.read didn't surface the element as a ref (common on SPA sites with div-wrapped click handlers), or when the agent knows the exact button label and doesn't want to pay for a full read first. Typically called from an operator sub-agent.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["tab_id", "text"] as const,
+    properties: {
+      tab_id: tabIdSchema,
+      text: { type: "string", minLength: 1, maxLength: 256 },
+      match: {
+        description:
+          "How to compare `text` against each candidate's accessible name.",
+        enum: ["exact", "prefix", "substring"] as const,
+        default: "substring",
+      },
+      role: {
+        description:
+          "If set, only match elements with this semantic role (button, link, etc.).",
+        type: "string",
+        maxLength: 32,
+      },
+      case_sensitive: { type: "boolean", default: false },
+      button: { enum: ["left", "middle", "right"] as const, default: "left" },
+      modifiers: modifiersSchema,
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["clicked"] as const,
+    properties: {
+      clicked: { const: true },
+      matched: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          role: { type: "string" },
+          name: { type: "string" },
+          tag: { type: "string" },
+        },
+      },
+      occluded: { type: "boolean" },
+      occluder: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          tag: { type: "string" },
+          text: { type: "string" },
+          role: { type: ["string", "null"] },
+        },
+      },
+    },
+  },
+  action_weight: 1,
+  risky: "conditional",
+  errorCodes: [
+    ...BASE_CODES,
+    ...TAB_CODES,
+    ...MUTATING_CODES,
+    ...RISKY_CODES,
+    "TEXT_NOT_FOUND",
+  ] as const,
+} as const;
+
 const typeTool: ToolDef = {
   name: "browser.type",
   description:
@@ -745,6 +835,7 @@ const executeJs: ToolDef = {
 export const TOOL_DEFS: readonly ToolDef[] = [
   listTabs,
   currentTab,
+  pinnedTab,
   newTab,
   closeTab,
   switchTab,
@@ -755,6 +846,7 @@ export const TOOL_DEFS: readonly ToolDef[] = [
   screenshot,
   read,
   click,
+  clickByText,
   typeTool,
   press,
   scroll,
