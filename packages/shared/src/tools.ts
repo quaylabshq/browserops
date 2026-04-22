@@ -917,6 +917,66 @@ const describeRef: ToolDef = {
   errorCodes: [...BASE_CODES, ...TAB_CODES, ...REF_CODES] as const,
 } as const;
 
+const elementStateSchemaProperties = {
+  role: { type: "string" },
+  name: { type: "string" },
+  tag: { type: "string" },
+  visible: { type: "boolean" },
+  disabled: { type: "boolean" },
+  focused: { type: "boolean" },
+  checked: { type: "boolean" },
+  value: { type: "string" },
+  attrs: { type: "object", additionalProperties: { type: "string" } },
+  aria: { type: "object", additionalProperties: { type: "string" } },
+  rect: {
+    type: "object",
+    additionalProperties: false,
+    required: ["x", "y", "width", "height"] as const,
+    properties: {
+      x: { type: "number" },
+      y: { type: "number" },
+      width: { type: "number" },
+      height: { type: "number" },
+    },
+  },
+} as const;
+
+const elementStateSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["role", "name", "tag", "visible"] as const,
+  properties: elementStateSchemaProperties,
+} as const;
+
+const querySelector: ToolDef = {
+  name: "browser.query_selector",
+  description:
+    "Read-only CSS-selector inspector. Returns the same element-state shape as describe_ref, keyed on a selector rather than a ref — use when the a11y walker didn't emit a ref for the element you need (generic div, unusual role, etc.). all:true returns up to 50 matches with a `total` count for truncation detection. No ref assignment, no mutation.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["tab_id", "selector"] as const,
+    properties: {
+      tab_id: tabIdSchema,
+      selector: { type: "string", minLength: 1, maxLength: 2048 },
+      all: { type: "boolean", default: false },
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      match: elementStateSchema,
+      matches: { type: "array", items: elementStateSchema, maxItems: 50 },
+      total: { type: "integer", minimum: 0 },
+      truncated: { type: "boolean" },
+    },
+  },
+  action_weight: 0,
+  risky: "never",
+  errorCodes: [...BASE_CODES, ...TAB_CODES] as const,
+} as const;
+
 const waitFor: ToolDef = {
   name: "browser.wait_for",
   description:
@@ -1059,6 +1119,7 @@ export const TOOL_DEFS: readonly ToolDef[] = [
   waitFor,
   waitForIdle,
   describeRef,
+  querySelector,
   executeJs,
 ] as const;
 
