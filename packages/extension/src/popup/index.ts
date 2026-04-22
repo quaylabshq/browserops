@@ -53,8 +53,10 @@ function renderSafety(prompt: PendingSafetyPrompt | null): void {
 
 async function renderPinned(): Promise<void> {
   const s = await chrome.storage.local.get("pinnedTabId");
-  const pinnedId = typeof s["pinnedTabId"] === "string" ? s["pinnedTabId"] : null;
-  if (pinnedId === null) {
+  // Storage shape is now a number (Chrome tab id); string is the old shape
+  // kept for migration compatibility. Either way a truthy value means pinned.
+  const hasPinned = typeof s["pinnedTabId"] === "number" || typeof s["pinnedTabId"] === "string";
+  if (!hasPinned) {
     pinnedEmpty.hidden = false;
     pinnedInfo.hidden = true;
     pinBtn.hidden = false;
@@ -94,7 +96,7 @@ async function renderPinned(): Promise<void> {
     /* fall through to placeholder */
   }
   // Placeholder when background can't resolve (e.g. tab closed mid-pin).
-  pinnedTitle.textContent = `(pinned: ${pinnedId})`;
+  pinnedTitle.textContent = "(pinned)";
   pinnedUrl.textContent = matched?.url ?? "";
   pinnedEmpty.hidden = true;
   pinnedInfo.hidden = false;
@@ -106,7 +108,15 @@ pinBtn.addEventListener("click", () => {
   pinBtn.disabled = true;
   chrome.runtime
     .sendMessage({ type: "pin_tab" })
-    .catch(() => {})
+    .then((res: unknown) => {
+      if (res && typeof res === "object" && "ok" in res && !(res as { ok: boolean }).ok) {
+        const err = (res as { error?: string }).error ?? "unknown error";
+        console.warn("[popup] pin_tab failed:", err);
+      }
+    })
+    .catch((e: unknown) => {
+      console.warn("[popup] pin_tab message error:", e);
+    })
     .finally(() => {
       pinBtn.disabled = false;
       void renderPinned();
