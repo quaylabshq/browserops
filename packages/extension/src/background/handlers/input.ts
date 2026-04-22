@@ -33,12 +33,17 @@ interface ClickParams {
   modifiers?: readonly Modifier[];
 }
 
+type TypeMode = "keystroke" | "paste" | "trusted";
+const KEYSTROKE_AUTO_THRESHOLD = 64;
+
 interface TypeParams {
   tab_id: string;
   ref: number;
   text: string;
+  mode?: TypeMode;
   submit?: boolean;
   clear_first?: boolean;
+  delay_ms?: number;
 }
 
 interface PressParams {
@@ -101,7 +106,7 @@ async function execInTab<A extends readonly unknown[], R>(
   chromeTabId: number,
   fn: (...args: A) => R,
   args: A,
-): Promise<R> {
+): Promise<Awaited<R>> {
   const results = (await chrome.scripting.executeScript({
     target: { tabId: chromeTabId },
     world: "MAIN",
@@ -115,7 +120,7 @@ async function execInTab<A extends readonly unknown[], R>(
   if (first === undefined) {
     throw codedError("INTERNAL", "executeScript main-frame result missing");
   }
-  return first.result as R;
+  return first.result as Awaited<R>;
 }
 
 // ---------------------------------------------------------------------------
@@ -248,7 +253,12 @@ function injectedClick(
   return { found: true, occluded, occluder, retargeted };
 }
 
-function injectedType(
+/**
+ * "paste" mode — bulk-assign the element's value in one shot. Fires a single
+ * input + change event at the end. Best for long text where per-character
+ * events would be wasteful and no per-keystroke handler cares.
+ */
+function injectedTypePaste(
   selector: string,
   text: string,
   submit: boolean,
@@ -292,23 +302,154 @@ function injectedType(
     el.dispatchEvent(new Event("change", { bubbles: true }));
   }
 
-  if (submit) {
-    const keyInit: KeyboardEventInit = {
-      key: "Enter",
-      code: "Enter",
-      bubbles: true,
-      cancelable: true,
-    };
-    el.dispatchEvent(new KeyboardEvent("keydown", keyInit));
-    el.dispatchEvent(new KeyboardEvent("keypress", keyInit));
-    el.dispatchEvent(new KeyboardEvent("keyup", keyInit));
-    const form = (el as { form?: HTMLFormElement }).form;
-    if (form !== undefined && form !== null) {
-      const submitter = form as HTMLFormElement & { requestSubmit?: () => void };
-      submitter.requestSubmit?.();
-    }
-  }
+  if (submit) dispatchEnterAndSubmit(el);
   return { found: true, typed: text.length };
+}
+
+/**
+ * "keystroke" mode — fires a real per-character event sequence
+ * (keydown → beforeinput → value mutation → input → keyup). Each event
+ * carries the right `key`, `code`, and InputEvent `data`, so handlers that
+ * key off individual keystrokes (search autocompletes, live validators,
+ * controlled React inputs) react correctly.
+ *
+ * Still untrusted (isTrusted=false); for sites that gate on trusted
+ * events, use mode=trusted (CDP path, v2).
+ */
+function injectedTypeKeystroke(
+  selector: string,
+  text: string,
+  submit: boolean,
+  clearFirst: boolean,
+  delayMs: number,
+): Promise<{ found: boolean; typed: number }> {
+  return new Promise<{ found: boolean; typed: number }>((resolve) => {
+    const el = document.querySelector(selector) as
+      | (HTMLElement & { value?: string; form?: HTMLFormElement })
+      | null;
+    if (el === null) {
+      resolve({ found: false, typed: 0 });
+      return;
+    }
+    el.focus();
+
+    if (clearFirst) {
+      if (el.isContentEditable) {
+        const sel = window.getSelection();
+        if (sel !== null) {
+          const range = document.createRange();
+          range.selectNodeContents(el);
+          sel.removeAllRanges();
+          sel.addRange(range);
+        }
+        document.execCommand("delete", false);
+      } else {
+        (el as unknown as { select?: () => void }).select?.();
+        document.execCommand("delete", false);
+      }
+    }
+
+    const proto = Object.getPrototypeOf(el) as object | null;
+    const setter = proto === null
+      ? undefined
+      : (Object.getOwnPropertyDescriptor(proto, "value")?.set as ((v: string) => void) | undefined);
+
+    const keyInitFor = (ch: string): KeyboardEventInit => {
+      const isPrintable = ch.length === 1;
+      const code = /^[a-zA-Z]$/.test(ch)
+        ? `Key${ch.toUpperCase()}`
+        : /^[0-9]$/.test(ch)
+          ? `Digit${ch}`
+          : ch === " "
+            ? "Space"
+            : "";
+      return {
+        key: ch,
+        code,
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+      } satisfies KeyboardEventInit & { [k: string]: unknown };
+      // isPrintable isn't an event init; we only need it below for keypress.
+      void isPrintable;
+    };
+
+    let index = 0;
+    const typeOne = (): void => {
+      if (index >= text.length) {
+        if (submit) dispatchEnterAndSubmit(el);
+        resolve({ found: true, typed: text.length });
+        return;
+      }
+      const ch = text.charAt(index);
+      const init = keyInitFor(ch);
+
+      // keydown
+      const kd = new KeyboardEvent("keydown", init);
+      const kdAllowed = el.dispatchEvent(kd);
+
+      if (kdAllowed) {
+        // beforeinput — modern handlers (React 18+, Draft.js, Lexical) gate here.
+        // InputEvent is supported in all target browsers (Chrome 120+).
+        const beforeInput = new InputEvent("beforeinput", {
+          data: ch,
+          inputType: "insertText",
+          bubbles: true,
+          cancelable: true,
+          composed: true,
+        });
+        const biAllowed = el.dispatchEvent(beforeInput);
+
+        if (biAllowed) {
+          if (el.isContentEditable) {
+            document.execCommand("insertText", false, ch);
+          } else {
+            const next = (el.value ?? "") + ch;
+            if (setter !== undefined) setter.call(el, next);
+            else el.value = next;
+            el.dispatchEvent(
+              new InputEvent("input", {
+                data: ch,
+                inputType: "insertText",
+                bubbles: true,
+                composed: true,
+              }),
+            );
+          }
+        }
+      }
+
+      // keyup — always fire, even if keydown was prevented.
+      el.dispatchEvent(new KeyboardEvent("keyup", init));
+
+      index += 1;
+      if (delayMs > 0) {
+        setTimeout(typeOne, delayMs);
+      } else {
+        typeOne();
+      }
+    };
+    typeOne();
+  });
+}
+
+function dispatchEnterAndSubmit(
+  el: HTMLElement & { form?: HTMLFormElement },
+): void {
+  const keyInit: KeyboardEventInit = {
+    key: "Enter",
+    code: "Enter",
+    bubbles: true,
+    cancelable: true,
+  };
+  el.dispatchEvent(new KeyboardEvent("keydown", keyInit));
+  el.dispatchEvent(new KeyboardEvent("keypress", keyInit));
+  el.dispatchEvent(new KeyboardEvent("keyup", keyInit));
+  const form = el.form;
+  if (form !== undefined && form !== null) {
+    const submitter = form as HTMLFormElement & { requestSubmit?: () => void };
+    submitter.requestSubmit?.();
+  }
 }
 
 function injectedPress(
@@ -700,15 +841,31 @@ function parseType(raw: Record<string, unknown>): TypeParams {
     throw codedError("INVALID_PARAMS", "ref must be a positive integer");
   }
   if (typeof text !== "string") throw codedError("INVALID_PARAMS", "text must be a string");
+  const mode = raw["mode"];
+  if (mode !== undefined && mode !== "keystroke" && mode !== "paste" && mode !== "trusted") {
+    throw codedError("INVALID_PARAMS", "mode must be keystroke|paste|trusted");
+  }
   const submit = raw["submit"];
   const clearFirst = raw["clear_first"];
-  return {
+  const delay = raw["delay_ms"];
+  if (delay !== undefined && (typeof delay !== "number" || !Number.isInteger(delay) || delay < 0)) {
+    throw codedError("INVALID_PARAMS", "delay_ms must be a non-negative integer");
+  }
+  const result: TypeParams = {
     tab_id,
     ref,
     text,
     submit: typeof submit === "boolean" ? submit : false,
     clear_first: typeof clearFirst === "boolean" ? clearFirst : false,
   };
+  if (mode !== undefined) result.mode = mode as TypeMode;
+  if (typeof delay === "number") result.delay_ms = delay;
+  return result;
+}
+
+function resolveTypeMode(text: string, explicit: TypeMode | undefined): TypeMode {
+  if (explicit !== undefined) return explicit;
+  return text.length <= KEYSTROKE_AUTO_THRESHOLD ? "keystroke" : "paste";
 }
 
 function parsePress(raw: Record<string, unknown>): PressParams {
@@ -907,20 +1064,42 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
     },
   );
 
-  router.register("browser.type", async (raw): Promise<{ typed: number }> => {
-    const params = parseType(raw);
-    const chromeId = resolveChromeId(tabIdMap, params.tab_id);
-    const selector = resolveSelector(refCache, params.tab_id, params.ref);
-    const res = await execInTab(
-      chromeId,
-      injectedType,
-      [selector, params.text, params.submit ?? false, params.clear_first ?? false] as const,
-    );
-    if (res.found === false) {
-      throw codedError("REF_STALE", `ref ${params.ref} no longer resolves in tab ${params.tab_id}`);
-    }
-    return { typed: res.typed };
-  });
+  router.register(
+    "browser.type",
+    async (raw): Promise<{ typed: number; mode: TypeMode }> => {
+      const params = parseType(raw);
+      const mode = resolveTypeMode(params.text, params.mode);
+      if (mode === "trusted") {
+        throw codedError(
+          "CDP_ATTACH_FAILED",
+          "mode=trusted requires the CDP input path, shipped in a later step — use mode=keystroke or mode=paste for now",
+        );
+      }
+      const chromeId = resolveChromeId(tabIdMap, params.tab_id);
+      const selector = resolveSelector(refCache, params.tab_id, params.ref);
+      const submit = params.submit ?? false;
+      const clearFirst = params.clear_first ?? false;
+      let res: { found: boolean; typed: number };
+      if (mode === "paste") {
+        res = await execInTab(
+          chromeId,
+          injectedTypePaste,
+          [selector, params.text, submit, clearFirst] as const,
+        );
+      } else {
+        const delayMs = params.delay_ms ?? 0;
+        res = await execInTab(
+          chromeId,
+          injectedTypeKeystroke,
+          [selector, params.text, submit, clearFirst, delayMs] as const,
+        );
+      }
+      if (res.found === false) {
+        throw codedError("REF_STALE", `ref ${params.ref} no longer resolves in tab ${params.tab_id}`);
+      }
+      return { typed: res.typed, mode };
+    },
+  );
 
   router.register("browser.press", async (raw): Promise<{ pressed: true }> => {
     const params = parsePress(raw);
