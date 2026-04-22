@@ -67,10 +67,37 @@ describe("browser.read schema", () => {
   const props = read?.inputSchema.properties as
     | Record<string, Record<string, unknown>>
     | undefined;
+  const outProps = read?.outputSchema.properties as
+    | Record<string, Record<string, unknown>>
+    | undefined;
 
   it("verbose defaults to false", () => {
     expect(props?.verbose?.default).toBe(false);
     expect(props?.verbose?.type).toBe("boolean");
+  });
+
+  it("start defaults to 0 and has min=0", () => {
+    expect(props?.start?.default).toBe(0);
+    expect(props?.start?.minimum).toBe(0);
+    expect(props?.start?.type).toBe("integer");
+  });
+
+  it("length has a default and bounds within max_length range", () => {
+    expect(props?.length?.default).toBe(131072);
+    expect(props?.length?.minimum).toBe(1024);
+    expect(props?.length?.maximum).toBe(1048576);
+  });
+
+  it("selector is optional with length bounds", () => {
+    expect(props?.selector?.minLength).toBe(1);
+    expect(props?.selector?.maxLength).toBe(1024);
+    expect(read?.inputSchema.required).toEqual(["tab_id", "mode"]);
+  });
+
+  it("output schema exposes pagination fields", () => {
+    expect(outProps?.total_length?.type).toBe("integer");
+    expect(outProps?.matched_selector?.type).toBe("boolean");
+    expect(outProps?.next_start).toBeDefined();
   });
 });
 
