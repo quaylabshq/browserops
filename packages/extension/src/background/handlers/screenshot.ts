@@ -19,6 +19,9 @@ interface ScreenshotParams {
   full_page?: boolean;
   format?: "png" | "jpeg";
   quality?: number;
+  // Step 1 plumbing: parsed but not yet used at runtime. Step 3 activates these.
+  max_dimension?: number;
+  full_quality?: boolean;
 }
 
 interface ScreenshotResult {
@@ -60,6 +63,20 @@ function parseParams(raw: Record<string, unknown>): ScreenshotParams {
       throw codedError("INVALID_PARAMS", "quality must be integer in [0,100]");
     }
     out.quality = quality;
+  }
+  const maxDim = raw["max_dimension"];
+  if (maxDim !== undefined) {
+    if (typeof maxDim !== "number" || !Number.isInteger(maxDim) || maxDim < 1 || maxDim > 8192) {
+      throw codedError("INVALID_PARAMS", "max_dimension must be integer in [1,8192]");
+    }
+    out.max_dimension = maxDim;
+  }
+  const fullQuality = raw["full_quality"];
+  if (fullQuality !== undefined) {
+    if (typeof fullQuality !== "boolean") {
+      throw codedError("INVALID_PARAMS", "full_quality must be boolean");
+    }
+    out.full_quality = fullQuality;
   }
   return out;
 }
