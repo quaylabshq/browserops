@@ -145,7 +145,7 @@ const SERVER_INSTRUCTIONS = [
   "  (REF_STALE, occluded clicks, timing) without polluting the main transcript.",
   "- Two useful sub-agent roles:",
   "  • navigator — browser.list_tabs / current_tab / pinned_tab / read / screenshot.",
-  "  • operator  — browser.click / click_by_text / type / press / wait_for (with retry).",
+  "  • operator  — browser.click / click_by_text / type / find_and_replace / press / wait_for (with retry).",
   "",
   "Tab selection:",
   "- If the user is working on a specific tab they already have open, call",
