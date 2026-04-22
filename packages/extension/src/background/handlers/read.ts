@@ -1,4 +1,5 @@
 import type { ErrorCode } from "@browserops/shared";
+import { sliceContent } from "@browserops/shared";
 import type { Router } from "../router.js";
 import type { RefCache, RefEntry, RefSnapshot } from "../ref-cache.js";
 
@@ -24,6 +25,10 @@ interface ReadParams {
   tab_id: string;
   mode: ReadMode;
   verbose: boolean;
+  start: number;
+  length: number;
+  max_length: number;
+  selector?: string;
 }
 
 interface ReadResult {
@@ -31,6 +36,12 @@ interface ReadResult {
   refs: RefEntry[];
   url: string;
   title: string;
+  total_length: number;
+  next_start: number | null;
+  truncated: boolean;
+  start: number;
+  length: number;
+  matched_selector?: boolean;
 }
 
 interface A11yWalkResult {
@@ -71,7 +82,58 @@ function parseParams(raw: Record<string, unknown>): ReadParams {
     }
     verbose = verboseRaw;
   }
-  return { tab_id: tabId, mode: mode as ReadMode, verbose };
+  const startRaw = raw["start"];
+  let start = 0;
+  if (startRaw !== undefined) {
+    if (typeof startRaw !== "number" || !Number.isInteger(startRaw) || startRaw < 0) {
+      throw codedError("INVALID_PARAMS", "start must be a non-negative integer");
+    }
+    start = startRaw;
+  }
+  const maxLengthRaw = raw["max_length"];
+  let max_length = 131072;
+  if (maxLengthRaw !== undefined) {
+    if (
+      typeof maxLengthRaw !== "number" ||
+      !Number.isInteger(maxLengthRaw) ||
+      maxLengthRaw < 1024 ||
+      maxLengthRaw > 1048576
+    ) {
+      throw codedError("INVALID_PARAMS", "max_length must be integer in [1024, 1048576]");
+    }
+    max_length = maxLengthRaw;
+  }
+  const lengthRaw = raw["length"];
+  let length = max_length;
+  if (lengthRaw !== undefined) {
+    if (
+      typeof lengthRaw !== "number" ||
+      !Number.isInteger(lengthRaw) ||
+      lengthRaw < 1024 ||
+      lengthRaw > 1048576
+    ) {
+      throw codedError("INVALID_PARAMS", "length must be integer in [1024, 1048576]");
+    }
+    length = lengthRaw;
+  }
+  const selectorRaw = raw["selector"];
+  let selector: string | undefined;
+  if (selectorRaw !== undefined) {
+    if (typeof selectorRaw !== "string" || selectorRaw.length === 0 || selectorRaw.length > 1024) {
+      throw codedError("INVALID_PARAMS", "selector must be a 1-1024 char string");
+    }
+    selector = selectorRaw;
+  }
+  const out: ReadParams = {
+    tab_id: tabId,
+    mode: mode as ReadMode,
+    verbose,
+    start,
+    length,
+    max_length,
+  };
+  if (selector !== undefined) out.selector = selector;
+  return out;
 }
 
 function sanitizeHtml(html: string): string {
@@ -661,6 +723,8 @@ export function registerReadHandler(
     const url = typeof tab.url === "string" ? tab.url : "";
     const title = typeof tab.title === "string" ? tab.title : "";
 
+    const effectiveLength = Math.min(params.length, params.max_length);
+
     if (params.mode === "a11y_tree") {
       const raw: unknown = await execInTabWithArgs<readonly [boolean], unknown>(
         chromeTabId,
@@ -680,11 +744,17 @@ export function registerReadHandler(
         entries: entriesMap,
       };
       opts.refCache.set(params.tab_id, snapshot);
+      const sliced = sliceContent(walk.tree, params.start, effectiveLength);
       const result: ReadResult = {
-        content: walk.tree,
+        content: sliced.slice,
         refs: walk.entries,
         url,
         title,
+        total_length: sliced.total_length,
+        next_start: sliced.next_start,
+        truncated: sliced.truncated,
+        start: params.start,
+        length: sliced.slice.length,
       };
       return result;
     }
@@ -700,11 +770,17 @@ export function registerReadHandler(
       content = sanitizeHtml(rawHtml);
     }
 
+    const sliced = sliceContent(content, params.start, effectiveLength);
     const result: ReadResult = {
-      content,
+      content: sliced.slice,
       refs: [],
       url,
       title,
+      total_length: sliced.total_length,
+      next_start: sliced.next_start,
+      truncated: sliced.truncated,
+      start: params.start,
+      length: sliced.slice.length,
     };
     return result;
   });
