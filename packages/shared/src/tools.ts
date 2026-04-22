@@ -597,7 +597,7 @@ const clickByText: ToolDef = {
 const typeTool: ToolDef = {
   name: "browser.type",
   description:
-    "Type text into an element identified by ref. Dispatches per-character CDP Input.dispatchKeyEvent so keydown listeners fire.",
+    "Type text into an element identified by ref. Three dispatch modes: 'keystroke' (default for short text, fires per-character keydown/beforeinput/input/keyup — what autocompletes and per-keystroke validators need), 'paste' (bulk-assign the value in one shot, use for long text where per-char events are wasteful), 'trusted' (CDP-backed real trusted events; requires debugger attach). Default resolves to 'keystroke' for text <=64 chars, 'paste' otherwise.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -606,6 +606,11 @@ const typeTool: ToolDef = {
       tab_id: tabIdSchema,
       ref: refSchema,
       text: { type: "string", maxLength: 32768 },
+      mode: {
+        description:
+          "Dispatch mode — see tool description. Omit to auto-select by text length.",
+        enum: ["keystroke", "paste", "trusted"] as const,
+      },
       submit: { type: "boolean", default: false },
       clear_first: { type: "boolean", default: false },
       delay_ms: { type: "integer", minimum: 0, maximum: 200, default: 0 },
