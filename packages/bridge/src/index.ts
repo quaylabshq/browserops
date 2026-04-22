@@ -23,6 +23,7 @@ const VERSION = "0.1.0";
 
 async function main(): Promise<void> {
   installProcessErrorHandlers();
+  applyCliFlags(process.argv.slice(2));
 
   const logLevel = parseLogLevel(process.env[ENV.LOG_LEVEL]);
   const logger = new Logger(logLevel);
@@ -217,6 +218,19 @@ async function tryAsSecondary(
 
 function parseLogLevel(v: string | undefined): LogLevel {
   return v === "audit" ? "audit" : "normal";
+}
+
+/**
+ * --yolo: auto-approve every risky action for this bridge process.
+ * Thin wrapper over BROWSEROPS_AUTOCONFIRM=1 — Safety reads the env var at
+ * construction time, so setting it here before main() continues is enough.
+ * Intended for local smoke tests / demos; never for automation you aren't
+ * watching.
+ */
+function applyCliFlags(argv: readonly string[]): void {
+  if (argv.includes("--yolo") || argv.includes("--autoconfirm")) {
+    process.env[ENV.AUTOCONFIRM] = "1";
+  }
 }
 
 /**
