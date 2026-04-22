@@ -218,6 +218,22 @@ function injectedA11yWalk(): { entries: Array<{ ref: number; selector: string; r
     return true;
   };
 
+  // Click-handler heuristic: SPA sites (Flipkart, Amazon, Myntra, etc.) bind
+  // onClick handlers on role-less <div>/<span> elements, so the strict
+  // semantic walker misses the primary call-to-action buttons. A node is a
+  // "click candidate" if it has an inline onclick attribute, OR it is the
+  // outermost node in a cursor:pointer region (cursor is inherited via CSS,
+  // so the parent check dedupes: we emit only the clickable root, not every
+  // descendant that merely inherited the pointer cursor).
+  const isClickCandidate = (el: Element): boolean => {
+    if (el.hasAttribute("onclick")) return true;
+    const style = window.getComputedStyle(el);
+    if (style.cursor !== "pointer") return false;
+    const parent = el.parentElement;
+    if (parent === null) return true;
+    return window.getComputedStyle(parent).cursor !== "pointer";
+  };
+
   const roleFor = (el: Element): string | null => {
     const explicit = el.getAttribute("role");
     if (explicit !== null && explicit.length > 0) return explicit.toLowerCase();
@@ -249,6 +265,8 @@ function injectedA11yWalk(): { entries: Array<{ ref: number; selector: string; r
     if (tabindex !== null && Number.parseInt(tabindex, 10) >= 0) {
       return "generic";
     }
+    // Last-resort SPA fallback — see isClickCandidate comment above.
+    if (isClickCandidate(el)) return "button";
     return null;
   };
 
