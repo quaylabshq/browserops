@@ -1,11 +1,27 @@
 import { defineManifest } from "@crxjs/vite-plugin";
 
+// The `key` below pins the extension ID across `load-unpacked` sessions.
+// Without it, Chrome derives a new ID from the install path every time the
+// extension is loaded from a different directory, which breaks the bridge's
+// BROWSEROPS_EXTENSION_ID origin check.
+//
+// Recipe to regenerate (keep the private key offline; only the public half
+// ships here):
+//   openssl genrsa 2048 > key.pem
+//   openssl rsa -in key.pem -pubout -outform DER | openssl base64 -A
+// Paste the base64 output as the value of `key`. The derived extension ID
+// appears in chrome://extensions after first load — pin it via
+// BROWSEROPS_EXTENSION_ID in the bridge environment.
+const EXTENSION_KEY =
+  "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAu5RYQVkFRtQzihnGuZ/L4Bli1lHszyyfcK7ZhKUj0Fp9KMXQ/UbsO98ucDeFxy/NCfX6OniD5IlJMqgAR6zlP9bffkTqv72ErNPRw/0y7GzLPJj1mM5LBA/aAm+y2a7xp1lLjGDm5QTuV44Cukn1aYGXtBspzDqeswgwH2A03Y7lfUe28xSdJ/AlbP6AC/KrzmzXPD3hBeqAXIjye96ijyD4slob+YSQrWGurND6RDgrVUITjpqjF2Jx4MCd8ijVULaPBSuFMnIAO/EQ2GWTGc04b1HS6d7zXGFsdq/98DCiZbveeCKq37kDgAhndaFOCIQFivRfntkARFvMGC3eswIDAQAB";
+
 export default defineManifest({
   manifest_version: 3,
   name: "BrowserOps",
   description: "Autonomous browser control for Claude Code.",
   version: "0.1.0",
   minimum_chrome_version: "120",
+  key: EXTENSION_KEY,
   permissions: ["tabs", "scripting", "debugger", "storage", "alarms", "webNavigation"],
   host_permissions: ["<all_urls>"],
   background: {
