@@ -872,6 +872,50 @@ Examples of valid `keys` values: `["Control","a"]`, `["Enter"]`, `["Shift","Tab"
 
 ---
 
+#### 4.3.17a `browser.query_selector`
+
+**Description.** Read-only CSS-selector inspector. Returns the same element-state shape as `browser.describe_ref`, but keyed on a CSS selector instead of an a11y ref. Use when the walker skipped an element (generic div, unusual role, below the 500-ref cap, `display:contents`) but you still need to inspect it. Does not assign a ref, mutate the page, or clash with the walker.
+
+**`params`**
+```json
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["tab_id", "selector"],
+  "properties": {
+    "tab_id":   { "type": "string", "pattern": "^t_[0-9a-z]+$" },
+    "selector": { "type": "string", "minLength": 1, "maxLength": 2048 },
+    "all":      { "type": "boolean", "default": false }
+  }
+}
+```
+
+**`result`** (single-match form when `all` is false, array form when `all` is true)
+```json
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "match":     { "$ref": "#/$defs/elementState" },
+    "matches":   { "type": "array", "items": { "$ref": "#/$defs/elementState" }, "maxItems": 50 },
+    "total":     { "type": "integer", "minimum": 0 },
+    "truncated": { "type": "boolean" }
+  }
+}
+```
+
+Each `elementState` carries `{ role, name, tag, visible, disabled, focused, checked, value?, attrs, aria, rect }` — the same fields `describe_ref` exposes, minus `ref`. `all: true` is capped at 50 matches; if `truncated: true` the caller should narrow the selector.
+
+**Error codes.** `TAB_NOT_FOUND`, `INVALID_PARAMS` (bad selector syntax surfaces here, not as `INTERNAL`).
+
+**`action_weight`** `0`.
+
+**`risky`** `never`.
+
+**Implementation note.** `document.querySelector` / `querySelectorAll` run in MAIN world so `value` on React-controlled inputs is readable. `SyntaxError` from a malformed selector is caught inside the injected function and re-thrown as `INVALID_PARAMS` in the bridge. Shadow DOM is **not** pierced (`describe_ref` inherits the same limitation); the a11y walker still provides the shadow-aware path.
+
+---
+
 #### 4.3.18 `browser.execute_js`
 
 **Description.** Execute JavaScript inside the tab's main world. **Always risky.**
