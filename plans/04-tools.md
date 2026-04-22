@@ -464,10 +464,16 @@ These are assumed referenced (`$ref: "#/$defs/tab_id"` etc.) in each schema belo
     "tab_id": { "type": "string", "pattern": "^t_[0-9a-z]+$" },
     "mode":   { "enum": ["a11y_tree", "markdown", "sanitized_html", "text"] },
     "max_length": { "type": "integer", "minimum": 1024, "maximum": 1048576, "default": 131072 },
-    "viewport_only": { "type": "boolean", "default": false }
+    "viewport_only": { "type": "boolean", "default": false },
+    "verbose": { "type": "boolean", "default": false },
+    "selector": { "type": "string", "minLength": 1, "maxLength": 1024 },
+    "start":  { "type": "integer", "minimum": 0, "default": 0 },
+    "length": { "type": "integer", "minimum": 1024, "maximum": 1048576, "default": 131072 }
   }
 }
 ```
+
+`selector` scopes extraction to a single CSS-addressable subtree (applies to all four modes); the walker root for `a11y_tree` becomes the matched element, and `text` / `markdown` / `sanitized_html` operate on its `innerText` / subtree / `outerHTML` respectively. `start` + `length` select a byte (UTF-16 code-unit) range of the resulting content string. `length` defaults to `max_length` so existing callers see no regression; pass a smaller `length` to save tokens. When paginated, the response includes `total_length` and `next_start` so callers can iterate. For `a11y_tree`, slicing applies to the printed tree string only — `refs[]` always returns the full set for the scoped subtree.
 
 **`result`**
 ```json
@@ -480,7 +486,12 @@ These are assumed referenced (`$ref: "#/$defs/tab_id"` etc.) in each schema belo
     "mode":    { "enum": ["a11y_tree", "markdown", "sanitized_html", "text"] },
     "url":     { "type": "string" },
     "title":   { "type": "string" },
-    "truncated": { "type": "boolean", "default": false },
+    "truncated":        { "type": "boolean", "default": false },
+    "total_length":     { "type": "integer", "minimum": 0 },
+    "next_start":       { "type": ["integer", "null"], "minimum": 0 },
+    "matched_selector": { "type": "boolean" },
+    "start":  { "type": "integer", "minimum": 0 },
+    "length": { "type": "integer", "minimum": 0 },
     "refs": {
       "description": "Map from ref integer (as string key) to a minimal element summary. MUST be present and populated only when mode == 'a11y_tree'. For all other modes, either omit the field or return an empty object. Bridge-side validation rejects responses that violate this invariant.",
       "type": "object",
@@ -524,7 +535,7 @@ These are assumed referenced (`$ref: "#/$defs/tab_id"` etc.) in each schema belo
 - `sanitized_html`: content script serialises the DOM and runs it through the TS port of `sanitize_html.py` (stripping scripts, inline event handlers, unknown tags). Falls back to shelling out to the Python script only in the bridge-side development path if the TS port is unavailable.
 - `text`: `document.body.innerText` with whitespace normalisation.
 
-All modes truncate at `max_length` (default 128 KiB) and set `truncated: true` if they did. Calling `read` in `a11y_tree` mode *invalidates* any prior snapshot for that tab (per overview §4.1).
+All modes truncate at `max_length` (default 128 KiB) and set `truncated: true` if the returned slice is smaller than the full content (i.e. `next_start` is non-null). `truncated:true` no longer implies data loss — the caller retrieves the remainder by re-calling with `start = next_start`. Calling `read` in `a11y_tree` mode *invalidates* any prior snapshot for that tab (per overview §4.1).
 
 ---
 
