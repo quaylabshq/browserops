@@ -25,4 +25,5 @@ Work through them in this order unless you have a specific reason to reprioritiz
 ## Status
 
 - impl-01 (screenshot defaults): **shipped** — 5 commits.
-- impl-02, 03, 04, 05: drafted, not implemented.
+- impl-02 (a11y verbose default): **shipped** — 4 commits (Step 4 folded into Step 5).
+- impl-03, 04, 05: drafted, not implemented.
