@@ -711,6 +711,46 @@ const typeTool: ToolDef = {
   ] as const,
 } as const;
 
+const findAndReplace: ToolDef = {
+  name: "browser.find_and_replace",
+  description:
+    "Replace a substring inside an editable element without clearing the whole field. Works on <input>, <textarea>, and contenteditable. Target resolves to `ref` if given, otherwise document.activeElement. Two dispatch modes mirror browser.type: 'synthetic' (default; beforeinput + execCommand insertText + Range fallback) and 'trusted' (CDP Input.insertText; required on rich editors like Gmail/Notion/Slate that gate on isTrusted).",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["tab_id", "find", "replace"] as const,
+    properties: {
+      tab_id: tabIdSchema,
+      ref: refSchema,
+      find: { type: "string", minLength: 1, maxLength: 4096 },
+      replace: { type: "string", maxLength: 32768 },
+      occurrence: { enum: ["first", "all"] as const, default: "first" },
+      mode: { enum: ["synthetic", "trusted"] as const },
+      case_sensitive: { type: "boolean", default: true },
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["replaced"] as const,
+    properties: {
+      replaced: { type: "integer", minimum: 0 },
+      mode: { enum: ["synthetic", "trusted"] as const },
+      used_fallback: { type: "boolean" },
+    },
+  },
+  action_weight: 1,
+  risky: "conditional",
+  errorCodes: [
+    ...BASE_CODES,
+    ...TAB_CODES,
+    ...REF_CODES,
+    ...MUTATING_CODES,
+    ...RISKY_CODES,
+    "TEXT_NOT_FOUND",
+  ] as const,
+} as const;
+
 const press: ToolDef = {
   name: "browser.press",
   description:
@@ -1012,6 +1052,7 @@ export const TOOL_DEFS: readonly ToolDef[] = [
   clickAt,
   clickByText,
   typeTool,
+  findAndReplace,
   press,
   scroll,
   hover,

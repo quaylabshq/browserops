@@ -3,8 +3,8 @@ import { TOOL_DEFS, TOOL_DEF_MAP } from "./tools.js";
 import { ERROR_CODES } from "./errors.js";
 
 describe("TOOL_DEFS catalogue", () => {
-  it("contains 23 v1 tools", () => {
-    expect(TOOL_DEFS).toHaveLength(23);
+  it("contains 24 v1 tools", () => {
+    expect(TOOL_DEFS).toHaveLength(24);
   });
 
   it("every tool name is prefixed browser. and unique", () => {
@@ -98,6 +98,37 @@ describe("browser.read schema", () => {
     expect(outProps?.total_length?.type).toBe("integer");
     expect(outProps?.matched_selector?.type).toBe("boolean");
     expect(outProps?.next_start).toBeDefined();
+  });
+});
+
+describe("browser.find_and_replace schema", () => {
+  const tool = TOOL_DEF_MAP["browser.find_and_replace"];
+  const props = tool?.inputSchema.properties as
+    | Record<string, Record<string, unknown>>
+    | undefined;
+
+  it("is registered", () => {
+    expect(tool).toBeDefined();
+  });
+
+  it("is conditionally risky", () => {
+    expect(tool?.risky).toBe("conditional");
+  });
+
+  it("requires tab_id, find, and replace", () => {
+    expect(tool?.inputSchema.required).toEqual(["tab_id", "find", "replace"]);
+  });
+
+  it("occurrence defaults to first", () => {
+    expect(props?.occurrence?.default).toBe("first");
+  });
+
+  it("case_sensitive defaults to true", () => {
+    expect(props?.case_sensitive?.default).toBe(true);
+  });
+
+  it("accepts TEXT_NOT_FOUND as a possible error code", () => {
+    expect(tool?.errorCodes).toContain("TEXT_NOT_FOUND");
   });
 });
 
