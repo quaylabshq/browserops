@@ -996,6 +996,76 @@ function parseHover(raw: Record<string, unknown>): HoverParams {
   return { tab_id, ref };
 }
 
+type FindReplaceMode = "synthetic" | "trusted";
+type FindReplaceOccurrence = "first" | "all";
+
+interface FindReplaceParams {
+  tab_id: string;
+  ref?: number;
+  find: string;
+  replace: string;
+  occurrence: FindReplaceOccurrence;
+  mode?: FindReplaceMode;
+  case_sensitive: boolean;
+}
+
+function parseFindAndReplace(raw: Record<string, unknown>): FindReplaceParams {
+  const tab_id = raw["tab_id"];
+  if (typeof tab_id !== "string") {
+    throw codedError("INVALID_PARAMS", "tab_id must be a string");
+  }
+  const find = raw["find"];
+  if (typeof find !== "string" || find.length === 0 || find.length > 4096) {
+    throw codedError("INVALID_PARAMS", "find must be a 1-4096 char string");
+  }
+  const replace = raw["replace"];
+  if (typeof replace !== "string" || replace.length > 32768) {
+    throw codedError("INVALID_PARAMS", "replace must be a string up to 32768 chars");
+  }
+  const refRaw = raw["ref"];
+  let ref: number | undefined;
+  if (refRaw !== undefined) {
+    if (typeof refRaw !== "number" || !Number.isInteger(refRaw) || refRaw < 1) {
+      throw codedError("INVALID_PARAMS", "ref must be a positive integer");
+    }
+    ref = refRaw;
+  }
+  const occurrenceRaw = raw["occurrence"];
+  let occurrence: FindReplaceOccurrence = "first";
+  if (occurrenceRaw !== undefined) {
+    if (occurrenceRaw !== "first" && occurrenceRaw !== "all") {
+      throw codedError("INVALID_PARAMS", "occurrence must be 'first' or 'all'");
+    }
+    occurrence = occurrenceRaw;
+  }
+  const modeRaw = raw["mode"];
+  let mode: FindReplaceMode | undefined;
+  if (modeRaw !== undefined) {
+    if (modeRaw !== "synthetic" && modeRaw !== "trusted") {
+      throw codedError("INVALID_PARAMS", "mode must be 'synthetic' or 'trusted'");
+    }
+    mode = modeRaw;
+  }
+  const caseRaw = raw["case_sensitive"];
+  let case_sensitive = true;
+  if (caseRaw !== undefined) {
+    if (typeof caseRaw !== "boolean") {
+      throw codedError("INVALID_PARAMS", "case_sensitive must be boolean");
+    }
+    case_sensitive = caseRaw;
+  }
+  const out: FindReplaceParams = {
+    tab_id,
+    find,
+    replace,
+    occurrence,
+    case_sensitive,
+  };
+  if (ref !== undefined) out.ref = ref;
+  if (mode !== undefined) out.mode = mode;
+  return out;
+}
+
 function parseExecuteJs(raw: Record<string, unknown>): ExecuteJsParams {
   const tab_id = raw["tab_id"];
   const code = raw["code"];
@@ -1522,6 +1592,22 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       throw codedError("REF_STALE", `ref ${params.ref} no longer resolves in tab ${params.tab_id}`);
     }
     return { hovered: true };
+  });
+
+  router.register("browser.find_and_replace", async (raw) => {
+    const params = parseFindAndReplace(raw);
+    const chromeId = resolveChromeId(tabIdMap, params.tab_id);
+    // Stub: resolve tab and assert ref staleness up front so schema+wiring is
+    // exercised end-to-end without touching DOM state. Full implementation
+    // lands in Steps 4-7.
+    if (params.ref !== undefined) {
+      resolveSelector(refCache, params.tab_id, params.ref);
+    }
+    void chromeId;
+    throw codedError(
+      "INTERNAL",
+      "browser.find_and_replace is not yet implemented (impl-04 Step 3 stub)",
+    );
   });
 
   router.register("browser.execute_js", async (raw) => {
