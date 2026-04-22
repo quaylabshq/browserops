@@ -127,39 +127,125 @@ function injectedClick(
   selector: string,
   button: number,
   modifiers: { ctrl: boolean; alt: boolean; shift: boolean; meta: boolean },
-): { found: boolean } {
-  const el = document.querySelector(selector) as HTMLElement | null;
-  if (el === null) return { found: false };
-  // Scroll into view so off-screen clicks still dispatch coordinates the
-  // page can resolve; no-op if already visible.
+): {
+  found: boolean;
+  occluded?: boolean;
+  occluder?: { tag: string; text: string; role: string | null } | null;
+  retargeted?: boolean;
+} {
+  const initialEl = document.querySelector(selector) as HTMLElement | null;
+  if (initialEl === null) return { found: false };
+
+  // If the selector landed on a non-interactive descendant (common with
+  // React wrapping label text in spans inside a <button>), walk up to the
+  // nearest interactive ancestor.
+  const INTERACTIVE_TAGS = new Set(["A", "BUTTON", "INPUT", "TEXTAREA", "SELECT"]);
+  const isInteractive = (node: Element): boolean => {
+    if (INTERACTIVE_TAGS.has(node.tagName)) return true;
+    const role = node.getAttribute("role");
+    if (role !== null && /^(button|link|menuitem|tab|switch|checkbox|radio|option)$/.test(role)) {
+      return true;
+    }
+    if (node.getAttribute("contenteditable") === "true") return true;
+    const ti = node.getAttribute("tabindex");
+    if (ti !== null && Number.parseInt(ti, 10) >= 0) return true;
+    return false;
+  };
+  let el: HTMLElement = initialEl;
+  let retargeted = false;
+  if (!isInteractive(el)) {
+    let up: Element | null = el.parentElement;
+    while (up !== null && up !== document.body) {
+      if (isInteractive(up)) {
+        el = up as HTMLElement;
+        retargeted = true;
+        break;
+      }
+      up = up.parentElement;
+    }
+  }
+
   try {
     el.scrollIntoView({ block: "center", inline: "center" });
   } catch {
     /* ignore */
   }
+
   const rect = el.getBoundingClientRect();
   const x = rect.left + rect.width / 2;
   const y = rect.top + rect.height / 2;
-  const init: MouseEventInit = {
+
+  // Occlusion check: did the browser's hit-testing land on our target (or a
+  // descendant) at this coordinate? If not, the element is covered by some
+  // other layer and a real click would miss. We still dispatch the synthetic
+  // sequence (some pages route events at the document level) but surface the
+  // finding so the caller can decide to retry.
+  const hit = document.elementFromPoint(x, y);
+  let occluded = false;
+  let occluder: { tag: string; text: string; role: string | null } | null = null;
+  if (hit !== null && hit !== el && !el.contains(hit) && !hit.contains(el)) {
+    occluded = true;
+    occluder = {
+      tag: hit.tagName.toLowerCase(),
+      text: (hit.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 80),
+      role: hit.getAttribute("role"),
+    };
+  }
+
+  const baseInit: MouseEventInit = {
     bubbles: true,
     cancelable: true,
+    composed: true,
     view: window,
     button,
     buttons: button === 0 ? 1 : button === 1 ? 4 : 2,
     clientX: x,
     clientY: y,
+    screenX: x,
+    screenY: y,
     ctrlKey: modifiers.ctrl,
     altKey: modifiers.alt,
     shiftKey: modifiers.shift,
     metaKey: modifiers.meta,
   };
-  el.dispatchEvent(new MouseEvent("mousedown", init));
-  el.dispatchEvent(new MouseEvent("mouseup", init));
-  // `click()` dispatches a trusted-adjacent click that also fires form
-  // submission on <button type="submit"> and toggles checkboxes — richer
-  // than a bare dispatchEvent("click", ...).
+  // Many modern frameworks (React synthetic pointer events, artdeco, etc.)
+  // bind on pointer events, not mouse events. Include both.
+  const pointerInit: PointerEventInit = {
+    ...baseInit,
+    pointerId: 1,
+    pointerType: "mouse",
+    isPrimary: true,
+    width: 1,
+    height: 1,
+    pressure: 0.5,
+  };
+
+  el.dispatchEvent(new PointerEvent("pointerover", pointerInit));
+  el.dispatchEvent(new PointerEvent("pointerenter", { ...pointerInit, bubbles: false }));
+  el.dispatchEvent(new MouseEvent("mouseover", baseInit));
+  el.dispatchEvent(new MouseEvent("mouseenter", { ...baseInit, bubbles: false }));
+
+  el.dispatchEvent(new PointerEvent("pointerdown", pointerInit));
+  el.dispatchEvent(new MouseEvent("mousedown", baseInit));
+
+  // Focus between down and up matches native sequencing. Some handlers key
+  // off document.activeElement at mouseup time.
+  try {
+    el.focus();
+  } catch {
+    /* ignore */
+  }
+
+  el.dispatchEvent(new PointerEvent("pointerup", pointerInit));
+  el.dispatchEvent(new MouseEvent("mouseup", baseInit));
+
+  // `click()` dispatches a click event with default-action side effects
+  // (form submission, checkbox toggling, <a> navigation) that bare
+  // dispatchEvent("click", ...) does not. Untrusted, but most React handlers
+  // don't gate on isTrusted.
   el.click();
-  return { found: true };
+
+  return { found: true, occluded, occluder, retargeted };
 }
 
 function injectedType(
@@ -474,18 +560,42 @@ const BUTTON_INDEX: Record<NonNullable<ClickParams["button"]>, number> = {
 export function registerInputHandlers(router: Router, opts: InputOpts): void {
   const { tabIdMap, refCache } = opts;
 
-  router.register("browser.click", async (raw): Promise<{ clicked: true }> => {
-    const params = parseClick(raw);
-    const chromeId = resolveChromeId(tabIdMap, params.tab_id);
-    const selector = resolveSelector(refCache, params.tab_id, params.ref);
-    const mods = modifierFlags(params.modifiers ?? []);
-    const button = BUTTON_INDEX[params.button ?? "left"];
-    const res = await execInTab(chromeId, injectedClick, [selector, button, mods] as const);
-    if (res.found === false) {
-      throw codedError("REF_STALE", `ref ${params.ref} no longer resolves in tab ${params.tab_id}`);
-    }
-    return { clicked: true };
-  });
+  router.register(
+    "browser.click",
+    async (
+      raw,
+    ): Promise<{
+      clicked: true;
+      occluded?: boolean;
+      occluder?: { tag: string; text: string; role: string | null } | null;
+      retargeted?: boolean;
+    }> => {
+      const params = parseClick(raw);
+      const chromeId = resolveChromeId(tabIdMap, params.tab_id);
+      const selector = resolveSelector(refCache, params.tab_id, params.ref);
+      const mods = modifierFlags(params.modifiers ?? []);
+      const button = BUTTON_INDEX[params.button ?? "left"];
+      const res = await execInTab(chromeId, injectedClick, [selector, button, mods] as const);
+      if (res.found === false) {
+        throw codedError(
+          "REF_STALE",
+          `ref ${params.ref} no longer resolves in tab ${params.tab_id}`,
+        );
+      }
+      const result: {
+        clicked: true;
+        occluded?: boolean;
+        occluder?: { tag: string; text: string; role: string | null } | null;
+        retargeted?: boolean;
+      } = { clicked: true };
+      if (res.occluded === true) {
+        result.occluded = true;
+        result.occluder = res.occluder ?? null;
+      }
+      if (res.retargeted === true) result.retargeted = true;
+      return result;
+    },
+  );
 
   router.register("browser.type", async (raw): Promise<{ typed: number }> => {
     const params = parseType(raw);
