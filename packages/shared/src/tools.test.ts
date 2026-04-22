@@ -61,3 +61,29 @@ describe("TOOL_DEFS catalogue", () => {
     expect(TOOL_DEF_MAP["browser.wait_for"]?.action_weight).toBe(0);
   });
 });
+
+describe("browser.screenshot schema", () => {
+  const shot = TOOL_DEF_MAP["browser.screenshot"];
+  const props = shot?.inputSchema.properties as
+    | Record<string, Record<string, unknown>>
+    | undefined;
+
+  it("defaults to jpeg at quality 40 with max_dimension 1024", () => {
+    expect(props?.format?.default).toBe("jpeg");
+    expect(props?.quality?.default).toBe(40);
+    expect(props?.max_dimension?.default).toBe(1024);
+  });
+
+  it("full_quality defaults to false", () => {
+    expect(props?.full_quality?.default).toBe(false);
+  });
+
+  it("only tab_id is required", () => {
+    expect(shot?.inputSchema.required).toEqual(["tab_id"]);
+  });
+
+  it("max_dimension is bounded to [1, 8192]", () => {
+    expect(props?.max_dimension?.minimum).toBe(1);
+    expect(props?.max_dimension?.maximum).toBe(8192);
+  });
+});
