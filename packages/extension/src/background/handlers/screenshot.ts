@@ -102,6 +102,50 @@ async function captureVisible(
   return stripDataUrlPrefix(dataUrl);
 }
 
+function arrayBufferToBase64(buf: ArrayBuffer): string {
+  // btoa(String.fromCharCode(...)) blows the call stack past ~100KB inputs,
+  // so encode in 32KB chunks.
+  const bytes = new Uint8Array(buf);
+  const CHUNK = 0x8000;
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    const slice = bytes.subarray(i, Math.min(i + CHUNK, bytes.length));
+    binary += String.fromCharCode(...slice);
+  }
+  return btoa(binary);
+}
+
+async function downscaleAndEncode(
+  sourceBase64: string,
+  sourceFormat: "png" | "jpeg",
+  maxDimension: number,
+  quality: number,
+): Promise<{ base64: string; width: number; height: number }> {
+  const mime = sourceFormat === "png" ? "image/png" : "image/jpeg";
+  const res = await fetch(`data:${mime};base64,${sourceBase64}`);
+  const blob = await res.blob();
+  const bitmap = await createImageBitmap(blob);
+  const srcW = bitmap.width;
+  const srcH = bitmap.height;
+  const longest = Math.max(srcW, srcH);
+  const scale = longest > maxDimension ? maxDimension / longest : 1;
+  const w = Math.max(1, Math.round(srcW * scale));
+  const h = Math.max(1, Math.round(srcH * scale));
+  const canvas = new OffscreenCanvas(w, h);
+  const ctx = canvas.getContext("2d");
+  if (ctx === null) {
+    throw codedError("INTERNAL", "OffscreenCanvas 2d context unavailable");
+  }
+  ctx.drawImage(bitmap, 0, 0, w, h);
+  bitmap.close();
+  const outBlob = await canvas.convertToBlob({
+    type: "image/jpeg",
+    quality: Math.max(0, Math.min(1, quality / 100)),
+  });
+  const buf = await outBlob.arrayBuffer();
+  return { base64: arrayBufferToBase64(buf), width: w, height: h };
+}
+
 export function registerScreenshotHandler(
   router: Router,
   opts: { tabIdMap: Map<string, number> },
