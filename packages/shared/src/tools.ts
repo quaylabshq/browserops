@@ -249,7 +249,9 @@ const navigate: ToolDef = {
     required: ["final_url"] as const,
     properties: {
       final_url: { type: "string" },
-      status_code: { type: "integer", minimum: 100, maximum: 599 },
+      // status_code is not populated in the DOM-only v1 path: without a CDP
+      // attach we cannot observe the HTTP response code for the navigation.
+      // Deferred to v2 (see plan 04 §4.3.6).
     },
   },
   action_weight: 1,
