@@ -379,7 +379,8 @@ const reload: ToolDef = {
 
 const screenshot: ToolDef = {
   name: "browser.screenshot",
-  description: "Capture a PNG or JPEG of the tab and return it base64-encoded.",
+  description:
+    "Capture a JPEG (default) or PNG of the tab and return it base64-encoded. Default is JPEG quality 40, downscaled so the longest edge is <= 1024 px, which typically yields 30-50k base64 chars. Set full_quality:true to bypass downscale and use quality 95; override max_dimension or quality individually for finer control.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -387,9 +388,9 @@ const screenshot: ToolDef = {
     properties: {
       tab_id: tabIdSchema,
       full_page: { type: "boolean", default: false },
-      format: { enum: ["png", "jpeg"] as const, default: "png" },
-      quality: { type: "integer", minimum: 0, maximum: 100 },
-      max_dimension: { type: "integer", minimum: 1, maximum: 8192 },
+      format: { enum: ["png", "jpeg"] as const, default: "jpeg" },
+      quality: { type: "integer", minimum: 0, maximum: 100, default: 40 },
+      max_dimension: { type: "integer", minimum: 1, maximum: 8192, default: 1024 },
       full_quality: { type: "boolean", default: false },
     },
   },

@@ -169,23 +169,32 @@ export function registerScreenshotHandler(
       throw codedError("TAB_NOT_FOUND", `chrome tab ${chromeTabId} no longer exists`);
     }
 
-    const format: "png" | "jpeg" = params.format ?? "png";
-    const quality: number = params.quality ?? 90;
+    const fullQuality = params.full_quality === true;
+    const explicitFormat = params.format;
+    const format: "png" | "jpeg" = explicitFormat ?? "jpeg";
+    const quality: number = params.quality ?? (fullQuality ? 95 : 40);
+    const maxDimension = params.max_dimension ?? 1024;
 
-    const image_base64 = await captureVisible(tab.windowId, format, quality);
+    if (fullQuality) {
+      // Bypass: capture at the requested format/quality and skip downscale.
+      const image_base64 = await captureVisible(tab.windowId, format, quality);
+      const width =
+        typeof tab.width === "number" && tab.width > 0 ? tab.width : 0;
+      const height =
+        typeof tab.height === "number" && tab.height > 0 ? tab.height : 0;
+      return { image_base64, width, height, format };
+    }
 
-    // chrome.tabs.Tab has optional width/height (present when tab is the
-    // active tab in a visible window). Fall back to 0 per spec note.
-    const width =
-      typeof tab.width === "number" && tab.width > 0 ? tab.width : 0;
-    const height =
-      typeof tab.height === "number" && tab.height > 0 ? tab.height : 0;
-
+    // Downscale path always emits JPEG regardless of requested format (that is
+    // the point of the new defaults). Callers who need true PNG should pass
+    // full_quality:true.
+    const captured = await captureVisible(tab.windowId, "png", 100);
+    const encoded = await downscaleAndEncode(captured, "png", maxDimension, quality);
     const result: ScreenshotResult = {
-      image_base64,
-      width,
-      height,
-      format,
+      image_base64: encoded.base64,
+      width: encoded.width,
+      height: encoded.height,
+      format: "jpeg",
     };
     return result;
   });
