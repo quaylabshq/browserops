@@ -994,6 +994,92 @@ function injectedFindAndReplaceSynthetic(
   return { status: "unsupported_kind", tag };
 }
 
+/**
+ * Injected: resolve the target (selector or activeElement), focus it, and
+ * set the DOM selection to the next match of `find` starting at
+ * `searchFromLogical`. Does not mutate field content — the CDP trusted
+ * insertText call in the caller will perform the actual replacement by
+ * replacing the current selection. Returns the logical offset of the match
+ * so the caller can advance the search cursor for occurrence="all".
+ */
+type FindReplaceSelectResult =
+  | { status: "selected"; kind: "input" | "textarea" | "contenteditable"; hit: number }
+  | { status: "not_found" }
+  | { status: "no_target" }
+  | { status: "unsupported_kind"; tag: string };
+
+function injectedSelectMatchForTrusted(
+  selectorOrNull: string | null,
+  find: string,
+  caseSensitive: boolean,
+  searchFromLogical: number,
+): FindReplaceSelectResult {
+  const root: Element | null =
+    selectorOrNull !== null
+      ? document.querySelector(selectorOrNull)
+      : document.activeElement;
+  if (root === null || !(root instanceof Element)) {
+    return { status: "no_target" };
+  }
+  const tag = root.tagName.toLowerCase();
+  if (tag === "input" || tag === "textarea") {
+    const field = root as HTMLInputElement | HTMLTextAreaElement;
+    const value = typeof field.value === "string" ? field.value : "";
+    const haystack = caseSensitive ? value : value.toLowerCase();
+    const needle = caseSensitive ? find : find.toLowerCase();
+    const hit = haystack.indexOf(needle, searchFromLogical);
+    if (hit < 0) return { status: "not_found" };
+    field.focus();
+    field.selectionStart = hit;
+    field.selectionEnd = hit + find.length;
+    return { status: "selected", kind: tag, hit };
+  }
+  if ((root as HTMLElement).isContentEditable === true) {
+    const host = root as HTMLElement;
+    host.focus();
+    interface Seg { node: Text; start: number; end: number }
+    const segs: Seg[] = [];
+    const walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT);
+    let running = 0;
+    let logical = "";
+    let cur: Node | null = walker.nextNode();
+    while (cur !== null) {
+      const t = cur as Text;
+      const data = t.data;
+      segs.push({ node: t, start: running, end: running + data.length });
+      running += data.length;
+      logical += data;
+      cur = walker.nextNode();
+    }
+    const haystack = caseSensitive ? logical : logical.toLowerCase();
+    const needle = caseSensitive ? find : find.toLowerCase();
+    const hit = haystack.indexOf(needle, searchFromLogical);
+    if (hit < 0) return { status: "not_found" };
+    const hitEnd = hit + find.length;
+    const locate = (pos: number): { node: Text; offset: number } | null => {
+      for (const seg of segs) {
+        if (pos >= seg.start && pos <= seg.end) {
+          return { node: seg.node, offset: pos - seg.start };
+        }
+      }
+      return null;
+    };
+    const startPt = locate(hit);
+    const endPt = locate(hitEnd);
+    if (startPt === null || endPt === null) return { status: "not_found" };
+    const range = document.createRange();
+    range.setStart(startPt.node, startPt.offset);
+    range.setEnd(endPt.node, endPt.offset);
+    const sel = window.getSelection();
+    if (sel !== null) {
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+    return { status: "selected", kind: "contenteditable", hit };
+  }
+  return { status: "unsupported_kind", tag };
+}
+
 function injectedExecuteJs(code: string): {
   thrown: boolean;
   value?: unknown;
@@ -1810,10 +1896,50 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
         : null;
     const mode: FindReplaceMode = params.mode ?? "synthetic";
     if (mode === "trusted") {
-      throw codedError(
-        "INTERNAL",
-        "browser.find_and_replace trusted mode is not yet implemented (impl-04 Step 7)",
-      );
+      const MAX_ITER = 1024;
+      let replaced = 0;
+      let searchFrom = 0;
+      let firstKind: "input" | "textarea" | "contenteditable" | null = null;
+      while (replaced < MAX_ITER) {
+        const sel = await execInTab(chromeId, injectedSelectMatchForTrusted, [
+          selectorArg,
+          params.find,
+          params.case_sensitive,
+          searchFrom,
+        ] as const);
+        if (sel.status === "no_target") {
+          if (replaced === 0) {
+            throw codedError(
+              "INVALID_PARAMS",
+              "no target element (ref was not provided and document.activeElement is not editable)",
+            );
+          }
+          break;
+        }
+        if (sel.status === "unsupported_kind") {
+          throw codedError(
+            "INTERNAL",
+            `element <${sel.tag}> is not editable (expected input, textarea, or contenteditable)`,
+          );
+        }
+        if (sel.status === "not_found") {
+          break;
+        }
+        firstKind = sel.kind;
+        await cdp.withAttach(chromeId, async () => {
+          await cdp.send(chromeId, "Input.insertText", { text: params.replace });
+        });
+        replaced += 1;
+        if (params.occurrence === "first") break;
+        // Advance search cursor past the inserted text so `replace` containing
+        // `find` can't loop.
+        searchFrom = sel.hit + params.replace.length;
+      }
+      if (replaced === 0) {
+        throw codedError("TEXT_NOT_FOUND", `substring not found in target element`);
+      }
+      void firstKind;
+      return { replaced, mode, used_fallback: false };
     }
     const res = await execInTab(chromeId, injectedFindAndReplaceSynthetic, [
       selectorArg,
