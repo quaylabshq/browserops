@@ -1,6 +1,7 @@
 import type { ErrorCode } from "@browserops/shared";
 import type { Router } from "../router.js";
 import type { RefCache } from "../ref-cache.js";
+import type { CdpManager } from "../cdp.js";
 
 /**
  * browser.click / type / press / scroll / hover / execute_js handlers.
@@ -22,15 +23,41 @@ import type { RefCache } from "../ref-cache.js";
 interface InputOpts {
   tabIdMap: Map<string, number>;
   refCache: RefCache;
+  cdp: CdpManager;
 }
 
 type Modifier = "Control" | "Alt" | "Shift" | "Meta";
+type ClickMode = "synthetic" | "trusted";
+
+// CDP Input modifier bitmask (see Input.dispatchKeyEvent).
+const CDP_MOD = { Alt: 1, Control: 2, Meta: 4, Shift: 8 } as const;
+function cdpModifiers(mods: readonly Modifier[]): number {
+  let mask = 0;
+  for (const m of mods) mask |= CDP_MOD[m];
+  return mask;
+}
+const CDP_BUTTON_NAME: Record<0 | 1 | 2, "left" | "middle" | "right"> = {
+  0: "left",
+  1: "middle",
+  2: "right",
+};
+const CDP_BUTTONS_MASK: Record<0 | 1 | 2, number> = { 0: 1, 1: 4, 2: 2 };
 
 interface ClickParams {
   tab_id: string;
   ref: number;
   button?: "left" | "middle" | "right";
   modifiers?: readonly Modifier[];
+  mode?: ClickMode;
+}
+
+interface ClickAtParams {
+  tab_id: string;
+  x: number;
+  y: number;
+  button?: "left" | "middle" | "right";
+  modifiers?: readonly Modifier[];
+  mode?: ClickMode;
 }
 
 type TypeMode = "keystroke" | "paste" | "trusted";
@@ -813,6 +840,14 @@ function modifierFlags(mods: readonly Modifier[]): {
   };
 }
 
+function parseClickMode(raw: unknown): ClickMode | undefined {
+  if (raw === undefined) return undefined;
+  if (raw !== "synthetic" && raw !== "trusted") {
+    throw codedError("INVALID_PARAMS", "mode must be synthetic|trusted");
+  }
+  return raw;
+}
+
 function parseClick(raw: Record<string, unknown>): ClickParams {
   const tab_id = raw["tab_id"];
   const ref = raw["ref"];
@@ -824,12 +859,43 @@ function parseClick(raw: Record<string, unknown>): ClickParams {
   if (button !== undefined && button !== "left" && button !== "middle" && button !== "right") {
     throw codedError("INVALID_PARAMS", "button must be left|middle|right");
   }
-  return {
+  const result: ClickParams = {
     tab_id,
     ref,
     button: (button as ClickParams["button"]) ?? "left",
     modifiers: parseModifiers(raw["modifiers"]),
   };
+  const mode = parseClickMode(raw["mode"]);
+  if (mode !== undefined) result.mode = mode;
+  return result;
+}
+
+function parseClickAt(raw: Record<string, unknown>): ClickAtParams {
+  const tab_id = raw["tab_id"];
+  if (typeof tab_id !== "string") throw codedError("INVALID_PARAMS", "tab_id must be a string");
+  const x = raw["x"];
+  const y = raw["y"];
+  if (typeof x !== "number" || !Number.isFinite(x) || x < 0) {
+    throw codedError("INVALID_PARAMS", "x must be a non-negative number");
+  }
+  if (typeof y !== "number" || !Number.isFinite(y) || y < 0) {
+    throw codedError("INVALID_PARAMS", "y must be a non-negative number");
+  }
+  const button = raw["button"];
+  if (button !== undefined && button !== "left" && button !== "middle" && button !== "right") {
+    throw codedError("INVALID_PARAMS", "button must be left|middle|right");
+  }
+  const mods = parseModifiers(raw["modifiers"]);
+  const result: ClickAtParams = {
+    tab_id,
+    x,
+    y,
+    button: (button as ClickAtParams["button"]) ?? "left",
+    modifiers: mods,
+  };
+  const mode = parseClickMode(raw["mode"]);
+  if (mode !== undefined) result.mode = mode;
+  return result;
 }
 
 function parseType(raw: Record<string, unknown>): TypeParams {
@@ -954,8 +1020,140 @@ const BUTTON_INDEX: Record<NonNullable<ClickParams["button"]>, number> = {
   right: 2,
 };
 
+/**
+ * Resolve a selector to its viewport-centered (x, y), scrolling it into view.
+ * Used by trusted-mode click; CDP's Input.dispatchMouseEvent wants coords.
+ */
+function injectedResolveCenter(selector: string): { found: boolean; x?: number; y?: number } {
+  const el = document.querySelector(selector) as HTMLElement | null;
+  if (el === null) return { found: false };
+  try { el.scrollIntoView({ block: "center", inline: "center" }); } catch { /* ignore */ }
+  const rect = el.getBoundingClientRect();
+  return { found: true, x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+}
+
+function injectedFocusSelector(selector: string): { found: boolean } {
+  const el = document.querySelector(selector) as HTMLElement | null;
+  if (el === null) return { found: false };
+  try { el.focus(); } catch { /* ignore */ }
+  return { found: true };
+}
+
+function injectedClickAtPoint(
+  x: number,
+  y: number,
+  button: number,
+  modifiers: { ctrl: boolean; alt: boolean; shift: boolean; meta: boolean },
+): void {
+  const el = document.elementFromPoint(x, y) as HTMLElement | null;
+  if (el === null) return;
+  const baseInit: MouseEventInit = {
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+    view: window,
+    button,
+    buttons: button === 0 ? 1 : button === 1 ? 4 : 2,
+    clientX: x,
+    clientY: y,
+    screenX: x,
+    screenY: y,
+    ctrlKey: modifiers.ctrl,
+    altKey: modifiers.alt,
+    shiftKey: modifiers.shift,
+    metaKey: modifiers.meta,
+  };
+  const pointerInit: PointerEventInit = {
+    ...baseInit,
+    pointerId: 1,
+    pointerType: "mouse",
+    isPrimary: true,
+    width: 1,
+    height: 1,
+    pressure: 0.5,
+  };
+  el.dispatchEvent(new PointerEvent("pointerdown", pointerInit));
+  el.dispatchEvent(new MouseEvent("mousedown", baseInit));
+  try { el.focus(); } catch { /* ignore */ }
+  el.dispatchEvent(new PointerEvent("pointerup", pointerInit));
+  el.dispatchEvent(new MouseEvent("mouseup", baseInit));
+  el.click();
+}
+
+async function performTrustedClick(
+  cdp: CdpManager,
+  chromeTabId: number,
+  x: number,
+  y: number,
+  button: 0 | 1 | 2,
+  modifiers: readonly Modifier[],
+): Promise<void> {
+  const btn = CDP_BUTTON_NAME[button];
+  const buttons = CDP_BUTTONS_MASK[button];
+  const mods = cdpModifiers(modifiers);
+  await cdp.withAttach(chromeTabId, async () => {
+    await cdp.send(chromeTabId, "Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x, y,
+      button: "none",
+      buttons: 0,
+      modifiers: mods,
+    });
+    await cdp.send(chromeTabId, "Input.dispatchMouseEvent", {
+      type: "mousePressed",
+      x, y,
+      button: btn,
+      buttons,
+      clickCount: 1,
+      modifiers: mods,
+    });
+    await cdp.send(chromeTabId, "Input.dispatchMouseEvent", {
+      type: "mouseReleased",
+      x, y,
+      button: btn,
+      buttons: 0,
+      clickCount: 1,
+      modifiers: mods,
+    });
+  });
+}
+
+async function performTrustedType(
+  cdp: CdpManager,
+  chromeTabId: number,
+  text: string,
+  delayMs: number,
+): Promise<void> {
+  await cdp.withAttach(chromeTabId, async () => {
+    for (const ch of text) {
+      // keyDown + char + keyUp is what CDP treats as a full keystroke. The
+      // "char" event with `text` is the one that actually inserts into
+      // focused fields — keyDown/keyUp alone don't mutate value.
+      await cdp.send(chromeTabId, "Input.dispatchKeyEvent", {
+        type: "keyDown",
+        text: ch.length === 1 ? ch : undefined,
+        unmodifiedText: ch.length === 1 ? ch : undefined,
+        key: ch,
+      });
+      await cdp.send(chromeTabId, "Input.dispatchKeyEvent", {
+        type: "char",
+        text: ch,
+        unmodifiedText: ch,
+        key: ch,
+      });
+      await cdp.send(chromeTabId, "Input.dispatchKeyEvent", {
+        type: "keyUp",
+        key: ch,
+      });
+      if (delayMs > 0) {
+        await new Promise<void>((r) => setTimeout(r, delayMs));
+      }
+    }
+  });
+}
+
 export function registerInputHandlers(router: Router, opts: InputOpts): void {
-  const { tabIdMap, refCache } = opts;
+  const { tabIdMap, refCache, cdp } = opts;
 
   router.register(
     "browser.click",
@@ -963,6 +1161,7 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       raw,
     ): Promise<{
       clicked: true;
+      mode: ClickMode;
       occluded?: boolean;
       occluder?: { tag: string; text: string; role: string | null } | null;
       retargeted?: boolean;
@@ -970,8 +1169,30 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       const params = parseClick(raw);
       const chromeId = resolveChromeId(tabIdMap, params.tab_id);
       const selector = resolveSelector(refCache, params.tab_id, params.ref);
-      const mods = modifierFlags(params.modifiers ?? []);
+      const mode: ClickMode = params.mode ?? "synthetic";
       const button = BUTTON_INDEX[params.button ?? "left"];
+      const modifiers = params.modifiers ?? [];
+
+      if (mode === "trusted") {
+        const center = await execInTab(chromeId, injectedResolveCenter, [selector] as const);
+        if (center.found === false || center.x === undefined || center.y === undefined) {
+          throw codedError(
+            "REF_STALE",
+            `ref ${params.ref} no longer resolves in tab ${params.tab_id}`,
+          );
+        }
+        await performTrustedClick(
+          cdp,
+          chromeId,
+          center.x,
+          center.y,
+          button as 0 | 1 | 2,
+          modifiers,
+        );
+        return { clicked: true, mode };
+      }
+
+      const mods = modifierFlags(modifiers);
       const res = await execInTab(chromeId, injectedClick, [selector, button, mods] as const);
       if (res.found === false) {
         throw codedError(
@@ -981,16 +1202,50 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       }
       const result: {
         clicked: true;
+        mode: ClickMode;
         occluded?: boolean;
         occluder?: { tag: string; text: string; role: string | null } | null;
         retargeted?: boolean;
-      } = { clicked: true };
+      } = { clicked: true, mode };
       if (res.occluded === true) {
         result.occluded = true;
         result.occluder = res.occluder ?? null;
       }
       if (res.retargeted === true) result.retargeted = true;
       return result;
+    },
+  );
+
+  router.register(
+    "browser.click_at",
+    async (
+      raw,
+    ): Promise<{ clicked: true; mode: ClickMode; x: number; y: number }> => {
+      const params = parseClickAt(raw);
+      const chromeId = resolveChromeId(tabIdMap, params.tab_id);
+      const mode: ClickMode = params.mode ?? "synthetic";
+      const button = BUTTON_INDEX[params.button ?? "left"];
+      const modifiers = params.modifiers ?? [];
+      if (mode === "trusted") {
+        await performTrustedClick(
+          cdp,
+          chromeId,
+          params.x,
+          params.y,
+          button as 0 | 1 | 2,
+          modifiers,
+        );
+        return { clicked: true, mode, x: params.x, y: params.y };
+      }
+      // Synthetic fallback: synthesize the click via executeScript at the
+      // coordinates. elementFromPoint picks the top element; we dispatch the
+      // usual pointer/mouse sequence on it.
+      await execInTab(
+        chromeId,
+        injectedClickAtPoint,
+        [params.x, params.y, button, modifierFlags(modifiers)] as const,
+      );
+      return { clicked: true, mode, x: params.x, y: params.y };
     },
   );
 
@@ -1069,16 +1324,56 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
     async (raw): Promise<{ typed: number; mode: TypeMode }> => {
       const params = parseType(raw);
       const mode = resolveTypeMode(params.text, params.mode);
-      if (mode === "trusted") {
-        throw codedError(
-          "CDP_ATTACH_FAILED",
-          "mode=trusted requires the CDP input path, shipped in a later step — use mode=keystroke or mode=paste for now",
-        );
-      }
       const chromeId = resolveChromeId(tabIdMap, params.tab_id);
       const selector = resolveSelector(refCache, params.tab_id, params.ref);
       const submit = params.submit ?? false;
       const clearFirst = params.clear_first ?? false;
+
+      if (mode === "trusted") {
+        // Focus the element first (via executeScript), then let CDP do the
+        // trusted keystrokes at the currently-focused field. clear_first is
+        // implemented via select-all + delete in the same focused context.
+        const focused = await execInTab(chromeId, injectedFocusSelector, [selector] as const);
+        if (focused.found === false) {
+          throw codedError(
+            "REF_STALE",
+            `ref ${params.ref} no longer resolves in tab ${params.tab_id}`,
+          );
+        }
+        if (clearFirst) {
+          // Select-all + delete via CDP keystrokes. Meta on mac, Control elsewhere.
+          // We can't easily detect platform from the SW; send both modifiers.
+          await cdp.withAttach(chromeId, async () => {
+            await cdp.send(chromeId, "Input.dispatchKeyEvent", {
+              type: "keyDown", key: "a", text: "a",
+              modifiers: CDP_MOD.Control | CDP_MOD.Meta,
+            });
+            await cdp.send(chromeId, "Input.dispatchKeyEvent", {
+              type: "keyUp", key: "a",
+              modifiers: CDP_MOD.Control | CDP_MOD.Meta,
+            });
+            await cdp.send(chromeId, "Input.dispatchKeyEvent", {
+              type: "keyDown", key: "Delete",
+            });
+            await cdp.send(chromeId, "Input.dispatchKeyEvent", {
+              type: "keyUp", key: "Delete",
+            });
+          });
+        }
+        await performTrustedType(cdp, chromeId, params.text, params.delay_ms ?? 0);
+        if (submit) {
+          await cdp.withAttach(chromeId, async () => {
+            await cdp.send(chromeId, "Input.dispatchKeyEvent", {
+              type: "keyDown", key: "Enter", text: "\r",
+            });
+            await cdp.send(chromeId, "Input.dispatchKeyEvent", {
+              type: "keyUp", key: "Enter",
+            });
+          });
+        }
+        return { typed: params.text.length, mode };
+      }
+
       let res: { found: boolean; typed: number };
       if (mode === "paste") {
         res = await execInTab(

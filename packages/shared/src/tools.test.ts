@@ -3,8 +3,8 @@ import { TOOL_DEFS, TOOL_DEF_MAP } from "./tools.js";
 import { ERROR_CODES } from "./errors.js";
 
 describe("TOOL_DEFS catalogue", () => {
-  it("contains 20 v1 tools", () => {
-    expect(TOOL_DEFS).toHaveLength(20);
+  it("contains 21 v1 tools", () => {
+    expect(TOOL_DEFS).toHaveLength(21);
   });
 
   it("every tool name is prefixed browser. and unique", () => {
