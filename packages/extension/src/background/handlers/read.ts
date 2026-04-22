@@ -156,15 +156,33 @@ function sanitizeHtml(html: string): string {
 // they are standalone function declarations with primitive params only.
 // ---------------------------------------------------------------------------
 
-function injectedReadText(): string {
+// Resolve the per-mode root element. Returns null iff selector was provided
+// but did not match — the handler translates that into matched_selector:false
+// in the response. When selector is undefined we return the sensible default
+// root for the mode (documentElement for text/html, body for markdown/a11y).
+function injectedReadText(selector: string | null): string | null {
+  if (selector !== null) {
+    const el = document.querySelector(selector) as HTMLElement | null;
+    if (el === null) return null;
+    return el.innerText;
+  }
   return document.documentElement.innerText;
 }
 
-function injectedReadOuterHtml(): string {
+function injectedReadOuterHtml(selector: string | null): string | null {
+  if (selector !== null) {
+    const el = document.querySelector(selector) as HTMLElement | null;
+    if (el === null) return null;
+    return el.outerHTML;
+  }
   return document.documentElement.outerHTML;
 }
 
-function injectedReadMarkdown(): string {
+function injectedReadMarkdown(selector: string | null): string | null {
+  const root: Element | null = selector !== null
+    ? document.querySelector(selector)
+    : document.body;
+  if (root === null) return null;
   const out: string[] = [];
   const visit = (node: Node, depth: number): void => {
     if (node.nodeType === Node.TEXT_NODE) {
@@ -233,7 +251,7 @@ function injectedReadMarkdown(): string {
     }
     for (const child of Array.from(el.childNodes)) visit(child, depth);
   };
-  visit(document.body, 0);
+  visit(root, 0);
   return out.join("").replace(/\n{3,}/g, "\n\n").trim();
 }
 
@@ -759,15 +777,31 @@ export function registerReadHandler(
       return result;
     }
 
+    const selectorArg = params.selector ?? null;
     let content: string;
+    let matched = true;
     if (params.mode === "text") {
-      content = await execInTab<string>(chromeTabId, injectedReadText);
+      const res = await execInTabWithArgs<readonly [string | null], string | null>(
+        chromeTabId,
+        injectedReadText,
+        [selectorArg],
+      );
+      if (res === null) { matched = false; content = ""; } else { content = res; }
     } else if (params.mode === "markdown") {
-      content = await execInTab<string>(chromeTabId, injectedReadMarkdown);
+      const res = await execInTabWithArgs<readonly [string | null], string | null>(
+        chromeTabId,
+        injectedReadMarkdown,
+        [selectorArg],
+      );
+      if (res === null) { matched = false; content = ""; } else { content = res; }
     } else {
       // sanitized_html
-      const rawHtml = await execInTab<string>(chromeTabId, injectedReadOuterHtml);
-      content = sanitizeHtml(rawHtml);
+      const res = await execInTabWithArgs<readonly [string | null], string | null>(
+        chromeTabId,
+        injectedReadOuterHtml,
+        [selectorArg],
+      );
+      if (res === null) { matched = false; content = ""; } else { content = sanitizeHtml(res); }
     }
 
     const sliced = sliceContent(content, params.start, effectiveLength);
@@ -782,6 +816,9 @@ export function registerReadHandler(
       start: params.start,
       length: sliced.slice.length,
     };
+    if (params.selector !== undefined) {
+      result.matched_selector = matched;
+    }
     return result;
   });
 
