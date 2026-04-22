@@ -98,6 +98,48 @@
         user-select: none;
       }
       .yolo-row input { margin: 0; }
+      #pinned-section {
+        border: 1px solid #e2e2dc;
+        border-radius: 8px;
+        padding: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        background: #fbfaf6;
+      }
+      .pinned-label {
+        font-size: 11px;
+        font-weight: 600;
+        color: #555;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      .pinned-empty { font-size: 12px; color: #777; }
+      .pinned-info { font-size: 12px; }
+      .pinned-title {
+        font-weight: 500;
+        color: #1b1b1b;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .pinned-url {
+        color: #666;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 11px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .pinned-actions { display: flex; gap: 6px; }
+      button.neutral {
+        background: #1b1b1b;
+        color: #fff;
+        padding: 6px 10px;
+        font-size: 12px;
+        flex: 1;
+      }
+      button.neutral:hover { background: #000; }
     </style>
   </head>
   <body>
@@ -116,6 +158,20 @@
         <span>Bridge:</span>
         <span id="status" class="pill off">disconnected</span>
       </div>
+
+      <div id="pinned-section">
+        <div class="pinned-label">Pinned tab</div>
+        <div id="pinned-empty" class="pinned-empty">None — pin a tab to let agents use it as home base.</div>
+        <div id="pinned-info" class="pinned-info" hidden>
+          <div class="pinned-title" id="pinned-title"></div>
+          <div class="pinned-url" id="pinned-url"></div>
+        </div>
+        <div class="pinned-actions">
+          <button id="pin" type="button" class="neutral">Use this tab</button>
+          <button id="unpin" type="button" class="neutral" hidden>Unpin</button>
+        </div>
+      </div>
+
       <label class="yolo-row" title="Session only. Cleared on browser restart or Disconnect.">
         <input type="checkbox" id="yolo" />
         <span>Auto-approve risky actions (this session)</span>

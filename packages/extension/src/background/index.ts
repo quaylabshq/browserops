@@ -32,9 +32,57 @@ async function persistTabMap(): Promise<void> {
   await chrome.storage.session.set({ tabMap: Object.fromEntries(tabIdToChromeId) });
 }
 
+// --- pinned tab (user's "home base") -------------------------------------
+// Persisted in chrome.storage.local so it survives browser restart. The
+// in-memory cache is the source of truth during SW life; storage is written
+// on every change.
+const PINNED_TAB_STORAGE_KEY = "pinnedTabId";
+let pinnedTabId: string | null = null;
+
+const getPinnedTabId = (): string | null => pinnedTabId;
+
+async function setPinnedTab(tabId: string | null): Promise<void> {
+  pinnedTabId = tabId;
+  if (tabId === null) {
+    await chrome.storage.local.remove(PINNED_TAB_STORAGE_KEY);
+  } else {
+    await chrome.storage.local.set({ [PINNED_TAB_STORAGE_KEY]: tabId });
+  }
+}
+
+async function pinCurrentTab(): Promise<
+  { ok: true; tab_id: string; url: string; title: string } | { ok: false; error: string }
+> {
+  const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  const tab = tabs[0];
+  if (tab === undefined || tab.id === undefined) {
+    return { ok: false, error: "no active tab in focused window" };
+  }
+  const tabId = chromeIdToTabId.get(tab.id);
+  if (tabId === undefined) {
+    return { ok: false, error: "bridge is not connected; cannot pin until tab_ids are assigned" };
+  }
+  await setPinnedTab(tabId);
+  const url = tab.url ?? tab.pendingUrl ?? "";
+  const title = tab.title ?? "";
+  ctx.emitEvent("tab_pinned", { tab_id: tabId, url, title });
+  return { ok: true, tab_id: tabId, url, title };
+}
+
+async function unpinTab(): Promise<void> {
+  const prev = pinnedTabId;
+  if (prev === null) return;
+  await setPinnedTab(null);
+  ctx.emitEvent("tab_unpinned", { tab_id: prev });
+}
+
 // Inline assign_tab_id handler (plans/03-extension.md §D5). Other handlers
 // will be registered by their own modules in a later PR.
-registerTabHandlers(router, { tabIdMap: tabIdToChromeId, chromeIdToTabId });
+registerTabHandlers(router, {
+  tabIdMap: tabIdToChromeId,
+  chromeIdToTabId,
+  getPinnedTabId,
+});
 registerNavigationHandlers(router, { tabIdMap: tabIdToChromeId, refCache });
 registerScreenshotHandler(router, { tabIdMap: tabIdToChromeId });
 registerReadHandler(router, { tabIdMap: tabIdToChromeId, refCache });
@@ -175,6 +223,9 @@ chrome.tabs.onRemoved.addListener((chromeTabId) => {
   refCache.invalidate(tabId);
   tabIdToChromeId.delete(tabId);
   chromeIdToTabId.delete(chromeTabId);
+  if (pinnedTabId === tabId) {
+    void unpinTab();
+  }
   void persistTabMap();
 });
 
@@ -243,6 +294,39 @@ chrome.runtime.onMessage.addListener((msg: unknown, _sender, sendResponse) => {
     void setKilled(false).then(() => startClient()).then(() => sendResponse({ ok: true }));
     return true;
   }
+  if (tag === "pin_tab") {
+    void pinCurrentTab().then((res) => sendResponse(res));
+    return true;
+  }
+  if (tag === "unpin_tab") {
+    void unpinTab().then(() => sendResponse({ ok: true }));
+    return true;
+  }
+  if (tag === "describe_pinned") {
+    void (async () => {
+      if (pinnedTabId === null) {
+        sendResponse({ ok: false, error: "no pinned tab" });
+        return;
+      }
+      const chromeId = tabIdToChromeId.get(pinnedTabId);
+      if (chromeId === undefined) {
+        sendResponse({ ok: false, error: "pinned tab_id not in map" });
+        return;
+      }
+      try {
+        const tab = await chrome.tabs.get(chromeId);
+        sendResponse({
+          ok: true,
+          tab_id: pinnedTabId,
+          url: tab.url ?? tab.pendingUrl ?? "",
+          title: tab.title ?? "",
+        });
+      } catch {
+        sendResponse({ ok: false, error: "chrome tab gone" });
+      }
+    })();
+    return true;
+  }
   if (tag === "safety_decision") {
     const mm = m as { decision_id?: unknown; allow?: unknown };
     const ok =
@@ -257,8 +341,15 @@ chrome.runtime.onMessage.addListener((msg: unknown, _sender, sendResponse) => {
 
 // --- boot ----------------------------------------------------------------
 
+async function rehydratePinnedTab(): Promise<void> {
+  const s = await chrome.storage.local.get(PINNED_TAB_STORAGE_KEY);
+  const raw = s[PINNED_TAB_STORAGE_KEY];
+  pinnedTabId = typeof raw === "string" ? raw : null;
+}
+
 void (async () => {
   await rehydrate();
+  await rehydratePinnedTab();
   // RefCache rehydration depends on the tabIdMap being restored so we can
   // compare stored snapshot URLs against the tab's live URL.
   await refCache.rehydrate(async (tabId: string): Promise<string | undefined> => {

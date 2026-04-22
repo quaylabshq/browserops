@@ -127,6 +127,45 @@ interface ToolCallResult {
   isError: boolean;
 }
 
+/**
+ * Surfaced to the calling agent via MCP `initialize.result.instructions`.
+ * Intended audience: a general-purpose agent (e.g. Claude) that has a
+ * sub-agent / Task tool of its own. The goal is to nudge it toward
+ * delegating interaction loops and anchoring on the user's pinned tab,
+ * rather than running every read/click/retry in the parent context.
+ */
+const SERVER_INSTRUCTIONS = [
+  "browserops controls a real Chrome profile via a companion extension.",
+  "",
+  "Orchestration (strongly recommended):",
+  "- For any multi-step flow (form fill, checkout, search → open → read),",
+  "  delegate to a sub-agent via your Task tool. The sub-agent owns the",
+  "  read → click → wait → verify loop; the parent only sees the final result.",
+  "  This keeps the parent context clean and lets the sub-agent burn retries",
+  "  (REF_STALE, occluded clicks, timing) without polluting the main transcript.",
+  "- Two useful sub-agent roles:",
+  "  • navigator — browser.list_tabs / current_tab / pinned_tab / read / screenshot.",
+  "  • operator  — browser.click / click_by_text / type / press / wait_for (with retry).",
+  "",
+  "Tab selection:",
+  "- If the user is working on a specific tab they already have open, call",
+  "  browser.pinned_tab FIRST and thread the returned tab_id through the rest",
+  "  of the turn. That tab is the user's home base; do not open a new one",
+  "  unless the task explicitly asks for it.",
+  "- For cross-tab work, call browser.list_tabs and pick explicitly.",
+  "- NO_PINNED_TAB means the user has not pinned one — ask them to click",
+  '  "Use this tab" in the extension popup, or fall back to current_tab.',
+  "",
+  "Clicking:",
+  "- Prefer browser.click (ref-based) when the target appears in the a11y tree.",
+  "- If a button doesn't show up as a ref (common on retail SPAs with div-based",
+  "  click handlers), use browser.click_by_text with the visible label.",
+  "",
+  "Risky actions (browser.execute_js, click/type on sensitive domains) prompt the",
+  "user in the extension popup by default. They can be auto-approved via --yolo",
+  "on the bridge CLI or the popup auto-approve toggle (session-scoped).",
+].join("\n");
+
 // ---------------------------------------------------------------------------
 // McpBridgeServer
 // ---------------------------------------------------------------------------
@@ -148,7 +187,7 @@ export class McpBridgeServer {
 
     this.server = new Server(
       { name: "browserops", version: deps.version },
-      { capabilities: { tools: {} } },
+      { capabilities: { tools: {} }, instructions: SERVER_INSTRUCTIONS },
     );
 
     this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
