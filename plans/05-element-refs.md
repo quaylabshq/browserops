@@ -122,6 +122,15 @@ The full `result` returned by `browser.read` is:
 }
 ```
 
+### 4.4.1 Compression modes (`verbose`)
+
+`browser.read(mode: "a11y_tree")` accepts an optional `verbose: boolean` param, defaulting to `false`:
+
+- **`verbose: false` (default).** The walker applies a pre-pass that marks only elements that already pass today's eligibility gate (`shouldKeep` + `canEmit`) **and** additionally have an accessible name, a core interactive role (`button`, `link`, `textbox`, `combobox`, `checkbox`, `radio`, `menuitem`, `tab`), or an eligible descendant. The main DFS then emits only marked elements. Ref numbers remain sequential in DFS pre-order over the surviving set.
+- **`verbose: true`.** Legacy behavior: every element that passes `shouldKeep && canEmit` is emitted, including name-less `generic` wrappers. Use when debugging page structure or capturing a full snapshot for test fixtures.
+
+Every node that survives the compact filter would also have been emitted in verbose mode, so the non-verbose tree is a strict subset of the legacy tree; downstream `click(ref)` / `type(ref)` / `describe_ref` calls made against a compact tree resolve against the same snapshot they were read from. Refs are not stable across a `verbose: true` → `verbose: false` transition within a tab; the latest `browser.read` always wins.
+
 ### 4.5 Size budget
 
 Cap at **500 refs per snapshot**. Rationale:
