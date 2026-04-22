@@ -428,6 +428,9 @@ const read: ToolDef = {
       max_length: { type: "integer", minimum: 1024, maximum: 1048576, default: 131072 },
       viewport_only: { type: "boolean", default: false },
       verbose: { type: "boolean", default: false },
+      selector: { type: "string", minLength: 1, maxLength: 1024 },
+      start: { type: "integer", minimum: 0, default: 0 },
+      length: { type: "integer", minimum: 1024, maximum: 1048576, default: 131072 },
     },
   },
   outputSchema: {
@@ -440,6 +443,11 @@ const read: ToolDef = {
       url: { type: "string" },
       title: { type: "string" },
       truncated: { type: "boolean", default: false },
+      total_length: { type: "integer", minimum: 0 },
+      next_start: { type: ["integer", "null"], minimum: 0 },
+      matched_selector: { type: "boolean" },
+      start: { type: "integer", minimum: 0 },
+      length: { type: "integer", minimum: 0 },
       refs: {
         description:
           "Map from ref integer (as string key) to a minimal element summary. Populated only when mode == 'a11y_tree'.",
