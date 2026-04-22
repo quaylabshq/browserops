@@ -73,6 +73,13 @@ export class Safety {
       return { risky: true, reason: `click on sensitive domain (${hostOf(url)})` };
     }
 
+    if (tool === "browser.find_and_replace" && sensitive) {
+      return {
+        risky: true,
+        reason: `find_and_replace on sensitive domain (${hostOf(url)})`,
+      };
+    }
+
     return { risky: false };
   }
 
