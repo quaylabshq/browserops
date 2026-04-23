@@ -1,0 +1,82 @@
+schema_version: 1
+
+name: tempmail.wait_for_magic_link
+description: Poll the tempmailo.com inbox for a matching email, open it, and return { magic_url } extracted from the same-origin iframe body
+kind: leaf
+domain: tempmail
+
+triggers:
+  - wait for magic link email
+  - check temp mail for magic link
+  - get magic link from temp mail
+  - poll temp mail for login link
+  - read temp mail body
+
+tags: [email, tempmail, tempmailo, magic-link]
+
+inputs:
+  sender_hint:
+    type: string
+    required: true
+    description: Substring identifying the target email by sender or subject (e.g. "mem0"). Call this AFTER triggering the send.
+
+# tempmailo's inbox renders each email as a <li role=button> on the same
+# page. We wait for the hint text to appear, click that li to load the
+# email body into an iframe, then read links + bodyText out of the iframe
+# (same-origin) and return { magic_url } as a first-class field. Composite
+# callers bind {{step.value.magic_url}}.
+steps:
+  - id: poll_inbox
+    action: browser_wait_for
+    with:
+      tab_id: "{{tab_id}}"
+      text: "{{input.sender_hint}}"
+      timeout_ms: 60000
+
+  - id: open_email
+    action: browser_click_by_text
+    with:
+      tab_id: "{{tab_id}}"
+      text: "{{input.sender_hint}}"
+      match: substring
+
+  - id: settle
+    action: browser_wait_for_idle
+    with:
+      tab_id: "{{tab_id}}"
+      timeout_ms: 5000
+      quiet_ms: 500
+
+  - id: extract
+    action: browser_execute_js
+    with:
+      tab_id: "{{tab_id}}"
+      code: |
+        (() => {
+          const out = { links: [], bodyText: "", magic_url: "" };
+          for (const f of document.querySelectorAll('iframe')) {
+            try {
+              const doc = f.contentDocument || f.contentWindow?.document;
+              if (!doc) continue;
+              const links = Array.from(doc.querySelectorAll('a[href]'))
+                .map(a => ({ href: a.href, text: (a.innerText || '').trim().slice(0, 80) }))
+                .filter(l => /^https?:/i.test(l.href));
+              const bodyText = (doc.body?.innerText || '').slice(0, 4000);
+              if (links.length || bodyText) {
+                out.links = links;
+                out.bodyText = bodyText;
+                const magicLink =
+                  links.find(l => /magiclink/i.test(l.href) || /sign in/i.test(l.text)) ??
+                  links[0];
+                if (magicLink) {
+                  out.magic_url = magicLink.href;
+                } else {
+                  const m = bodyText.match(/https?:\/\/\S+/i);
+                  if (m) out.magic_url = m[0];
+                }
+                break;
+              }
+            } catch (e) { /* cross-origin iframe — skip */ }
+          }
+          return out;
+        })()
