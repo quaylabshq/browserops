@@ -20,6 +20,7 @@ import { loadOrCreateToken } from "./token.js";
 import { WSBridge } from "./ws-server.js";
 import { ensureIndex } from "./procedures/index-builder.js";
 import { proceduresRoot } from "./procedures/paths.js";
+import { seedBundledProcedures } from "./procedures/seed.js";
 
 const VERSION = "0.1.0";
 
@@ -77,6 +78,22 @@ async function main(): Promise<void> {
   const confirmation =
     role === "primary" ? wsBridge!.confirmation : (wsLike as RemoteWSBridge).confirmation;
   const safety = new Safety(riskyMatcher, confirmation, logger);
+
+  // Seed bundled examples into the user's procedures dir if absent. Failures
+  // are logged but never fatal — a broken seed must not block boot.
+  try {
+    const seedReport = await seedBundledProcedures();
+    if (seedReport.copied.length > 0) {
+      await logger.write({
+        dir: "system",
+        event: "procedures_seeded",
+        copied: seedReport.copied,
+      });
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`browserops: warn: procedure seed failed: ${msg}\n`);
+  }
 
   // Ensure procedure index is up-to-date before starting the MCP server.
   // A broken procedure tree must not prevent the bridge from starting.
