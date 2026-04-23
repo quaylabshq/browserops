@@ -27,7 +27,35 @@ interface InputOpts {
 }
 
 type Modifier = "Control" | "Alt" | "Shift" | "Meta";
+/**
+ * Accepted on input; `Primary` is a logical alias resolved at dispatch time
+ * to either Meta (macOS) or Control (elsewhere) so chords are portable.
+ */
+type ModifierInput = Modifier | "Primary";
 type ClickMode = "synthetic" | "trusted";
+
+// Platform detection for the Primary alias. navigator.userAgentData.platform
+// is the modern signal and returns "macOS" / "Windows" / "Linux"; fall back
+// to the legacy navigator.platform string when it's not available (Firefox,
+// older Chrome). The extension background service worker has a real
+// navigator, so this reflects the user's OS.
+function isMacPlatform(): boolean {
+  const uaData = (navigator as unknown as {
+    userAgentData?: { platform?: string };
+  }).userAgentData;
+  if (uaData?.platform) return /mac/i.test(uaData.platform);
+  return /mac/i.test(navigator.platform);
+}
+const PRIMARY_RESOLVES_TO: Modifier = isMacPlatform() ? "Meta" : "Control";
+
+function resolvePrimary(mods: readonly ModifierInput[]): Modifier[] {
+  // Dedupe: Primary on mac is Meta, so [Primary, Meta] collapses to [Meta].
+  const out = new Set<Modifier>();
+  for (const m of mods) {
+    out.add(m === "Primary" ? PRIMARY_RESOLVES_TO : m);
+  }
+  return [...out];
+}
 
 // CDP Input modifier bitmask (see Input.dispatchKeyEvent).
 const CDP_MOD = { Alt: 1, Control: 2, Meta: 4, Shift: 8 } as const;
@@ -1100,23 +1128,30 @@ function injectedExecuteJs(code: string): {
 // ---------------------------------------------------------------------------
 
 const MODIFIER_NAMES: readonly Modifier[] = ["Control", "Alt", "Shift", "Meta"] as const;
+const MODIFIER_INPUT_NAMES: readonly ModifierInput[] = [
+  ...MODIFIER_NAMES,
+  "Primary",
+] as const;
 
 function parseModifiers(raw: unknown): Modifier[] {
   if (raw === undefined) return [];
   if (!Array.isArray(raw)) {
     throw codedError("INVALID_PARAMS", "modifiers must be an array");
   }
-  const out: Modifier[] = [];
+  const out: ModifierInput[] = [];
   for (const m of raw) {
-    if (typeof m !== "string" || !(MODIFIER_NAMES as readonly string[]).includes(m)) {
+    if (
+      typeof m !== "string" ||
+      !(MODIFIER_INPUT_NAMES as readonly string[]).includes(m)
+    ) {
       throw codedError(
         "INVALID_PARAMS",
-        `modifier must be one of ${MODIFIER_NAMES.join(", ")}`,
+        `modifier must be one of ${MODIFIER_INPUT_NAMES.join(", ")}`,
       );
     }
-    out.push(m as Modifier);
+    out.push(m as ModifierInput);
   }
-  return out;
+  return resolvePrimary(out);
 }
 
 function modifierFlags(mods: readonly Modifier[]): {
@@ -1842,16 +1877,18 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
     const chromeId = resolveChromeId(tabIdMap, params.tab_id);
     // Partition into leading modifiers + trailing key. If the array is
     // entirely modifiers, fire the last one as the key (matches "hold Ctrl"
-    // semantics for chord primitives).
+    // semantics for chord primitives). Accepts Primary as a modifier and
+    // resolves it to Meta/Control based on the extension's platform.
     const keys = params.keys;
     const terminal = keys[keys.length - 1] ?? "";
-    const mods: Modifier[] = [];
+    const modsIn: ModifierInput[] = [];
     for (let i = 0; i < keys.length - 1; i += 1) {
       const k = keys[i];
-      if (k !== undefined && (MODIFIER_NAMES as readonly string[]).includes(k)) {
-        mods.push(k as Modifier);
+      if (k !== undefined && (MODIFIER_INPUT_NAMES as readonly string[]).includes(k)) {
+        modsIn.push(k as ModifierInput);
       }
     }
+    const mods = resolvePrimary(modsIn);
     await execInTab(chromeId, injectedPress, [terminal, modifierFlags(mods)] as const);
     return { pressed: true };
   });
