@@ -138,12 +138,17 @@ interface ToolCallResult {
 const SERVER_INSTRUCTIONS = [
   "browserops controls a real Chrome profile via a companion extension.",
   "",
-  "Orchestration (strongly recommended):",
-  "- For any multi-step flow (form fill, checkout, search → open → read),",
-  "  delegate to a sub-agent via your Task tool. The sub-agent owns the",
+  "Orchestration:",
+  "- For flows with ≤8 steps and no retry/branching logic, execute browser.*",
+  "  tool calls directly from the main agent. Do NOT spawn a sub-agent — the",
+  "  spawn overhead costs more tokens than the steps themselves.",
+  "- Only delegate to a sub-agent when the flow has >8 steps OR requires",
+  "  retry loops (REF_STALE, timing, occluded clicks). The sub-agent owns the",
   "  read → click → wait → verify loop; the parent only sees the final result.",
-  "  This keeps the parent context clean and lets the sub-agent burn retries",
-  "  (REF_STALE, occluded clicks, timing) without polluting the main transcript.",
+  "- Sub-agent brief must be minimal: procedure name + inputs + tab_id only.",
+  "  Never copy procedure steps into the brief — the sub-agent calls",
+  "  procedures.get itself. Example brief:",
+  '  "Run gmail.send_email on tab t_3 with to=x subject=y body=z. Report success."',
   "- Two useful sub-agent roles:",
   "  • navigator — browser.list_tabs / current_tab / pinned_tab / read / screenshot.",
   "  • operator  — browser.click / click_by_text / type / find_and_replace / press / wait_for (with retry).",
@@ -185,6 +190,8 @@ const SERVER_INSTRUCTIONS = [
   "- You interpret and execute procedures yourself by calling the",
   "  `browser.*` primitives in their `steps:` — the bridge does not run",
   "  procedures.",
+  "- Never take a screenshot to verify a step that declares `wait_for`.",
+  "  Only screenshot on error or unexpected state.",
 ].join("\n");
 
 // ---------------------------------------------------------------------------
