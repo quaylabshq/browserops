@@ -1,4 +1,4 @@
-import { DEFAULT_WS_HOST, DEFAULT_WS_PORT, type Request, type Response } from "@browserops/shared";
+import { CloseCode, DEFAULT_WS_HOST, DEFAULT_WS_PORT, type Request, type Response } from "@browserops/shared";
 import type { EventName, EventMap } from "@browserops/shared";
 import { WsClient } from "./ws-client.js";
 import { Router, type Context } from "./router.js";
@@ -136,17 +136,30 @@ const resolveTabId = (chromeTabId: number): string | undefined => chromeIdToTabI
 
 let currentConnected = false;
 let currentAutoApprove = false;
+let currentDisabled = false;
+
+// The user's "Disable" intent is stored in chrome.storage.local so it persists
+// across both SW restarts and browser restarts. The extension stays off until
+// the user explicitly re-enables it from the popup.
+const DISABLED_KEY = "disabled";
 
 function applyBadge(): void {
+  if (currentDisabled) {
+    chrome.action.setBadgeText({ text: "—" }).catch(() => {});
+    chrome.action.setBadgeBackgroundColor({ color: "#888888" }).catch(() => {});
+    return;
+  }
+  if (!currentConnected) {
+    chrome.action.setBadgeText({ text: "!" }).catch(() => {});
+    chrome.action.setBadgeBackgroundColor({ color: "#c1121f" }).catch(() => {});
+    return;
+  }
   if (currentAutoApprove) {
     chrome.action.setBadgeText({ text: "YOLO" }).catch(() => {});
     chrome.action.setBadgeBackgroundColor({ color: "#c1121f" }).catch(() => {});
     return;
   }
-  chrome.action.setBadgeText({ text: currentConnected ? "" : "!" }).catch(() => {});
-  if (!currentConnected) {
-    chrome.action.setBadgeBackgroundColor({ color: "#c1121f" }).catch(() => {});
-  }
+  chrome.action.setBadgeText({ text: "" }).catch(() => {});
 }
 
 function setBadge(_connected: boolean): void {
@@ -172,6 +185,12 @@ chrome.storage.session.onChanged.addListener((changes) => {
   }
 });
 
+// Sync disabled state on SW revive (local storage persists across SW restarts).
+void chrome.storage.local.get(DISABLED_KEY).then((s) => {
+  currentDisabled = s[DISABLED_KEY] === true;
+  applyBadge();
+});
+
 // Initial state on SW boot — UIs can read this before the first WS attempt.
 chrome.storage.local.set({ connected: false }).catch(() => {});
 
@@ -186,22 +205,20 @@ async function rehydrate(): Promise<void> {
   }
 }
 
-// The user's "Disconnect" intent must survive SW restart (alarms, event
-// wakeups) but not browser restart — storage.session matches that lifetime.
-const KILLED_KEY = "killed";
-
-async function isKilled(): Promise<boolean> {
-  const s = await chrome.storage.session.get(KILLED_KEY);
-  return s[KILLED_KEY] === true;
+async function isDisabled(): Promise<boolean> {
+  const s = await chrome.storage.local.get(DISABLED_KEY);
+  return s[DISABLED_KEY] === true;
 }
 
-async function setKilled(v: boolean): Promise<void> {
-  if (v) await chrome.storage.session.set({ [KILLED_KEY]: true });
-  else await chrome.storage.session.remove(KILLED_KEY);
+async function setDisabled(v: boolean): Promise<void> {
+  currentDisabled = v;
+  applyBadge();
+  if (v) await chrome.storage.local.set({ [DISABLED_KEY]: true });
+  else await chrome.storage.local.remove(DISABLED_KEY);
 }
 
 async function startClient(): Promise<void> {
-  if (await isKilled()) {
+  if (await isDisabled()) {
     onConnectionChange(false);
     return;
   }
@@ -225,6 +242,15 @@ async function startClient(): Promise<void> {
     extensionVersion: EXTENSION_VERSION,
     onRequest: (req: Request): Promise<Response> => router.dispatch(req, ctx),
     onConnectionChange,
+    onFatalClose: (code) => {
+      if (code === CloseCode.SUPERSEDED) {
+        // Another extension instance took the bridge connection. Treat this as
+        // a manual disable so the keep-alive alarm doesn't immediately kick the
+        // winner back off. The user can re-enable explicitly via the popup.
+        void setDisabled(true);
+        onConnectionChange(false);
+      }
+    },
   });
   wsClient.start();
 }
@@ -320,7 +346,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name !== "ws-keepalive") return;
   if (wsClient !== null && wsClient.isConnected()) return;
   void (async () => {
-    if (await isKilled()) return;
+    if (await isDisabled()) return;
     await startClient();
   })();
 });
@@ -333,7 +359,7 @@ chrome.runtime.onMessage.addListener((msg: unknown, _sender, sendResponse) => {
   const tag = typeof m.type === "string" ? m.type : typeof m.kind === "string" ? m.kind : "";
   if (tag === "kill_switch") {
     void (async () => {
-      await setKilled(true);
+      await setDisabled(true);
       await chrome.storage.session.remove("autoApprove");
       wsClient?.stop(true);
       onConnectionChange(false);
@@ -342,7 +368,7 @@ chrome.runtime.onMessage.addListener((msg: unknown, _sender, sendResponse) => {
     return true;
   }
   if (tag === "reconnect") {
-    void setKilled(false).then(() => startClient()).then(() => sendResponse({ ok: true }));
+    void setDisabled(false).then(() => startClient()).then(() => sendResponse({ ok: true }));
     return true;
   }
   if (tag === "pin_tab") {

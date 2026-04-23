@@ -18,6 +18,8 @@ export interface WsClientOptions {
   extensionVersion: string;
   onRequest: (req: Request) => Promise<Response>;
   onConnectionChange: (connected: boolean) => void;
+  /** Called when the socket closes without scheduling a reconnect (fatal or user-disconnect). */
+  onFatalClose?: (code: number) => void;
 }
 
 // Fatal close codes from the bridge — do not auto-reconnect.
@@ -105,6 +107,7 @@ export class WsClient {
       if (this.stopped) return;
       if (FATAL_CLOSE_CODES.has(ev.code) || ev.code === CloseCode.USER_DISCONNECT) {
         console.warn("[ws] no-reconnect close", ev.code, ev.reason);
+        this.opts.onFatalClose?.(ev.code);
         return;
       }
       this.scheduleReconnect();
