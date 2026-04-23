@@ -4,7 +4,7 @@ import type { Router } from "../router.js";
 import type { RefCache, RefEntry, RefSnapshot } from "../ref-cache.js";
 
 /**
- * browser.read handler.
+ * browser_read handler.
  *
  * Params: { tab_id, mode } where mode ∈ {"a11y_tree","markdown","sanitized_html","text"}
  * Result: { content, refs, url, title }
@@ -845,7 +845,7 @@ export function registerReadHandler(
   router: Router,
   opts: { tabIdMap: Map<string, number>; refCache: RefCache },
 ): void {
-  router.register("browser.read", async (rawParams) => {
+  router.register("browser_read", async (rawParams) => {
     const params = parseParams(rawParams);
 
     const chromeTabId = opts.tabIdMap.get(params.tab_id);
@@ -950,7 +950,7 @@ export function registerReadHandler(
     return result;
   });
 
-  router.register("browser.describe_ref", async (rawParams) => {
+  router.register("browser_describe_ref", async (rawParams) => {
     const tab_id = rawParams["tab_id"];
     const refRaw = rawParams["ref"];
     if (typeof tab_id !== "string") {
@@ -965,7 +965,7 @@ export function registerReadHandler(
     }
     const snap = opts.refCache.get(tab_id);
     if (snap === undefined) {
-      throw codedError("REF_STALE", `no a11y snapshot for tab ${tab_id}; call browser.read first`);
+      throw codedError("REF_STALE", `no a11y snapshot for tab ${tab_id}; call browser_read first`);
     }
     const entry = snap.entries.get(refRaw);
     if (entry === undefined) {
@@ -998,7 +998,7 @@ export function registerReadHandler(
     };
   });
 
-  router.register("browser.query_selector", async (rawParams) => {
+  router.register("browser_query_selector", async (rawParams) => {
     const MAX_MATCHES = 50;
     const tab_id = rawParams["tab_id"];
     const selector = rawParams["selector"];

@@ -63,7 +63,7 @@ export function registerTabHandlers(router: Router, opts: TabsOpts): void {
   const { tabIdMap, chromeIdToTabId, getPinnedTabId } = opts;
 
   router.register(
-    "browser.pinned_tab",
+    "browser_pinned_tab",
     async (): Promise<{ tab_id: string; url: string; title: string }> => {
       const tabId = getPinnedTabId();
       if (tabId === null) {
@@ -92,7 +92,7 @@ export function registerTabHandlers(router: Router, opts: TabsOpts): void {
     },
   );
 
-  router.register("browser.list_tabs", async (): Promise<{ tabs: TabSummary[] }> => {
+  router.register("browser_list_tabs", async (): Promise<{ tabs: TabSummary[] }> => {
     const tabs = await chrome.tabs.query({});
     const summaries: TabSummary[] = [];
     for (const tab of tabs) {
@@ -104,7 +104,7 @@ export function registerTabHandlers(router: Router, opts: TabsOpts): void {
     return { tabs: summaries };
   });
 
-  router.register("browser.current_tab", async (): Promise<TabSummary> => {
+  router.register("browser_current_tab", async (): Promise<TabSummary> => {
     const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
     const tab = tabs[0];
     if (tab === undefined || tab.id === undefined) {
@@ -117,7 +117,7 @@ export function registerTabHandlers(router: Router, opts: TabsOpts): void {
     return toSummary(tab, tabId);
   });
 
-  router.register("browser.new_tab", async (params): Promise<{ tab_id: string; url?: string }> => {
+  router.register("browser_new_tab", async (params): Promise<{ tab_id: string; url?: string }> => {
     const rawUrl = params["url"];
     const rawActive = params["active"];
     const createProps: chrome.tabs.CreateProperties = {};
@@ -132,14 +132,14 @@ export function registerTabHandlers(router: Router, opts: TabsOpts): void {
     return url !== undefined && url !== "" ? { tab_id: tabId, url } : { tab_id: tabId };
   });
 
-  router.register("browser.close_tab", async (params): Promise<{ closed: true }> => {
+  router.register("browser_close_tab", async (params): Promise<{ closed: true }> => {
     const chromeId = resolveChromeId(tabIdMap, params["tab_id"]);
     await chrome.tabs.remove(chromeId);
     return { closed: true };
   });
 
   router.register(
-    "browser.switch_tab",
+    "browser_switch_tab",
     async (params): Promise<{ tab_id: string; active: true }> => {
       const tabIdParam = params["tab_id"];
       if (typeof tabIdParam !== "string") {

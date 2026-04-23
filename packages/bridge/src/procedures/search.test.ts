@@ -401,7 +401,7 @@ description: A procedure for testing deep search
 kind: leaf
 steps:
   - id: step1
-    action: browser.execute_js
+    action: browser_execute_js
     with:
       script: "document.frobulate()"
 `;

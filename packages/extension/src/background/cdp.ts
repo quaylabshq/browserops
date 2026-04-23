@@ -1,6 +1,6 @@
 /**
- * Minimal chrome.debugger wrapper for "trusted input" modes on browser.click
- * and browser.type. Attach/detach is reference-counted with an idle detach so
+ * Minimal chrome.debugger wrapper for "trusted input" modes on browser_click
+ * and browser_type. Attach/detach is reference-counted with an idle detach so
  * multiple back-to-back ops on the same tab don't flash the "being controlled
  * by automation" banner N times.
  *

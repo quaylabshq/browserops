@@ -32,7 +32,7 @@ inputs:
   url: { type: string, required: true }
 steps:
   - id: step1
-    action: browser.navigate
+    action: browser_navigate
     with:
       url: "{{input.url}}"
 `;
@@ -48,7 +48,7 @@ triggers:
 tags: [domain, b]
 steps:
   - id: step1
-    action: browser.click
+    action: browser_click
     with:
       ref: 1
 `;
@@ -82,7 +82,7 @@ triggers:
 tags: [sub]
 steps:
   - id: step1
-    action: browser.click
+    action: browser_click
     with:
       ref: 2
 `;
@@ -95,7 +95,7 @@ kind: leaf
 tags: [sub, orphan]
 steps:
   - id: step1
-    action: browser.click
+    action: browser_click
     with:
       ref: 3
 `;
@@ -114,7 +114,7 @@ description: This composite lacks required uses field
 kind: composite
 steps:
   - id: step1
-    action: browser.click
+    action: browser_click
     with:
       ref: 1
 `;

@@ -87,7 +87,7 @@ function injectedCheckWaitFor(
 export function registerNavigationHandlers(router: Router, opts: NavigationOpts): void {
   const { tabIdMap, refCache, network } = opts;
 
-  router.register("browser.navigate", async (params): Promise<{ final_url: string }> => {
+  router.register("browser_navigate", async (params): Promise<{ final_url: string }> => {
     const chromeId = resolveChromeId(tabIdMap, params["tab_id"]);
     const url = params["url"];
     if (typeof url !== "string") {
@@ -103,19 +103,19 @@ export function registerNavigationHandlers(router: Router, opts: NavigationOpts)
     return { final_url: finalUrl };
   });
 
-  router.register("browser.back", async (params): Promise<{ final_url: string }> => {
+  router.register("browser_back", async (params): Promise<{ final_url: string }> => {
     const chromeId = resolveChromeId(tabIdMap, params["tab_id"]);
     await chrome.tabs.goBack(chromeId);
     return { final_url: await readTabUrl(chromeId) };
   });
 
-  router.register("browser.forward", async (params): Promise<{ final_url: string }> => {
+  router.register("browser_forward", async (params): Promise<{ final_url: string }> => {
     const chromeId = resolveChromeId(tabIdMap, params["tab_id"]);
     await chrome.tabs.goForward(chromeId);
     return { final_url: await readTabUrl(chromeId) };
   });
 
-  router.register("browser.reload", async (params): Promise<{ final_url: string }> => {
+  router.register("browser_reload", async (params): Promise<{ final_url: string }> => {
     const chromeId = resolveChromeId(tabIdMap, params["tab_id"]);
     const hardRaw = params["hard"];
     const bypassCache = hardRaw === true;
@@ -124,7 +124,7 @@ export function registerNavigationHandlers(router: Router, opts: NavigationOpts)
   });
 
   router.register(
-    "browser.wait_for",
+    "browser_wait_for",
     async (
       params,
     ): Promise<{ matched: "ref" | "text" | "url_pattern"; elapsed_ms: number }> => {
@@ -188,7 +188,7 @@ export function registerNavigationHandlers(router: Router, opts: NavigationOpts)
         if (snap === undefined) {
           throw makeError(
             "REF_STALE",
-            `no a11y snapshot for tab ${tabIdRaw}; call browser.read first`,
+            `no a11y snapshot for tab ${tabIdRaw}; call browser_read first`,
           );
         }
         const entry = snap.entries.get(refRaw);
@@ -239,7 +239,7 @@ export function registerNavigationHandlers(router: Router, opts: NavigationOpts)
   );
 
   router.register(
-    "browser.wait_for_idle",
+    "browser_wait_for_idle",
     async (
       params,
     ): Promise<{ idle: true; elapsed_ms: number; peak_in_flight: number }> => {

@@ -26,7 +26,7 @@ const EXAMPLE_LEAF = {
     {
       url_matches: "^https://mail\\.google\\.com/",
       fallback: {
-        action: "browser.navigate",
+        action: "browser_navigate",
         with: { url: "https://mail.google.com/mail/u/0/" },
       },
     },
@@ -34,14 +34,14 @@ const EXAMPLE_LEAF = {
   steps: [
     {
       id: "open_compose",
-      action: "browser.click_by_text",
+      action: "browser_click_by_text",
       with: {
         tab_id: "{{tab_id}}",
         text: "Compose",
       },
       wait_for: { selector: ".compose-dialog" },
       bind: "compose_ref",
-      on_fail: [{ action: "browser.click", with: { tab_id: "{{tab_id}}", ref: 1 } }],
+      on_fail: [{ action: "browser_click", with: { tab_id: "{{tab_id}}", ref: 1 } }],
     },
   ],
   success_criteria: [{ toast_text: "Message sent" }],
@@ -71,7 +71,7 @@ describe("validateProcedure — valid", () => {
       name: "my.proc",
       description: "A minimal procedure",
       kind: "leaf",
-      steps: [{ id: "s1", action: "browser.click", with: { ref: 1 } }],
+      steps: [{ id: "s1", action: "browser_click", with: { ref: 1 } }],
     });
     expect(result.valid).toBe(true);
   });
@@ -107,7 +107,7 @@ describe("validateProcedure — shape violations", () => {
       name: "my.proc",
       // description: intentionally omitted
       kind: "leaf",
-      steps: [{ id: "s1", action: "browser.click" }],
+      steps: [{ id: "s1", action: "browser_click" }],
     });
     expect(result.valid).toBe(false);
     expect(result.errors).toBeDefined();
@@ -120,7 +120,7 @@ describe("validateProcedure — shape violations", () => {
       name: "my.proc",
       description: "A procedure",
       kind: "script", // invalid
-      steps: [{ id: "s1", action: "browser.click" }],
+      steps: [{ id: "s1", action: "browser_click" }],
     });
     expect(result.valid).toBe(false);
     expect(result.errors).toBeDefined();
@@ -133,7 +133,7 @@ describe("validateProcedure — shape violations", () => {
       name: "Gmail.SendEmail", // uppercase — violates ^[a-z][a-z0-9_.-]{0,79}$
       description: "A procedure",
       kind: "leaf",
-      steps: [{ id: "s1", action: "browser.click" }],
+      steps: [{ id: "s1", action: "browser_click" }],
     });
     expect(result.valid).toBe(false);
     expect(result.errors).toBeDefined();

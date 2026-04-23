@@ -4,7 +4,7 @@ import type { RefCache } from "../ref-cache.js";
 import type { CdpManager } from "../cdp.js";
 
 /**
- * browser.click / type / press / scroll / hover / execute_js handlers.
+ * browser_click / type / press / scroll / hover / execute_js handlers.
  *
  * v1 coverage (plan 04 §4.3.12–4.3.18): DOM-only via
  * chrome.scripting.executeScript. No CDP attach; the richer CDP-based
@@ -15,7 +15,7 @@ import type { CdpManager } from "../cdp.js";
  * which we accept as a known limitation for v1.
  *
  * Ref lookup contract: the parallel plan 05 task writes an a11y snapshot
- * to RefCache during browser.read(mode: "a11y_tree"). Each entry has a
+ * to RefCache during browser_read(mode: "a11y_tree"). Each entry has a
  * `.selector` field which is what we feed to document.querySelector in
  * the injected world.
  */
@@ -116,7 +116,7 @@ function resolveChromeId(tabIdMap: Map<string, number>, tabId: unknown): number 
 function resolveSelector(refCache: RefCache, tabId: string, ref: number): string {
   const snap = refCache.get(tabId);
   if (snap === undefined) {
-    throw codedError("REF_STALE", `no a11y snapshot for tab ${tabId}; call browser.read first`);
+    throw codedError("REF_STALE", `no a11y snapshot for tab ${tabId}; call browser_read first`);
   }
   const entry = snap.entries.get(ref);
   if (entry === undefined) {
@@ -1578,7 +1578,7 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
   const { tabIdMap, refCache, cdp } = opts;
 
   router.register(
-    "browser.click",
+    "browser_click",
     async (
       raw,
     ): Promise<{
@@ -1658,7 +1658,7 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
   );
 
   router.register(
-    "browser.click_at",
+    "browser_click_at",
     async (
       raw,
     ): Promise<{ clicked: true; mode: ClickMode; x: number; y: number }> => {
@@ -1691,7 +1691,7 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
   );
 
   router.register(
-    "browser.click_by_text",
+    "browser_click_by_text",
     async (
       raw,
     ): Promise<{
@@ -1761,7 +1761,7 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
   );
 
   router.register(
-    "browser.type",
+    "browser_type",
     async (raw): Promise<{ typed: number; mode: TypeMode }> => {
       const params = parseType(raw);
       const mode = resolveTypeMode(params.text, params.mode);
@@ -1837,7 +1837,7 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
     },
   );
 
-  router.register("browser.press", async (raw): Promise<{ pressed: true }> => {
+  router.register("browser_press", async (raw): Promise<{ pressed: true }> => {
     const params = parsePress(raw);
     const chromeId = resolveChromeId(tabIdMap, params.tab_id);
     // Partition into leading modifiers + trailing key. If the array is
@@ -1856,7 +1856,7 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
     return { pressed: true };
   });
 
-  router.register("browser.scroll", async (raw): Promise<{ scrolled: true }> => {
+  router.register("browser_scroll", async (raw): Promise<{ scrolled: true }> => {
     const params = parseScroll(raw);
     const chromeId = resolveChromeId(tabIdMap, params.tab_id);
     if (params.ref !== undefined) {
@@ -1876,7 +1876,7 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
     return { scrolled: true };
   });
 
-  router.register("browser.hover", async (raw): Promise<{ hovered: true }> => {
+  router.register("browser_hover", async (raw): Promise<{ hovered: true }> => {
     const params = parseHover(raw);
     const chromeId = resolveChromeId(tabIdMap, params.tab_id);
     const selector = resolveSelector(refCache, params.tab_id, params.ref);
@@ -1887,7 +1887,7 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
     return { hovered: true };
   });
 
-  router.register("browser.find_and_replace", async (raw) => {
+  router.register("browser_find_and_replace", async (raw) => {
     const params = parseFindAndReplace(raw);
     const chromeId = resolveChromeId(tabIdMap, params.tab_id);
     const selectorArg: string | null =
@@ -1970,7 +1970,7 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
     };
   });
 
-  router.register("browser.execute_js", async (raw) => {
+  router.register("browser_execute_js", async (raw) => {
     const params = parseExecuteJs(raw);
     const chromeId = resolveChromeId(tabIdMap, params.tab_id);
     // Use CDP Runtime.evaluate instead of injected eval so this works on pages

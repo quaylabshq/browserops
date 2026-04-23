@@ -1,6 +1,6 @@
 # browserops
 
-An MCP server that drives your live Chrome browser. Any MCP-compatible client (Claude Code, Cursor, Zed, Continue, Windsurf, custom SDK agents, …) calls `browser.*` tools → a local Node bridge forwards them to a Chrome MV3 extension over WebSocket → the extension uses `chrome.tabs` / `chrome.scripting` / `chrome.debugger` to control your real browsing session (including logged-in sites).
+An MCP server that drives your live Chrome browser. Any MCP-compatible client (Claude Code, Cursor, Zed, Continue, Windsurf, custom SDK agents, …) calls `browser_*` tools → a local Node bridge forwards them to a Chrome MV3 extension over WebSocket → the extension uses `chrome.tabs` / `chrome.scripting` / `chrome.debugger` to control your real browsing session (including logged-in sites).
 
 See `plans/00-overview.md` for the full design.
 
@@ -179,26 +179,26 @@ Then mirror the same port in the extension's options page.
 
 ## Available tools (v1)
 
-Observation (no rate cost): `browser.list_tabs`, `browser.current_tab`, `browser.wait_for`
+Observation (no rate cost): `browser_list_tabs`, `browser_current_tab`, `browser_wait_for`
 
-Navigation: `browser.new_tab`, `browser.close_tab`, `browser.switch_tab`, `browser.navigate`, `browser.back`, `browser.forward`, `browser.reload`
+Navigation: `browser_new_tab`, `browser_close_tab`, `browser_switch_tab`, `browser_navigate`, `browser_back`, `browser_forward`, `browser_reload`
 
-Content: `browser.screenshot` (viewport), `browser.read` (`text` / `markdown` / `sanitized_html` / `a11y_tree`)
+Content: `browser_screenshot` (viewport), `browser_read` (`text` / `markdown` / `sanitized_html` / `a11y_tree`)
 
-Input: `browser.click`, `browser.type`, `browser.press`, `browser.scroll`, `browser.hover`, `browser.execute_js`
+Input: `browser_click`, `browser_type`, `browser_press`, `browser_scroll`, `browser_hover`, `browser_execute_js`
 
 See `plans/04-tools.md` for full schemas.
 
-**How click/type work.** First call `browser.read` with `mode: "a11y_tree"` on the tab — you get back a numbered tree of interactive elements and their refs. Then call `browser.click({tab_id, ref})` or `browser.type({tab_id, ref, text})` using those refs. Refs invalidate on navigation (same-doc or cross-doc) — re-read the tree after a navigation.
+**How click/type work.** First call `browser_read` with `mode: "a11y_tree"` on the tab — you get back a numbered tree of interactive elements and their refs. Then call `browser_click({tab_id, ref})` or `browser_type({tab_id, ref, text})` using those refs. Refs invalidate on navigation (same-doc or cross-doc) — re-read the tree after a navigation.
 
 **v1 limitations:**
 - Click / type fire synthetic DOM events (`isTrusted: false`). Sites that hard-check trusted events (reCAPTCHA, some banks) will refuse them. The plan-05 CDP path is the v2 fix for trusted events.
-- `browser.screenshot` with `full_page: true` returns `INTERNAL` — viewport-only in v1.
+- `browser_screenshot` with `full_page: true` returns `INTERNAL` — viewport-only in v1.
 - Risky actions (`execute_js` always, click/type on financial domains) currently deny after the 30 s confirmation timeout because the extension popup doesn't yet render the confirmation UI. Set `BROWSEROPS_AUTOCONFIRM=1` to bypass during testing.
 
 ## Procedure runtime
 
-Procedures are named, parameterised, reusable action graphs that the agent can discover and replay without re-planning from a screenshot every time. They live in `~/browserops/procedures/` (user-visible, not hidden) and are surfaced through six MCP tools: `procedures.list`, `procedures.search`, `procedures.get`, `procedures.save`, `procedures.promote`, `procedures.delete`.
+Procedures are named, parameterised, reusable action graphs that the agent can discover and replay without re-planning from a screenshot every time. They live in `~/browserops/procedures/` (user-visible, not hidden) and are surfaced through six MCP tools: `procedures_list`, `procedures_search`, `procedures_get`, `procedures_save`, `procedures_promote`, `procedures_delete`.
 
 To get started, copy an example from `examples/procedures/` into `~/browserops/procedures/shared/`:
 
