@@ -1,0 +1,46 @@
+schema_version: 1
+
+name: tempmail.get_email
+description: Navigate to tempmailo.com and return the auto-generated disposable email address as { email }
+kind: leaf
+domain: tempmail
+
+triggers:
+  - get a temp email
+  - create a disposable email address
+  - generate a fake email
+  - open temp mail
+  - get a throwaway email
+  - open tempmailo
+
+tags: [email, tempmail, tempmailo, disposable]
+
+inputs: {}
+
+# tempmailo.com renders the address in input#i-email. We extract the value
+# explicitly so the composite can bind {{step.value.email}} — without this
+# step the email would only be visible inside the textbox name in an
+# a11y_tree read, which composites can't easily consume.
+steps:
+  - id: navigate
+    action: browser_navigate
+    with:
+      tab_id: "{{tab_id}}"
+      url: https://tempmailo.com/
+
+  - id: wait_for_input
+    action: browser_wait_for
+    with:
+      tab_id: "{{tab_id}}"
+      selector: "#i-email"
+      timeout_ms: 15000
+
+  - id: extract
+    action: browser_execute_js
+    with:
+      tab_id: "{{tab_id}}"
+      code: |
+        (() => {
+          const el = document.querySelector('#i-email');
+          return { email: el ? el.value.trim() : "" };
+        })()
