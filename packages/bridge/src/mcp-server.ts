@@ -23,6 +23,7 @@ import type { RateLimiter } from "./rate-limiter.js";
 import type { Safety, TabInfo } from "./safety.js";
 import type { TabRegistry } from "./tab-registry.js";
 import type { Logger } from "./logger.js";
+import type { TraceWriter } from "./trace-writer.js";
 import { PROCEDURE_HANDLERS } from "./procedures/handlers.js";
 
 /**
@@ -114,6 +115,8 @@ export interface McpBridgeDeps {
   tabs: TabRegistry;
   logger: Logger;
   version: string;
+  /** Optional trace writer. When provided, the router will emit a TraceEvent after each tool result. */
+  traceWriter?: TraceWriter;
 }
 
 interface ToolErrorPayload {
