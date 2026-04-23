@@ -27,4 +27,5 @@ Work through them in this order unless you have a specific reason to reprioritiz
 - impl-01 (screenshot defaults): **shipped** — 5 commits.
 - impl-02 (a11y verbose default): **shipped** — 4 commits.
 - impl-03 (browser_read pagination): **shipped** — 5 commits (Step 6 default tune deferred).
-- impl-04, 05: drafted, not implemented.
+- impl-04 (browser.find_and_replace): **shipped** — 9 commits.
+- impl-05: drafted, not implemented.
