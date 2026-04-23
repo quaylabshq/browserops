@@ -140,8 +140,16 @@ interface ToolCallResult {
 const SERVER_INSTRUCTIONS = [
   "browserops controls a real Chrome profile via a companion extension.",
   "",
+  "Tool invocation:",
+  '- Every tool takes a JSON arguments object per its inputSchema (e.g.',
+  '  procedures_search needs {"query": "..."}, browser_navigate needs',
+  '  {"tab_id": "...", "url": "..."}). If your host exposes a generic',
+  '  MCP wrapper that does not forward arguments, the call will error',
+  "  with INVALID_PARAMS — use the host's native per-tool invocation path",
+  "  instead.",
+  "",
   "Orchestration:",
-  "- For flows with ≤8 steps and no retry/branching logic, execute browser.*",
+  "- For flows with ≤8 steps and no retry/branching logic, execute browser_*",
   "  tool calls directly. Keep the loop short; don't add steps that don't",
   "  advance the task.",
   "- For flows with >8 steps, or that need retry loops (REF_STALE, timing,",
@@ -151,32 +159,32 @@ const SERVER_INSTRUCTIONS = [
   "  loop inline — the steps are the same.",
   "- Delegation brief (when applicable) must be minimal: procedure name +",
   "  inputs + tab_id. Never inline procedure steps into the brief — the",
-  "  delegate calls procedures.get itself. Example:",
+  "  delegate calls procedures_get itself. Example:",
   '  "Run gmail.send_email on tab t_3 with to=x subject=y body=z. Report success."',
   "",
   "Tab selection:",
   "- If the user is working on a specific tab they already have open, call",
-  "  browser.pinned_tab FIRST and thread the returned tab_id through the rest",
+  "  browser_pinned_tab FIRST and thread the returned tab_id through the rest",
   "  of the turn. That tab is the user's home base; do not open a new one",
   "  unless the task explicitly asks for it.",
-  "- For cross-tab work, call browser.list_tabs and pick explicitly.",
+  "- For cross-tab work, call browser_list_tabs and pick explicitly.",
   "- NO_PINNED_TAB means the user has not pinned one — ask them to click",
   '  "Use this tab" in the extension popup, or fall back to current_tab.',
   "",
   "Clicking:",
-  "- Prefer browser.click (ref-based) when the target appears in the a11y tree.",
+  "- Prefer browser_click (ref-based) when the target appears in the a11y tree.",
   "- If a button doesn't show up as a ref (common on retail SPAs with div-based",
-  "  click handlers), use browser.click_by_text with the visible label.",
+  "  click handlers), use browser_click_by_text with the visible label.",
   "",
-  "Risky actions (browser.execute_js, click/type on sensitive domains) prompt the",
+  "Risky actions (browser_execute_js, click/type on sensitive domains) prompt the",
   "user in the extension popup by default. They can be auto-approved via --yolo",
   "on the bridge CLI or the popup auto-approve toggle (session-scoped).",
   "",
   "Procedure runtime:",
   "- Procedures are named, parameterized, reusable action graphs living in",
   "  `~/browserops/procedures/`. Before planning any browser task, call",
-  "  `procedures.search(<tokens from user's request>)` once. If the top match",
-  "  has score >= 0.5, load it with `procedures.get` and run its steps. If",
+  "  `procedures_search(<tokens from user's request>)` once. If the top match",
+  "  has score >= 0.5, load it with `procedures_get` and run its steps. If",
   "  multiple matches are relevant (common for composite tasks like",
   '  "email posthog users" — both posthog and gmail procedures), load all of',
   "  them; they are meant to compose.",
@@ -187,9 +195,9 @@ const SERVER_INSTRUCTIONS = [
   "  name in `uses:` (parallel `get` calls) — that loads the full pack for",
   "  execution.",
   "- If no match clears threshold, plan from scratch, then offer",
-  "  `procedures.save` at the end.",
+  "  `procedures_save` at the end.",
   "- You interpret and execute procedures yourself by calling the",
-  "  `browser.*` primitives in their `steps:` — the bridge does not run",
+  "  `browser_*` primitives in their `steps:` — the bridge does not run",
   "  procedures.",
   "- Never take a screenshot to verify a step that declares `wait_for`.",
   "  Only screenshot on error or unexpected state.",
@@ -288,7 +296,7 @@ export class McpBridgeServer {
     }
 
     // 4a. In-process procedure handlers — bypass extension WebSocket entirely.
-    if (name.startsWith("procedures.")) {
+    if (name.startsWith("procedures_")) {
       const handler = PROCEDURE_HANDLERS[name];
       if (handler) {
         try {
@@ -303,7 +311,7 @@ export class McpBridgeServer {
           return this.reply(id, name, toolError({ code, message, details }));
         }
       }
-      // Unknown procedures.* tool — fall through to let MethodNotFound fire below.
+      // Unknown procedures_* tool — fall through to let MethodNotFound fire below.
     }
 
     // 4b. Look up tab info (optional).
@@ -381,8 +389,8 @@ export class McpBridgeServer {
   }
 
   private timeoutFor(def: ToolDef, params: Record<string, unknown>): number {
-    if (def.name === "browser.navigate") return NAVIGATE_TIMEOUT_MS;
-    if (def.name === "browser.wait_for") {
+    if (def.name === "browser_navigate") return NAVIGATE_TIMEOUT_MS;
+    if (def.name === "browser_wait_for") {
       const raw = params["timeout_ms"];
       const provided = typeof raw === "number" ? raw : DEFAULT_TOOL_TIMEOUT_MS;
       return Math.min(provided, WAIT_FOR_TIMEOUT_CAP_MS);
@@ -402,9 +410,15 @@ export class McpBridgeServer {
       ok: !result.isError,
     };
     if (result.isError) {
-      const sc = result.structuredContent as { error?: { code?: unknown } } | undefined;
-      const code = sc?.error?.code;
-      if (typeof code === "string") base["code"] = code;
+      // Error payload travels in content[0].text as a JSON string. Parse it
+      // back to pull the code for the audit log.
+      const text = result.content[0]?.text ?? "";
+      try {
+        const parsed = JSON.parse(text) as { code?: unknown };
+        if (typeof parsed.code === "string") base["code"] = parsed.code;
+      } catch {
+        /* content wasn't JSON — fine, skip code field */
+      }
     }
     await this.deps.logger.write(base as Omit<Parameters<Logger["write"]>[0], "ts">);
     return result;
@@ -425,9 +439,15 @@ function toolOk(result: unknown): ToolCallResult {
 }
 
 function toolError(payload: ToolErrorPayload): ToolCallResult {
+  // Intentionally no structuredContent on error. Per MCP spec, outputSchema
+  // constrains successful results; error results carry info via `content`
+  // + `isError: true`. Some clients (seen in Cursor) run strict outputSchema
+  // validation against structuredContent regardless of isError — emitting an
+  // error-shaped object there makes them surface a confusing "schema
+  // mismatch" message that masks the real INVALID_PARAMS / RATE_LIMITED /
+  // etc. cause.
   return {
     content: [{ type: "text", text: safeJson(payload) }],
-    structuredContent: { error: payload },
     isError: true,
   };
 }

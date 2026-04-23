@@ -30,13 +30,13 @@ inputs:
 preconditions:
   - url_matches: "^https://mail\\.google\\.com/"
     fallback:
-      action: browser.navigate
+      action: browser_navigate
       with:
         url: "https://mail.google.com/mail/u/0/"
 
 steps:
   - id: open_compose
-    action: browser.click_by_text
+    action: browser_click_by_text
     with:
       tab_id: "{{tab_id}}"
       text: "Compose"
@@ -44,28 +44,28 @@ steps:
       selector: "[data-testid='compose-dialog'], .AD, .dw"
 
   - id: fill_recipient
-    action: browser.type
+    action: browser_type
     with:
       tab_id: "{{tab_id}}"
       selector: "[name='to'], .agP input"
       text: "{{input.to}}"
 
   - id: fill_subject
-    action: browser.type
+    action: browser_type
     with:
       tab_id: "{{tab_id}}"
       selector: "[name='subjectbox'], .aoT"
       text: "{{input.subject}}"
 
   - id: fill_body
-    action: browser.type
+    action: browser_type
     with:
       tab_id: "{{tab_id}}"
       selector: "[role='textbox'][aria-label*='Message'], .Am"
       text: "{{input.body}}"
 
   - id: send
-    action: browser.click_by_text
+    action: browser_click_by_text
     with:
       tab_id: "{{tab_id}}"
       text: "Send"

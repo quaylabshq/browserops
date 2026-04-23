@@ -1,5 +1,5 @@
 /**
- * MCP tool handlers for the six procedures.* tools.
+ * MCP tool handlers for the six procedures_* tools.
  *
  * Each handler:
  *  1. Validates and coerces raw params — throws CodedError("INVALID_PARAMS") on bad shape.
@@ -659,12 +659,12 @@ export async function handleDelete(raw: Record<string, unknown>): Promise<Delete
 type HandlerFn = (raw: Record<string, unknown>) => Promise<unknown>;
 
 export const PROCEDURE_HANDLERS: Record<string, HandlerFn> = {
-  "procedures.list": handleList,
-  "procedures.search": handleSearch,
-  "procedures.get": handleGet,
-  "procedures.save": handleSave,
-  "procedures.promote": handlePromote,
-  "procedures.delete": handleDelete,
+  "procedures_list": handleList,
+  "procedures_search": handleSearch,
+  "procedures_get": handleGet,
+  "procedures_save": handleSave,
+  "procedures_promote": handlePromote,
+  "procedures_delete": handleDelete,
 };
 
 /**

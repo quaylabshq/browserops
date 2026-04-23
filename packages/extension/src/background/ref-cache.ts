@@ -1,7 +1,7 @@
 /**
  * Per-tab ref cache.
  *
- * `browser.read(mode: "a11y_tree")` produces a numbered list of elements.
+ * `browser_read(mode: "a11y_tree")` produces a numbered list of elements.
  * Those refs are looked up here by later click/type/hover handlers.
  *
  * Staleness model (plans/05-element-refs.md §4.7): a snapshot is dropped

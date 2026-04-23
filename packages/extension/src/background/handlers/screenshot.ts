@@ -2,7 +2,7 @@ import type { ErrorCode } from "@browserops/shared";
 import type { Router } from "../router.js";
 
 /**
- * browser.screenshot handler.
+ * browser_screenshot handler.
  *
  * Params: { tab_id, full_page?, format?, quality? }
  * Result: { image_base64, width, height, format }
@@ -150,7 +150,7 @@ export function registerScreenshotHandler(
   router: Router,
   opts: { tabIdMap: Map<string, number> },
 ): void {
-  router.register("browser.screenshot", async (rawParams) => {
+  router.register("browser_screenshot", async (rawParams) => {
     const params = parseParams(rawParams);
 
     const chromeTabId = opts.tabIdMap.get(params.tab_id);

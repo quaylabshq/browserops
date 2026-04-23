@@ -1,5 +1,5 @@
 /**
- * Pure helper for browser.read byte-range pagination. Slices content by
+ * Pure helper for browser_read byte-range pagination. Slices content by
  * JavaScript UTF-16 code units (i.e. `string.length` / `string.slice`),
  * matching the semantics callers get out of `indexOf` / `matchAll`. Mid-
  * surrogate and mid-tag slicing is permitted — callers searching for a

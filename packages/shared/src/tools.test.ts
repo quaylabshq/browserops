@@ -7,11 +7,18 @@ describe("TOOL_DEFS catalogue", () => {
     expect(TOOL_DEFS).toHaveLength(31);
   });
 
-  it("every tool name is prefixed browser. or procedures. and unique", () => {
+  it("every tool name is prefixed browser_ or procedures_ and unique", () => {
     const names = TOOL_DEFS.map((t) => t.name);
     expect(new Set(names).size).toBe(names.length);
     for (const n of names)
-      expect(n.startsWith("browser.") || n.startsWith("procedures.")).toBe(true);
+      expect(n.startsWith("browser_") || n.startsWith("procedures_")).toBe(true);
+  });
+
+  it("every tool name matches the MCP-recommended pattern ^[a-zA-Z0-9_-]+$", () => {
+    const pattern = /^[a-zA-Z0-9_-]+$/;
+    for (const t of TOOL_DEFS) {
+      expect(t.name).toMatch(pattern);
+    }
   });
 
   it("TOOL_DEF_MAP matches the array", () => {
@@ -42,29 +49,29 @@ describe("TOOL_DEFS catalogue", () => {
   });
 
   it("execute_js is always risky", () => {
-    const exec = TOOL_DEF_MAP["browser.execute_js"];
+    const exec = TOOL_DEF_MAP["browser_execute_js"];
     expect(exec?.risky).toBe("always");
   });
 
   it("click and type are conditional risky", () => {
-    expect(TOOL_DEF_MAP["browser.click"]?.risky).toBe("conditional");
-    expect(TOOL_DEF_MAP["browser.type"]?.risky).toBe("conditional");
+    expect(TOOL_DEF_MAP["browser_click"]?.risky).toBe("conditional");
+    expect(TOOL_DEF_MAP["browser_type"]?.risky).toBe("conditional");
   });
 
   it("read and screenshot cost 0.5", () => {
-    expect(TOOL_DEF_MAP["browser.read"]?.action_weight).toBe(0.5);
-    expect(TOOL_DEF_MAP["browser.screenshot"]?.action_weight).toBe(0.5);
+    expect(TOOL_DEF_MAP["browser_read"]?.action_weight).toBe(0.5);
+    expect(TOOL_DEF_MAP["browser_screenshot"]?.action_weight).toBe(0.5);
   });
 
   it("observation tools cost 0", () => {
-    expect(TOOL_DEF_MAP["browser.list_tabs"]?.action_weight).toBe(0);
-    expect(TOOL_DEF_MAP["browser.current_tab"]?.action_weight).toBe(0);
-    expect(TOOL_DEF_MAP["browser.wait_for"]?.action_weight).toBe(0);
+    expect(TOOL_DEF_MAP["browser_list_tabs"]?.action_weight).toBe(0);
+    expect(TOOL_DEF_MAP["browser_current_tab"]?.action_weight).toBe(0);
+    expect(TOOL_DEF_MAP["browser_wait_for"]?.action_weight).toBe(0);
   });
 });
 
-describe("browser.read schema", () => {
-  const read = TOOL_DEF_MAP["browser.read"];
+describe("browser_read schema", () => {
+  const read = TOOL_DEF_MAP["browser_read"];
   const props = read?.inputSchema.properties as
     | Record<string, Record<string, unknown>>
     | undefined;
@@ -102,8 +109,8 @@ describe("browser.read schema", () => {
   });
 });
 
-describe("browser.query_selector schema", () => {
-  const tool = TOOL_DEF_MAP["browser.query_selector"];
+describe("browser_query_selector schema", () => {
+  const tool = TOOL_DEF_MAP["browser_query_selector"];
   const inProps = tool?.inputSchema.properties as
     | Record<string, Record<string, unknown>>
     | undefined;
@@ -149,8 +156,8 @@ describe("browser.query_selector schema", () => {
   });
 });
 
-describe("browser.find_and_replace schema", () => {
-  const tool = TOOL_DEF_MAP["browser.find_and_replace"];
+describe("browser_find_and_replace schema", () => {
+  const tool = TOOL_DEF_MAP["browser_find_and_replace"];
   const props = tool?.inputSchema.properties as
     | Record<string, Record<string, unknown>>
     | undefined;
@@ -180,8 +187,8 @@ describe("browser.find_and_replace schema", () => {
   });
 });
 
-describe("browser.screenshot schema", () => {
-  const shot = TOOL_DEF_MAP["browser.screenshot"];
+describe("browser_screenshot schema", () => {
+  const shot = TOOL_DEF_MAP["browser_screenshot"];
   const props = shot?.inputSchema.properties as
     | Record<string, Record<string, unknown>>
     | undefined;
@@ -206,8 +213,8 @@ describe("browser.screenshot schema", () => {
   });
 });
 
-describe("procedures.list", () => {
-  const tool = TOOL_DEF_MAP["procedures.list"];
+describe("procedures_list", () => {
+  const tool = TOOL_DEF_MAP["procedures_list"];
 
   it("is registered", () => {
     expect(tool).toBeDefined();
@@ -227,8 +234,8 @@ describe("procedures.list", () => {
   });
 });
 
-describe("procedures.search", () => {
-  const tool = TOOL_DEF_MAP["procedures.search"];
+describe("procedures_search", () => {
+  const tool = TOOL_DEF_MAP["procedures_search"];
   const props = tool?.inputSchema.properties as
     | Record<string, Record<string, unknown>>
     | undefined;
@@ -263,8 +270,8 @@ describe("procedures.search", () => {
   });
 });
 
-describe("procedures.get", () => {
-  const tool = TOOL_DEF_MAP["procedures.get"];
+describe("procedures_get", () => {
+  const tool = TOOL_DEF_MAP["procedures_get"];
 
   it("is registered", () => {
     expect(tool).toBeDefined();
@@ -284,8 +291,8 @@ describe("procedures.get", () => {
   });
 });
 
-describe("procedures.save", () => {
-  const tool = TOOL_DEF_MAP["procedures.save"];
+describe("procedures_save", () => {
+  const tool = TOOL_DEF_MAP["procedures_save"];
   const props = tool?.inputSchema.properties as
     | Record<string, Record<string, unknown>>
     | undefined;
@@ -318,8 +325,8 @@ describe("procedures.save", () => {
   });
 });
 
-describe("procedures.promote", () => {
-  const tool = TOOL_DEF_MAP["procedures.promote"];
+describe("procedures_promote", () => {
+  const tool = TOOL_DEF_MAP["procedures_promote"];
 
   it("is registered", () => {
     expect(tool).toBeDefined();
@@ -340,8 +347,8 @@ describe("procedures.promote", () => {
   });
 });
 
-describe("procedures.delete", () => {
-  const tool = TOOL_DEF_MAP["procedures.delete"];
+describe("procedures_delete", () => {
+  const tool = TOOL_DEF_MAP["procedures_delete"];
   const props = tool?.inputSchema.properties as
     | Record<string, Record<string, unknown>>
     | undefined;

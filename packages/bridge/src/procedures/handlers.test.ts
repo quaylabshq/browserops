@@ -53,7 +53,7 @@ inputs:
   body: { type: string, required: true }
 steps:
   - id: open_compose
-    action: browser.click_by_text
+    action: browser_click_by_text
     with:
       tab_id: "{{tab_id}}"
       text: Compose
@@ -72,7 +72,7 @@ inputs:
   cohort_id: { type: string, required: true }
 steps:
   - id: export
-    action: browser.navigate
+    action: browser_navigate
     with:
       url: "https://app.posthog.com/cohorts/{{input.cohort_id}}/export"
 `;
@@ -88,7 +88,7 @@ inputs:
   event_filter: { type: string, required: true }
 steps:
   - id: filter
-    action: browser.click
+    action: browser_click
     with:
       ref: 1
 `;
@@ -102,7 +102,7 @@ inputs:
   template: { type: string, required: true }
 steps:
   - id: craft
-    action: browser.type
+    action: browser_type
     with:
       ref: 2
       text: "{{input.template}}"
@@ -188,12 +188,12 @@ async function setupTempRoot(): Promise<{ root: string; restore: () => void }> {
 describe("PROCEDURE_HANDLERS", () => {
   it("has an entry for each of the six tools", () => {
     const keys = Object.keys(PROCEDURE_HANDLERS);
-    expect(keys).toContain("procedures.list");
-    expect(keys).toContain("procedures.search");
-    expect(keys).toContain("procedures.get");
-    expect(keys).toContain("procedures.save");
-    expect(keys).toContain("procedures.promote");
-    expect(keys).toContain("procedures.delete");
+    expect(keys).toContain("procedures_list");
+    expect(keys).toContain("procedures_search");
+    expect(keys).toContain("procedures_get");
+    expect(keys).toContain("procedures_save");
+    expect(keys).toContain("procedures_promote");
+    expect(keys).toContain("procedures_delete");
     expect(keys).toHaveLength(6);
   });
 });
@@ -468,7 +468,7 @@ inputs:
   url: { type: string, required: true }
 steps:
   - id: navigate
-    action: browser.navigate
+    action: browser_navigate
     with:
       url: "{{input.url}}"
 `;
@@ -560,7 +560,7 @@ inputs:
   x: { type: string, required: true }
 steps:
   - id: step1
-    action: browser.navigate
+    action: browser_navigate
     with:
       url: "https://example.com"
 `;
@@ -587,7 +587,7 @@ inputs:
   url: { type: string, required: true }
 steps:
   - id: navigate
-    action: browser.navigate
+    action: browser_navigate
     with:
       url: "{{input.url}}"
 `;
@@ -649,7 +649,7 @@ inputs:
   data: { type: string, required: true }
 steps:
   - id: process
-    action: browser.click
+    action: browser_click
     with:
       ref: 5
 `;
@@ -695,7 +695,7 @@ inputs:
   query: { type: string, required: true }
 steps:
   - id: search
-    action: browser.navigate
+    action: browser_navigate
     with:
       url: "https://example.com/search?q={{input.query}}"
 `;
@@ -736,7 +736,7 @@ inputs:
   query: { type: string, required: true }
 steps:
   - id: search
-    action: browser.navigate
+    action: browser_navigate
     with:
       url: "https://example.com/search?q={{input.query}}"
 `;
@@ -884,7 +884,7 @@ inputs:
   x: { type: string, required: true }
 steps:
   - id: step1
-    action: browser.click
+    action: browser_click
     with:
       ref: 99
 `;
@@ -914,7 +914,7 @@ inputs:
   x: { type: string, required: true }
 steps:
   - id: step1
-    action: browser.navigate
+    action: browser_navigate
     with:
       url: "https://example.com"
 `;
@@ -942,7 +942,7 @@ inputs:
   x: { type: string, required: true }
 steps:
   - id: step1
-    action: browser.click
+    action: browser_click
     with:
       ref: 1
 `;
