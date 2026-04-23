@@ -5,10 +5,16 @@ import * as path from "node:path";
  * Root directory for all procedure storage.
  * Overridable via BROWSEROPS_PROCEDURES_DIR environment variable.
  * Defaults to ~/browserops/procedures/ (not under ~/.browserops/).
+ *
+ * Read at call time (not module load time) so that tests can set the env var
+ * in beforeAll/beforeEach and have it take effect.
  */
-const ROOT =
-  process.env.BROWSEROPS_PROCEDURES_DIR ??
-  path.join(os.homedir(), "browserops", "procedures");
+function getRoot(): string {
+  return (
+    process.env["BROWSEROPS_PROCEDURES_DIR"] ??
+    path.join(os.homedir(), "browserops", "procedures")
+  );
+}
 
 /**
  * Converts a procedure name to a safe directory-name component.
@@ -19,13 +25,13 @@ export function dirName(name: string): string {
 }
 
 /** Absolute path to the procedures root directory. */
-export const proceduresRoot = (): string => ROOT;
+export const proceduresRoot = (): string => getRoot();
 
 /** Absolute path to the shared/ subdirectory inside the procedures root. */
-export const sharedDir = (): string => path.join(ROOT, "shared");
+export const sharedDir = (): string => path.join(getRoot(), "shared");
 
 /** Absolute path to the index.json manifest file. */
-export const indexPath = (): string => path.join(ROOT, "index.json");
+export const indexPath = (): string => path.join(getRoot(), "index.json");
 
 /**
  * Resolves the absolute path to a procedure's procedure.yaml file.
@@ -36,15 +42,17 @@ export const indexPath = (): string => path.join(ROOT, "index.json");
 export const procedureYamlPath = (
   owner: string | null,
   name: string,
-): string =>
-  owner === null
-    ? path.join(ROOT, "shared", dirName(name), "procedure.yaml")
-    : path.join(ROOT, dirName(owner), "subs", dirName(name), "procedure.yaml");
+): string => {
+  const root = getRoot();
+  return owner === null
+    ? path.join(root, "shared", dirName(name), "procedure.yaml")
+    : path.join(root, dirName(owner), "subs", dirName(name), "procedure.yaml");
+};
 
 /** Absolute path to a composite owner's top-level directory. */
 export const compositeOwnerDir = (ownerName: string): string =>
-  path.join(ROOT, dirName(ownerName));
+  path.join(getRoot(), dirName(ownerName));
 
 /** Absolute path to a composite owner's subs/ subdirectory. */
 export const subsDir = (ownerName: string): string =>
-  path.join(ROOT, dirName(ownerName), "subs");
+  path.join(getRoot(), dirName(ownerName), "subs");
