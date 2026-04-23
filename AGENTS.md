@@ -81,8 +81,19 @@ Run example.qa_signup. Report the temp email used and the API key string.
 
 ### Never save an untested procedure
 - Write the procedure → run it in the same session → fix what breaks → then call `procedures_save`.
-- A procedure is trusted only when `success_count >= 1`.
+- A procedure is trusted only when `success_count >= 1` and the current UI still matches what was verified.
 - For multi-step flows: test each leaf individually first, then compose.
+- Treat the live UI as source of truth. If the next screen, button label, or route is not confirmed, do not guess it.
+- Model every stable UI transition as its own leaf. Split setup, onboarding, branching, and final extraction into separate procedures.
+- Keep leaves executable, not descriptive. Each leaf should have explicit inputs, concrete waits, and a concrete success condition.
+- Use only fields supported by `packages/shared/src/procedures.ts` and tools defined in `packages/shared/src/tools.ts`.
+- If a step returns structured data, bind and consume the exact returned field names. Do not invent `magic_url`, `api_key`, or similar outputs.
+- Prefer `browser_read` / `browser_query_selector` / `browser_click_by_text` / `browser_type` on the real element over guessed coordinates or broad JS when the UI can be addressed directly.
+- Use `browser_execute_js` only when the UI genuinely requires it, and keep the script narrow enough that it is still tied to one page state.
+- Any step that waits for async state must use `browser_wait_for` or `browser_wait_for_idle` with an explicit timeout. Do not use `browser_reload` for polling.
+- Branching logic must be explicit. If the UI can take different paths, write separate steps or leaves for each path and wire the composite to the right one.
+- Add `success_criteria` for any leaf whose completion is otherwise ambiguous.
+- Verify each leaf against the live site before saving the composite that depends on it.
 
 ### Use `browser_wait_for` for polling, not manual reloads
 - Any step that waits for async state (email arriving, page loading, element appearing) must use a `browser_wait_for` action step with an explicit `timeout`.
