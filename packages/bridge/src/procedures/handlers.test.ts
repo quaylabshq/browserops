@@ -199,7 +199,7 @@ async function setupTempRoot(): Promise<{ root: string; restore: () => void }> {
 // ---------------------------------------------------------------------------
 
 describe("PROCEDURE_HANDLERS", () => {
-  it("has an entry for each of the six tools", () => {
+  it("has an entry for each of the seven tools", () => {
     const keys = Object.keys(PROCEDURE_HANDLERS);
     expect(keys).toContain("procedures_list");
     expect(keys).toContain("procedures_search");
@@ -207,7 +207,8 @@ describe("PROCEDURE_HANDLERS", () => {
     expect(keys).toContain("procedures_save");
     expect(keys).toContain("procedures_promote");
     expect(keys).toContain("procedures_delete");
-    expect(keys).toHaveLength(6);
+    expect(keys).toContain("procedures_compile");
+    expect(keys).toHaveLength(7);
   });
 });
 

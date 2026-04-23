@@ -31,6 +31,7 @@ import {
   deleteProcedureDir,
   moveProcedureDir,
 } from "./store.js";
+import { handleCompile } from "./compile.js";
 import {
   ensureIndex,
   buildIndex,
@@ -713,6 +714,7 @@ export const PROCEDURE_HANDLERS: Record<string, HandlerFn> = {
   "procedures_save": handleSave,
   "procedures_promote": handlePromote,
   "procedures_delete": handleDelete,
+  "procedures_compile": handleCompile,
 };
 
 /**
