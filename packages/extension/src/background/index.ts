@@ -40,18 +40,30 @@ async function persistTabMap(): Promise<void> {
 // Persisted in chrome.storage.local so it survives browser restart. The
 // in-memory cache is the source of truth during SW life; storage is written
 // on every change.
+// Storage shape: number (Chrome tab id). Old shape was a string (browserops
+// tab_id) — migration runs in rehydratePinnedTab() below.
 const PINNED_TAB_STORAGE_KEY = "pinnedTabId";
-let pinnedTabId: string | null = null;
+let pinnedChromeTabId: number | null = null;
 
-const getPinnedTabId = (): string | null => pinnedTabId;
+const getPinnedTabId = (): string | null => {
+  if (pinnedChromeTabId === null) return null;
+  return chromeIdToTabId.get(pinnedChromeTabId) ?? null;
+};
 
-async function setPinnedTab(tabId: string | null): Promise<void> {
-  pinnedTabId = tabId;
-  if (tabId === null) {
+async function setPinnedTab(chromeTabId: number | null): Promise<void> {
+  pinnedChromeTabId = chromeTabId;
+  if (chromeTabId === null) {
     await chrome.storage.local.remove(PINNED_TAB_STORAGE_KEY);
   } else {
-    await chrome.storage.local.set({ [PINNED_TAB_STORAGE_KEY]: tabId });
+    await chrome.storage.local.set({ [PINNED_TAB_STORAGE_KEY]: chromeTabId });
   }
+}
+
+function generateTabId(): string {
+  const hex = Array.from(crypto.getRandomValues(new Uint8Array(5)))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+  return `t_${hex}`;
 }
 
 async function pinCurrentTab(): Promise<
@@ -62,11 +74,17 @@ async function pinCurrentTab(): Promise<
   if (tab === undefined || tab.id === undefined) {
     return { ok: false, error: "no active tab in focused window" };
   }
-  const tabId = chromeIdToTabId.get(tab.id);
+  let tabId = chromeIdToTabId.get(tab.id);
   if (tabId === undefined) {
-    return { ok: false, error: "bridge is not connected; cannot pin until tab_ids are assigned" };
+    // Bridge hasn't assigned a tab_id yet — generate one locally so pinning
+    // works standalone. When assign_tab_id arrives later it will overwrite this
+    // entry, and getPinnedTabId() will then resolve to the bridge-assigned id.
+    tabId = generateTabId();
+    tabIdToChromeId.set(tabId, tab.id);
+    chromeIdToTabId.set(tab.id, tabId);
+    await persistTabMap();
   }
-  await setPinnedTab(tabId);
+  await setPinnedTab(tab.id);
   const url = tab.url ?? tab.pendingUrl ?? "";
   const title = tab.title ?? "";
   ctx.emitEvent("tab_pinned", { tab_id: tabId, url, title });
@@ -74,10 +92,10 @@ async function pinCurrentTab(): Promise<
 }
 
 async function unpinTab(): Promise<void> {
-  const prev = pinnedTabId;
-  if (prev === null) return;
+  if (pinnedChromeTabId === null) return;
+  const tabId = getPinnedTabId();
   await setPinnedTab(null);
-  ctx.emitEvent("tab_unpinned", { tab_id: prev });
+  if (tabId !== null) ctx.emitEvent("tab_unpinned", { tab_id: tabId });
 }
 
 // Inline assign_tab_id handler (plans/03-extension.md §D5). Other handlers
@@ -100,6 +118,13 @@ router.register("assign_tab_id", async (params) => {
     const err = new Error("assign_tab_id requires chrome_tab_id:number and tab_id:string");
     (err as { code?: string }).code = "INVALID_PARAMS";
     throw err;
+  }
+  // Remove stale tabIdToChromeId entry if this Chrome tab already had a
+  // locally-generated (or prior) tab_id. This prevents orphaned string keys
+  // from accumulating when auto-generated ids are later overwritten by the bridge.
+  const existingTabId = chromeIdToTabId.get(chromeTabId);
+  if (existingTabId !== undefined && existingTabId !== tabId) {
+    tabIdToChromeId.delete(existingTabId);
   }
   tabIdToChromeId.set(tabId, chromeTabId);
   chromeIdToTabId.set(chromeTabId, tabId);
@@ -227,7 +252,7 @@ chrome.tabs.onRemoved.addListener((chromeTabId) => {
   refCache.invalidate(tabId);
   tabIdToChromeId.delete(tabId);
   chromeIdToTabId.delete(chromeTabId);
-  if (pinnedTabId === tabId) {
+  if (pinnedChromeTabId === chromeTabId) {
     void unpinTab();
   }
   network.forgetTab(chromeTabId);
@@ -309,20 +334,16 @@ chrome.runtime.onMessage.addListener((msg: unknown, _sender, sendResponse) => {
   }
   if (tag === "describe_pinned") {
     void (async () => {
-      if (pinnedTabId === null) {
+      if (pinnedChromeTabId === null) {
         sendResponse({ ok: false, error: "no pinned tab" });
         return;
       }
-      const chromeId = tabIdToChromeId.get(pinnedTabId);
-      if (chromeId === undefined) {
-        sendResponse({ ok: false, error: "pinned tab_id not in map" });
-        return;
-      }
+      const tabId = getPinnedTabId();
       try {
-        const tab = await chrome.tabs.get(chromeId);
+        const tab = await chrome.tabs.get(pinnedChromeTabId);
         sendResponse({
           ok: true,
-          tab_id: pinnedTabId,
+          tab_id: tabId ?? "",
           url: tab.url ?? tab.pendingUrl ?? "",
           title: tab.title ?? "",
         });
@@ -349,7 +370,22 @@ chrome.runtime.onMessage.addListener((msg: unknown, _sender, sendResponse) => {
 async function rehydratePinnedTab(): Promise<void> {
   const s = await chrome.storage.local.get(PINNED_TAB_STORAGE_KEY);
   const raw = s[PINNED_TAB_STORAGE_KEY];
-  pinnedTabId = typeof raw === "string" ? raw : null;
+  if (typeof raw === "number") {
+    pinnedChromeTabId = raw;
+  } else if (typeof raw === "string") {
+    // Old storage shape: value was a browserops tab_id string. Migrate to Chrome tab id.
+    const chromeId = tabIdToChromeId.get(raw);
+    if (chromeId !== undefined) {
+      pinnedChromeTabId = chromeId;
+      await chrome.storage.local.set({ [PINNED_TAB_STORAGE_KEY]: chromeId });
+    } else {
+      console.log("[bg] pinned tab migration: old tab_id not in map, clearing pin");
+      await chrome.storage.local.remove(PINNED_TAB_STORAGE_KEY);
+      pinnedChromeTabId = null;
+    }
+  } else {
+    pinnedChromeTabId = null;
+  }
 }
 
 void (async () => {
