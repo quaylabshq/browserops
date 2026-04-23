@@ -1865,8 +1865,73 @@ async function performTrustedType(
   chromeTabId: number,
   text: string,
   delayMs: number,
+  selector: string,
 ): Promise<void> {
+  // Detect whether the focused element is a rich-text editor (Quill /
+  // ProseMirror / Slate). For those frameworks, the per-char
+  // keyDown+char+keyUp sequence double-inserts every character: the CDP
+  // Input.dispatchKeyEvent char event triggers native contenteditable
+  // insertion AND the framework's own beforeinput → Delta/document handler.
+  // Input.insertText fires a single beforeinput(insertText) and does NOT
+  // also trigger native insertion, so the double-insert is structurally
+  // impossible.
+  //
+  // CodeMirror and unknown/custom editors keep the per-char loop because
+  // CM6 handles trusted keys natively without a parallel framework path.
+  const RICH_EDITOR_NAMES = new Set(["quill", "prosemirror", "slate"]);
+  const siteHint = await getSiteHintForTab(chromeTabId);
+  // Resolve the editor type in the page world. injectedResolveEditor cannot
+  // receive a live Element across the serialization boundary, so we use a
+  // thin wrapper that calls document.querySelector(selector) inside the page
+  // and passes the element directly to the same detection logic. The full
+  // injectedResolveEditor function is not re-used here to avoid the
+  // serialisation complexity of its return type — we only need the name.
+  const editorResult = await execInTab(
+    chromeTabId,
+    (sel: string, hint: { framework: string; semanticKeyMode?: "trusted"; clickMode?: "trusted" } | null) => {
+      const el = document.querySelector(sel) as Element | null;
+      if (!el) return null;
+      // Minimal registry — only the three frameworks where Input.insertText
+      // eliminates the double-insert. CodeMirror uses the per-char loop.
+      const REGISTRY: Array<{ name: string; match: string }> = [
+        { name: "quill",       match: ".ql-editor" },
+        { name: "prosemirror", match: ".ProseMirror" },
+        { name: "slate",       match: "[data-slate-editor=\"true\"]" },
+      ];
+      // Tier 1: site hint names one of the three frameworks explicitly.
+      if (hint) {
+        const entry = REGISTRY.find((e) => e.name === hint.framework);
+        if (entry) return { name: entry.name, source: "site" as const };
+      }
+      // Tier 2: element fingerprint — check the element itself and its subtree.
+      for (const entry of REGISTRY) {
+        if (
+          el.matches(entry.match) ||
+          el.querySelector(entry.match) !== null ||
+          el.closest(entry.match) !== null
+        ) {
+          return { name: entry.name, source: "element" as const };
+        }
+      }
+      return null;
+    },
+    [selector, siteHint] as const,
+  ).catch(() => null);
+
+  const useInsertText = editorResult !== null && RICH_EDITOR_NAMES.has(editorResult.name);
+
+  // TODO(step 6): surface mode_used + editor in response
   await cdp.withAttach(chromeTabId, async () => {
+    if (useInsertText) {
+      // Single Input.insertText call: fires one beforeinput(insertText)
+      // which Quill / ProseMirror / Slate handle through their documented
+      // path. The browser does NOT also natively insert the text, so the
+      // double-insert observed on Slack ("DDoonnee SSiirr") is impossible.
+      await cdp.send(chromeTabId, "Input.insertText", { text });
+      return;
+    }
+    // Plain inputs / textareas / CodeMirror / unknown: existing per-char
+    // keyDown + char + keyUp loop. Behaviour unchanged.
     for (const ch of text) {
       // keyDown + char + keyUp is what CDP treats as a full keystroke. The
       // "char" event with `text` is the one that actually inserts into
@@ -2122,7 +2187,7 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
           });
           cleared = true;
         }
-        await performTrustedType(cdp, chromeId, params.text, params.delay_ms ?? 0);
+        await performTrustedType(cdp, chromeId, params.text, params.delay_ms ?? 0, selector);
         if (submit) {
           await cdp.withAttach(chromeId, async () => {
             await cdp.send(chromeId, "Input.dispatchKeyEvent", {
