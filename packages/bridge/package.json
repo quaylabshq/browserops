@@ -1,10 +1,16 @@
 {
   "name": "@browserops/bridge",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
   "bin": {
     "browserops-bridge": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "build": "tsup",
@@ -13,7 +19,8 @@
     "typecheck": "tsc -b --noEmit",
     "clean": "rm -rf dist *.tsbuildinfo",
     "test": "vitest run",
-    "test:integration": "vitest run --config vitest.integration.config.ts"
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "prepublishOnly": "pnpm build"
   },
   "dependencies": {
     "@browserops/shared": "workspace:*",
