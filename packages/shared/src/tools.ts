@@ -504,7 +504,7 @@ const read: ToolDef = {
 const click: ToolDef = {
   name: "browser_click",
   description:
-    "Click an element identified by ref. Two dispatch modes: 'synthetic' (default, DOM-only — fires pointer/mouse events in the page's main world; works on >90% of real pages), 'trusted' (CDP Input.dispatchMouseEvent — real trusted events; required for sites that gate on isTrusted like Cloudflare Turnstile, canvas widgets, and some e-commerce CAPTCHA layers). Trusted mode attaches chrome.debugger which briefly shows the \"being controlled by automation\" banner.",
+    "Click an element identified by ref. Two dispatch modes: 'synthetic' (default, DOM-only — fires pointer/mouse events in the page's main world; works on >90% of real pages), 'trusted' (CDP Input.dispatchMouseEvent — real trusted events; required for sites that gate on isTrusted like Cloudflare Turnstile, canvas widgets, and some e-commerce CAPTCHA layers). Trusted mode attaches chrome.debugger which briefly shows the \"being controlled by automation\" banner. On Tier 1 canvas apps (Figma, Google Docs, Canva, Miro, Whimsical, Figjam) the extension auto-escalates to trusted mode when the caller does not specify a mode. Returns `{clicked, mode_used, site?}`. `mode_used` is the dispatch mode that actually ran (may differ from requested `mode` after canvas-app auto-escalation). `site` is the matched hostname when a Tier 1 site triggered auto-escalation.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -536,6 +536,11 @@ const click: ToolDef = {
     properties: {
       clicked: { const: true },
       mode: { enum: ["synthetic", "trusted"] as const },
+      // mode_used is the dispatch mode that actually ran (may differ from
+      // requested mode after canvas-app auto-escalation).
+      mode_used: { enum: ["synthetic", "trusted"] as const },
+      // Present when a Tier 1 site hint triggered auto-escalation to trusted.
+      site: { type: "string" },
       navigated: { type: "boolean" },
       // Set when dismiss_overlay was on and the initial click was occluded;
       // indicates the overlay was dismissed and the click retried.
@@ -682,7 +687,7 @@ const clickByText: ToolDef = {
 const typeTool: ToolDef = {
   name: "browser_type",
   description:
-    "Type text into an element identified by ref. Three dispatch modes: 'keystroke' (default for short text, fires per-character keydown/beforeinput/input/keyup — what autocompletes and per-keystroke validators need), 'paste' (bulk-assign the value in one shot, use for long text where per-char events are wasteful), 'trusted' (CDP-backed real trusted events; requires debugger attach). Default resolves to 'keystroke' for text <=64 chars, 'paste' otherwise.",
+    "Type text into an element identified by ref. Three dispatch modes: 'keystroke' (default for short text, fires per-character keydown/beforeinput/input/keyup — what autocompletes and per-keystroke validators need), 'paste' (bulk-assign the value in one shot, use for long text where per-char events are wasteful), 'trusted' (CDP-backed real trusted events; requires debugger attach). Default resolves to 'keystroke' for text <=64 chars, 'paste' otherwise. Returns `{typed, mode, mode_used, editor?, site?}`. `mode_used` is the dispatch mode that actually ran (may differ from requested `mode` — on Quill/ProseMirror/Slate editors, trusted-mode typing auto-uses CDP `Input.insertText` to avoid double-insertion, reported as `mode_used: 'insertText'`). `editor` is present when a rich-text framework was detected. `site` is the matched hostname when the Tier 1 site registry fired.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -718,6 +723,14 @@ const typeTool: ToolDef = {
     properties: {
       typed: { type: "integer", minimum: 0 },
       mode: { enum: ["keystroke", "paste", "trusted"] as const },
+      // mode_used is the dispatch mode that actually ran after any framework
+      // detection. On Quill/ProseMirror/Slate in trusted mode, this is
+      // 'insertText' (CDP Input.insertText) rather than 'trusted' (per-char loop).
+      mode_used: { type: "string" },
+      // Present when a rich-text framework was detected and influenced dispatch.
+      editor: { type: "string" },
+      // Present when the Tier 1 site registry matched.
+      site: { type: "string" },
       submitted: { type: "boolean" },
       navigated: { type: "boolean" },
       cleared: {
@@ -780,7 +793,7 @@ const findAndReplace: ToolDef = {
 const press: ToolDef = {
   name: "browser_press",
   description:
-    "Send a keyboard-only chord to the tab (CDP key names). Does not target a specific ref. Leading entries are treated as modifiers and the final entry as the key — e.g. [\"Primary\",\"KeyA\"] sends select-all. Use `Primary` instead of Meta/Control for portable chords; the extension resolves it to Meta on macOS and Control elsewhere at dispatch time.",
+    "Send a keyboard-only chord to the tab (CDP key names). Does not target a specific ref. Leading entries are treated as modifiers and the final entry as the key — e.g. [\"Primary\",\"KeyA\"] sends select-all. Use `Primary` instead of Meta/Control for portable chords; the extension resolves it to Meta on macOS and Control elsewhere at dispatch time. Returns `{pressed, dispatch, editor?, site?}`. `dispatch` is 'trusted' when CDP was used (Enter/Escape/Tab on Quill/ProseMirror/Slate), 'synthetic' otherwise. `editor` and `site` are present when the editor/site registry matched.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -808,6 +821,12 @@ const press: ToolDef = {
     required: ["pressed"] as const,
     properties: {
       pressed: { const: true },
+      // dispatch is the actual delivery path used for this key event.
+      dispatch: { enum: ["synthetic", "trusted"] as const },
+      // Present when a rich-text framework was detected and influenced dispatch.
+      editor: { type: "string" },
+      // Present when the Tier 1 site registry matched.
+      site: { type: "string" },
     },
   },
   action_weight: 1,
