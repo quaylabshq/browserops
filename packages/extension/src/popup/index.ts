@@ -10,6 +10,8 @@ const statusPill = $<HTMLSpanElement>("status");
 const killBtn = $<HTMLButtonElement>("kill");
 const optionsLink = $<HTMLAnchorElement>("options");
 const yoloBox = $<HTMLInputElement>("yolo");
+const setupPane = $<HTMLDivElement>("setup");
+const runSetupBtn = $<HTMLButtonElement>("run-setup");
 const pinBtn = $<HTMLButtonElement>("pin");
 const unpinBtn = $<HTMLButtonElement>("unpin");
 const pinnedEmpty = $<HTMLDivElement>("pinned-empty");
@@ -37,6 +39,11 @@ function renderStatus(connected: boolean): void {
   statusPill.classList.toggle("on", connected);
   statusPill.classList.toggle("off", !connected);
   killBtn.disabled = !connected;
+}
+
+function renderSetup(hasToken: boolean): void {
+  setupPane.classList.toggle("active", !hasToken);
+  mainPane.classList.toggle("unconfigured", !hasToken);
 }
 
 function renderSafety(prompt: PendingSafetyPrompt | null): void {
@@ -136,9 +143,11 @@ unpinBtn.addEventListener("click", () => {
 
 async function refresh(): Promise<void> {
   const [local, session] = await Promise.all([
-    chrome.storage.local.get("connected"),
+    chrome.storage.local.get(["connected", "token"]),
     chrome.storage.session.get(["pendingSafetyPrompt", "autoApprove"]),
   ]);
+  const hasToken = typeof local["token"] === "string" && local["token"].length > 0;
+  renderSetup(hasToken);
   renderStatus(local["connected"] === true);
   const raw = session["pendingSafetyPrompt"];
   const prompt =
@@ -189,6 +198,12 @@ killBtn.addEventListener("click", () => {
 optionsLink.addEventListener("click", (e) => {
   e.preventDefault();
   chrome.runtime.openOptionsPage();
+});
+
+runSetupBtn.addEventListener("click", () => {
+  const url = chrome.runtime.getURL("src/onboard/index.html");
+  chrome.tabs.create({ url }).catch(() => {});
+  window.close();
 });
 
 chrome.storage.session.onChanged.addListener((changes) => {

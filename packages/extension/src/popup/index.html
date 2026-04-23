@@ -140,6 +140,38 @@
         flex: 1;
       }
       button.neutral:hover { background: #000; }
+
+      #setup {
+        display: none;
+        flex-direction: column;
+        gap: 10px;
+        border: 1px solid #e2e2dc;
+        border-radius: 8px;
+        padding: 14px;
+        background: #fbfaf6;
+      }
+      #setup.active { display: flex; }
+      .setup-title {
+        font-size: 13px;
+        font-weight: 600;
+        color: #1b1b1b;
+      }
+      .setup-desc {
+        font-size: 12px;
+        color: #555;
+        line-height: 1.5;
+      }
+      button.primary {
+        background: #1b1b1b;
+        color: #fff;
+        padding: 10px 12px;
+        font-size: 13px;
+      }
+      button.primary:hover { background: #000; }
+      #main.unconfigured > :not(#pinned-section),
+      #main.unconfigured .yolo-row,
+      #main.unconfigured #kill,
+      #main.unconfigured #pinned-section { display: none; }
     </style>
   </head>
   <body>
@@ -157,6 +189,15 @@
       <div class="status">
         <span>Bridge:</span>
         <span id="status" class="pill off">disconnected</span>
+      </div>
+
+      <div id="setup">
+        <div class="setup-title">Finish setup</div>
+        <div class="setup-desc">
+          BrowserOps isn't paired with the bridge yet. Run setup to connect
+          in one click — no token copy-paste needed.
+        </div>
+        <button id="run-setup" type="button" class="primary">Run setup</button>
       </div>
 
       <div id="pinned-section">
