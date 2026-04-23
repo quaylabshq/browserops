@@ -655,11 +655,111 @@ function dispatchEnterAndSubmit(
   }
 }
 
+/**
+ * Probe document.activeElement for a known rich-text editor framework and
+ * return structured information for the background to decide whether to use
+ * CDP trusted dispatch. Runs in MAIN world; no module imports.
+ *
+ * Uses the same minimal 3-framework registry as performTrustedType so the
+ * detection logic stays consistent across type and press paths.
+ */
+function injectedProbeActiveEditor(
+  siteHint: { framework: string; semanticKeyMode?: "trusted"; clickMode?: "trusted" } | null,
+): {
+  editor: string | null;
+  semanticKeyMode: "synthetic" | "trusted";
+  /** CSS selector that uniquely identifies the drilled editor root, or null. */
+  rootSelector: string | null;
+} {
+  const active = document.activeElement as HTMLElement | null;
+  if (!active) return { editor: null, semanticKeyMode: "synthetic", rootSelector: null };
+
+  // Minimal registry — 3 rich-text frameworks where Enter/Escape/Tab need CDP.
+  const REGISTRY: Array<{ name: string; match: string; semanticKeyMode: "synthetic" | "trusted" }> = [
+    { name: "quill",       match: ".ql-editor",                   semanticKeyMode: "trusted" },
+    { name: "prosemirror", match: ".ProseMirror",                 semanticKeyMode: "trusted" },
+    { name: "slate",       match: "[data-slate-editor=\"true\"]", semanticKeyMode: "trusted" },
+  ];
+
+  let matchedName: string | null = null;
+  let matchedMode: "synthetic" | "trusted" = "synthetic";
+  let root: Element | null = null;
+
+  // Tier 1: site hint names a known framework.
+  if (siteHint) {
+    const entry = REGISTRY.find((e) => e.name === siteHint.framework);
+    if (entry) {
+      matchedName = entry.name;
+      matchedMode = siteHint.semanticKeyMode ?? entry.semanticKeyMode;
+      root =
+        (active.matches(entry.match) ? active : null) ??
+        active.querySelector(entry.match) ??
+        active.closest(entry.match) ??
+        document.querySelector(entry.match);
+    } else {
+      // Known site but unknown framework — honour semanticKeyMode hint.
+      matchedName = siteHint.framework;
+      matchedMode = siteHint.semanticKeyMode ?? "synthetic";
+      root = active;
+    }
+  }
+
+  // Tier 2: element fingerprint — only if site hint didn't match a framework.
+  if (matchedName === null) {
+    for (const entry of REGISTRY) {
+      const candidate =
+        (active.matches(entry.match) ? active : null) ??
+        active.querySelector(entry.match) ??
+        active.closest(entry.match);
+      if (candidate) {
+        matchedName = entry.name;
+        matchedMode = entry.semanticKeyMode;
+        root = candidate;
+        break;
+      }
+    }
+  }
+
+  if (matchedName === null || root === null) {
+    return { editor: null, semanticKeyMode: "synthetic", rootSelector: null };
+  }
+
+  // Assign a stable data-attribute so the background can reference the root
+  // if it needs to; for press we only need the semanticKeyMode decision.
+  // (rootSelector is informational — the background dispatches via CDP which
+  // operates on the focused element, not a selector.)
+  let rootSelector: string | null = null;
+  try {
+    if (root.id && root.id.length > 0) {
+      rootSelector = `#${CSS.escape(root.id)}`;
+    } else if (root.className && typeof root.className === "string") {
+      // Use the first class as a best-effort selector — good enough for
+      // well-known frameworks (.ql-editor, .ProseMirror, etc.).
+      const firstClass = root.className.trim().split(/\s+/)[0];
+      if (firstClass && firstClass.length > 0) rootSelector = `.${CSS.escape(firstClass)}`;
+    }
+  } catch {
+    /* ignore selector building errors */
+  }
+
+  return { editor: matchedName, semanticKeyMode: matchedMode, rootSelector };
+}
+
 function injectedPress(
   key: string,
   modifiers: { ctrl: boolean; alt: boolean; shift: boolean; meta: boolean },
+  /** CSS selector for the drilled editor root, or null to use document.activeElement. */
+  rootSelector: string | null,
 ): void {
-  const active = (document.activeElement as HTMLElement | null) ?? document.body;
+  // Use the drilled editor root when available (resolves the wrapper-vs-editor
+  // mismatch on Slack/Notion/Linear where document.activeElement points to the
+  // outer role="textbox" div but Quill/ProseMirror listen on the inner root).
+  const active: HTMLElement =
+    (rootSelector !== null
+      ? (document.querySelector(rootSelector) as HTMLElement | null)
+      : null) ??
+    (document.activeElement as HTMLElement | null) ??
+    document.body;
   const init: KeyboardEventInit = {
     key,
     code: key.length === 1 ? `Key${key.toUpperCase()}` : key,
@@ -2283,7 +2383,87 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
     if (denyReason !== null) {
       throw codedError("RISKY_ACTION_DENIED", `refused destructive chord: ${denyReason}`);
     }
-    await execInTab(chromeId, injectedPress, [terminal, modifierFlags(mods)] as const);
+
+    // Semantic keys that rich editors gate on isTrusted. Only Enter, Escape,
+    // and Tab are treated as semantic — all other keys stay on the synthetic
+    // path regardless of framework.
+    const SEMANTIC_KEYS = new Set(["Enter", "Escape", "Tab"]);
+    const isSemanticKey = SEMANTIC_KEYS.has(terminal);
+
+    // Probe the active element (and optionally resolve the site hint) to decide
+    // whether to use CDP trusted dispatch. We do this even for non-semantic keys
+    // so Part A (wrapper drilling) can redirect the synthetic dispatch to the
+    // real editor root instead of the outer role="textbox" wrapper.
+    const siteHint = await getSiteHintForTab(chromeId);
+    const probe = await execInTab(
+      chromeId,
+      injectedProbeActiveEditor,
+      [siteHint] as const,
+    ).catch(() => ({ editor: null as string | null, semanticKeyMode: "synthetic" as const, rootSelector: null as string | null }));
+
+    // Part B: CDP trusted dispatch for Enter/Escape/Tab on matched rich editors
+    // with semanticKeyMode === "trusted". This is how performTrustedType handles
+    // trusted keys — reuse the same cdp.withAttach + Input.dispatchKeyEvent pattern.
+    if (isSemanticKey && probe.editor !== null && probe.semanticKeyMode === "trusted") {
+      // Part C: apply modifier bitmask to the CDP events.
+      // Sequence: modifier keyDowns → key keyDown → key keyUp → modifier keyUps.
+      // CDP modifier bitmask: Alt=1, Control=2, Meta=4, Shift=8.
+      const modBitmask = cdpModifiers(mods);
+
+      // Key metadata for well-known semantic keys.
+      const CDP_KEY_META: Record<string, { text?: string; windowsVirtualKeyCode?: number }> = {
+        "Enter":  { text: "\r", windowsVirtualKeyCode: 13 },
+        "Escape": { windowsVirtualKeyCode: 27 },
+        "Tab":    { text: "\t", windowsVirtualKeyCode: 9 },
+      };
+      const keyMeta = CDP_KEY_META[terminal] ?? {};
+
+      await cdp.withAttach(chromeId, async () => {
+        // Fire modifier keyDowns first.
+        for (const mod of mods) {
+          await cdp.send(chromeId, "Input.dispatchKeyEvent", {
+            type: "keyDown",
+            key: mod,
+            modifiers: modBitmask,
+          });
+        }
+        // Key down.
+        await cdp.send(chromeId, "Input.dispatchKeyEvent", {
+          type: "keyDown",
+          key: terminal,
+          modifiers: modBitmask,
+          ...keyMeta,
+        });
+        // Key up.
+        await cdp.send(chromeId, "Input.dispatchKeyEvent", {
+          type: "keyUp",
+          key: terminal,
+          modifiers: modBitmask,
+        });
+        // Modifier keyUps (reverse order).
+        for (const mod of [...mods].reverse()) {
+          await cdp.send(chromeId, "Input.dispatchKeyEvent", {
+            type: "keyUp",
+            key: mod,
+            modifiers: modBitmask,
+          });
+        }
+      });
+      // TODO(step 6): surface dispatch + editor in response
+      return { pressed: true };
+    }
+
+    // Synthetic path: dispatch KeyboardEvent to the drilled editor root (if
+    // one was found) or document.activeElement. This fixes Part A — on Slack
+    // the activeElement is the outer role="textbox" wrapper, but Quill's
+    // keydown listener lives on the inner .ql-editor. For non-editor elements
+    // probe.rootSelector is null and behaviour is unchanged.
+    await execInTab(
+      chromeId,
+      injectedPress,
+      [terminal, modifierFlags(mods), probe.rootSelector] as const,
+    );
+    // TODO(step 6): surface dispatch + editor in response
     return { pressed: true };
   });
 
