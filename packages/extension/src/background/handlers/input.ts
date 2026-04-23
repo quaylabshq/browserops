@@ -1,8 +1,10 @@
-import type { ErrorCode } from "@browserops/shared";
+import type { ErrorCode, PageEffect } from "@browserops/shared";
 import { isDestructiveChord, resolveSite } from "@browserops/shared";
 import type { Router } from "../router.js";
 import type { RefCache } from "../ref-cache.js";
 import type { CdpManager } from "../cdp.js";
+import type { NetworkTracker } from "../network-tracker.js";
+import { withEffectObservation } from "./effects.js";
 
 /**
  * browser_click / type / press / scroll / hover / execute_js handlers.
@@ -25,6 +27,7 @@ interface InputOpts {
   tabIdMap: Map<string, number>;
   refCache: RefCache;
   cdp: CdpManager;
+  network: NetworkTracker;
 }
 
 type Modifier = "Control" | "Alt" | "Shift" | "Meta";
@@ -78,6 +81,7 @@ interface ClickParams {
   button?: "left" | "middle" | "right";
   modifiers?: readonly Modifier[];
   mode?: ClickMode;
+  observe_effects?: boolean;
 }
 
 interface ClickAtParams {
@@ -1576,6 +1580,8 @@ function parseClick(raw: Record<string, unknown>): ClickParams {
   };
   const mode = parseClickMode(raw["mode"]);
   if (mode !== undefined) result.mode = mode;
+  // observe_effects defaults to true; only false explicitly disables observation.
+  if (raw["observe_effects"] === false) result.observe_effects = false;
   return result;
 }
 
@@ -2082,7 +2088,7 @@ async function performTrustedType(
 }
 
 export function registerInputHandlers(router: Router, opts: InputOpts): void {
-  const { tabIdMap, refCache, cdp } = opts;
+  const { tabIdMap, refCache, cdp, network } = opts;
 
   router.register(
     "browser_click",
@@ -2098,12 +2104,15 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       occluder?: { tag: string; text: string; role: string | null } | null;
       retargeted?: boolean;
       suggestion?: string;
+      page_effect?: PageEffect;
     }> => {
       const params = parseClick(raw);
       const chromeId = resolveChromeId(tabIdMap, params.tab_id);
       const selector = resolveSelector(refCache, params.tab_id, params.ref);
       const button = BUTTON_INDEX[params.button ?? "left"];
       const modifiers = params.modifiers ?? [];
+      // observe_effects defaults to true; callers pass false to opt out.
+      const observeEffects = params.observe_effects !== false;
 
       // Auto-escalate to trusted mode on Tier 1 canvas apps when the caller
       // did not explicitly specify a mode. Sites like Figma, Google Docs,
@@ -2131,22 +2140,39 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
             `ref ${params.ref} no longer resolves in tab ${params.tab_id}`,
           );
         }
-        await performTrustedClick(
-          cdp,
-          chromeId,
-          center.x,
-          center.y,
-          button as 0 | 1 | 2,
-          modifiers,
-        );
-        const result: {
+
+        // Wrap just the trusted dispatch (not the ref-resolution above).
+        const dispatchTrusted = async (): Promise<{
           clicked: true;
           mode: ClickMode;
           mode_used: ClickMode;
           site?: string;
-        } = { clicked: true, mode, mode_used: mode };
-        if (siteHostname !== undefined) result.site = siteHostname;
-        return result;
+        }> => {
+          await performTrustedClick(
+            cdp,
+            chromeId,
+            center.x!,
+            center.y!,
+            button as 0 | 1 | 2,
+            modifiers,
+          );
+          const r: { clicked: true; mode: ClickMode; mode_used: ClickMode; site?: string } = {
+            clicked: true,
+            mode,
+            mode_used: mode,
+          };
+          if (siteHostname !== undefined) r.site = siteHostname;
+          return r;
+        };
+
+        if (observeEffects) {
+          const { result, effect } = await withEffectObservation(
+            { chromeTabId: chromeId, windowMs: 300, networkTracker: network },
+            dispatchTrusted,
+          );
+          return { ...result, page_effect: effect };
+        }
+        return dispatchTrusted();
       }
 
       const mods = modifierFlags(modifiers);
@@ -2174,7 +2200,11 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
           }
         }
       }
-      const result: {
+
+      // Wrap only the final dispatch + result-build. The retry loop above
+      // (dismiss_overlay) runs outside the observation window — only the last
+      // successful dispatch is observed.
+      type SyntheticResult = {
         clicked: boolean;
         mode: ClickMode;
         mode_used: ClickMode;
@@ -2184,25 +2214,37 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
         occluder?: { tag: string; text: string; role: string | null } | null;
         retargeted?: boolean;
         suggestion?: string;
-      } = { clicked: true, mode, mode_used: mode };
-      if (siteHostname !== undefined) result.site = siteHostname;
-      if (dismissedOverlay) result.dismissed_overlay = true;
-      if (res.occluded === true) {
-        result.occluded = true;
-        result.occluder = res.occluder ?? null;
-        if (!dismissOverlay) {
-          // dismiss_overlay was not requested — click was absorbed by overlay.
-          result.clicked = false;
-          result.suggestion = "retry with dismiss_overlay: true";
-        } else {
-          // dismiss_overlay was attempted but the target is still occluded.
-          result.clicked = false;
-          result.suggestion =
-            "overlay could not be dismissed; target element may be permanently covered";
+      };
+      const buildSyntheticResult = (): SyntheticResult => {
+        const r: SyntheticResult = { clicked: true, mode, mode_used: mode };
+        if (siteHostname !== undefined) r.site = siteHostname;
+        if (dismissedOverlay) r.dismissed_overlay = true;
+        if (res.occluded === true) {
+          r.occluded = true;
+          r.occluder = res.occluder ?? null;
+          if (!dismissOverlay) {
+            // dismiss_overlay was not requested — click was absorbed by overlay.
+            r.clicked = false;
+            r.suggestion = "retry with dismiss_overlay: true";
+          } else {
+            // dismiss_overlay was attempted but the target is still occluded.
+            r.clicked = false;
+            r.suggestion =
+              "overlay could not be dismissed; target element may be permanently covered";
+          }
         }
+        if (res.retargeted === true) r.retargeted = true;
+        return r;
+      };
+
+      if (observeEffects) {
+        const { result, effect } = await withEffectObservation(
+          { chromeTabId: chromeId, windowMs: 300, networkTracker: network },
+          async () => buildSyntheticResult(),
+        );
+        return { ...result, page_effect: effect };
       }
-      if (res.retargeted === true) result.retargeted = true;
-      return result;
+      return buildSyntheticResult();
     },
   );
 
