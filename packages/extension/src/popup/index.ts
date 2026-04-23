@@ -35,19 +35,25 @@ interface PendingSafetyPrompt {
 }
 
 let connectedState = false;
+let disabledState = false;
 
-function renderStatus(connected: boolean): void {
+function renderStatus(connected: boolean, disabled: boolean): void {
   connectedState = connected;
-  statusPill.textContent = connected ? "connected" : "disconnected";
-  statusPill.classList.toggle("pill--on", connected);
-  statusPill.classList.toggle("pill--off", !connected);
-  // The kill button doubles as the reconnect affordance when disconnected —
-  // going to the options page to flip a kill-switch is bad UX. Label +
-  // variant swap here, wiring in the click handler below.
-  if (connected) {
-    killBtn.textContent = "Disconnect";
+  disabledState = disabled;
+  statusPill.className = "pill";
+  if (disabled) {
+    statusPill.textContent = "disabled";
+    // default .pill = neutral gray — no modifier
+    killBtn.textContent = "Enable";
+    killBtn.classList.remove("btn--danger");
+  } else if (connected) {
+    statusPill.textContent = "connected";
+    statusPill.classList.add("pill--on");
+    killBtn.textContent = "Disable";
     killBtn.classList.add("btn--danger");
   } else {
+    statusPill.textContent = "disconnected";
+    statusPill.classList.add("pill--off");
     killBtn.textContent = "Connect";
     killBtn.classList.remove("btn--danger");
   }
@@ -156,12 +162,12 @@ unpinBtn.addEventListener("click", () => {
 
 async function refresh(): Promise<void> {
   const [local, session] = await Promise.all([
-    chrome.storage.local.get(["connected", "token"]),
+    chrome.storage.local.get(["connected", "token", "disabled"]),
     chrome.storage.session.get(["pendingSafetyPrompt", "autoApprove"]),
   ]);
   const hasToken = typeof local["token"] === "string" && local["token"].length > 0;
   renderSetup(hasToken);
-  renderStatus(local["connected"] === true);
+  renderStatus(local["connected"] === true, local["disabled"] === true);
   const raw = session["pendingSafetyPrompt"];
   const prompt =
     raw !== undefined && raw !== null && typeof raw === "object"
@@ -205,16 +211,16 @@ safetyDeny.addEventListener("click", () => sendDecision(false));
 
 killBtn.addEventListener("click", () => {
   if (connectedState) {
+    // Connected → Disable: stop the connection and mark this browser disabled.
     chrome.runtime.sendMessage({ type: "kill_switch" }).catch(() => {});
-    renderStatus(false);
+    renderStatus(false, true);
   } else {
+    // Disabled or disconnected → Enable/Connect: clear disabled flag and try to connect.
     killBtn.disabled = true;
     chrome.runtime
       .sendMessage({ type: "reconnect" })
       .catch(() => {})
       .finally(() => {
-        // The background will flip storage.connected once the socket
-        // reaches ready; the poll in refresh() will repaint the button.
         void refresh();
       });
   }
