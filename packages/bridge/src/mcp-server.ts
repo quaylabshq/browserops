@@ -18,6 +18,7 @@ import {
   WAIT_FOR_TIMEOUT_CAP_MS,
   type ErrorCode,
   isErrorCode,
+  type TraceEvent,
 } from "@browserops/shared";
 import type { RateLimiter } from "./rate-limiter.js";
 import type { Safety, TabInfo } from "./safety.js";
@@ -271,6 +272,7 @@ export class McpBridgeServer {
     req: { params: { name: string; arguments?: Record<string, unknown> } },
     extra: { signal?: AbortSignal; requestId?: string | number },
   ): Promise<ToolCallResult> {
+    const startMs = Date.now();
     const id = extra.requestId !== undefined ? String(extra.requestId) : randomId();
     const name = req.params.name;
     const params: Record<string, unknown> = req.params.arguments ?? {};
@@ -295,24 +297,30 @@ export class McpBridgeServer {
     }
     if (!validate(params)) {
       const message = formatAjvErrors(validate.errors);
-      return this.reply(id, name, toolError({ code: "INVALID_PARAMS", message }));
+      const result = await this.reply(id, name, toolError({ code: "INVALID_PARAMS", message }));
+      this.emitTrace(id, name, params, startMs, result);
+      return result;
     }
 
     // 4a. In-process procedure handlers — bypass extension WebSocket entirely.
     if (name.startsWith("procedures_")) {
       const handler = PROCEDURE_HANDLERS[name];
       if (handler) {
+        let result: ToolCallResult;
         try {
-          const result = await handler(params);
-          return this.reply(id, name, toolOk(result));
+          const handlerResult = await handler(params);
+          result = await this.reply(id, name, toolOk(handlerResult));
         } catch (err) {
           const code = extractErrorCode(err);
           const message = err instanceof Error ? err.message : String(err);
           const details = err instanceof Error && "details" in err
             ? (err as { details?: unknown }).details
             : undefined;
-          return this.reply(id, name, toolError({ code, message, details }));
+          result = await this.reply(id, name, toolError({ code, message, details }));
         }
+        // procedures_* calls are not traced — they're meta-RPC, not browser
+        // interactions useful for procedure compilation (Phase 4).
+        return result;
       }
       // Unknown procedures_* tool — fall through to let MethodNotFound fire below.
     }
@@ -328,7 +336,7 @@ export class McpBridgeServer {
 
     // 5. Extension connectivity — short-circuit before charging.
     if (!this.deps.wsBridge.isConnected()) {
-      return this.reply(
+      const result = await this.reply(
         id,
         name,
         toolError({
@@ -336,12 +344,14 @@ export class McpBridgeServer {
           message: "no active extension connection",
         }),
       );
+      this.emitTrace(id, name, params, startMs, result);
+      return result;
     }
 
     // 6. Rate limit.
     const charge = this.deps.rateLimiter.tryConsume(tabId ?? "_global", def.action_weight);
     if (!charge.ok) {
-      return this.reply(
+      const result = await this.reply(
         id,
         name,
         toolError({
@@ -350,6 +360,8 @@ export class McpBridgeServer {
           details: { retry_after_ms: charge.retry_after_ms, scope: charge.scope },
         }),
       );
+      this.emitTrace(id, name, params, startMs, result);
+      return result;
     }
 
     // 7. Risky-action gate.
@@ -364,11 +376,13 @@ export class McpBridgeServer {
       const reason = verdict.reason ?? `${name} requires approval`;
       const decision = await this.deps.safety.requireApproval({ tool: name, params, reason });
       if (!decision.allow) {
-        return this.reply(
+        const result = await this.reply(
           id,
           name,
           toolError({ code: "RISKY_ACTION_DENIED", message: reason }),
         );
+        this.emitTrace(id, name, params, startMs, result);
+        return result;
       }
     }
 
@@ -376,19 +390,70 @@ export class McpBridgeServer {
     const timeoutMs = this.timeoutFor(def, params);
 
     // 9. Call extension (forward cancellation).
+    // Raw input is recorded verbatim — callers who set BROWSEROPS_TRACE=1 have
+    // explicitly opted in. Redaction of secrets in params is a future concern.
     try {
-      const result = await this.deps.wsBridge.callExtension(
+      const extResult = await this.deps.wsBridge.callExtension(
         def.name,
         params,
         timeoutMs,
         extra.signal,
       );
-      return this.reply(id, name, toolOk(result));
+      const result = await this.reply(id, name, toolOk(extResult));
+      this.emitTrace(id, name, params, startMs, result);
+      return result;
     } catch (err) {
       const code = extractErrorCode(err);
       const message = err instanceof Error ? err.message : String(err);
-      return this.reply(id, name, toolError({ code, message }));
+      const result = await this.reply(id, name, toolError({ code, message }));
+      this.emitTrace(id, name, params, startMs, result);
+      return result;
     }
+  }
+
+  /**
+   * Emit a TraceEvent for a completed tools/call. No-op when traceWriter is
+   * absent or disabled. Meta RPCs (tools/list, initialize, ping) are never
+   * passed here — only browser_* and similar leaf tool calls go through this.
+   */
+  private emitTrace(
+    id: string,
+    toolName: string,
+    input: Record<string, unknown>,
+    startMs: number,
+    result: ToolCallResult,
+  ): void {
+    const tw = this.deps.traceWriter;
+    if (!tw?.enabled) return;
+
+    let traceResult: TraceEvent["result"];
+    if (!result.isError) {
+      // Parse the value back out of the text content.
+      const text = result.content[0]?.text ?? "";
+      let value: unknown = text;
+      try { value = JSON.parse(text); } catch { /* leave as string */ }
+      traceResult = { ok: true, value };
+    } else {
+      const text = result.content[0]?.text ?? "";
+      let errorCode = "UNKNOWN";
+      let errorMessage = text;
+      try {
+        const parsed = JSON.parse(text) as { code?: unknown; message?: unknown };
+        if (typeof parsed.code === "string") errorCode = parsed.code;
+        if (typeof parsed.message === "string") errorMessage = parsed.message;
+      } catch { /* leave defaults */ }
+      traceResult = { ok: false, error_code: errorCode, error_message: errorMessage };
+    }
+
+    const event: TraceEvent = {
+      id,
+      timestamp: new Date().toISOString(),
+      tool_name: toolName,
+      duration_ms: Date.now() - startMs,
+      input,
+      result: traceResult,
+    };
+    tw.append(event);
   }
 
   private timeoutFor(def: ToolDef, params: Record<string, unknown>): number {
