@@ -1,0 +1,81 @@
+schema_version: 1
+
+name: mem0.qa_signup
+description: End-to-end Mem0 QA signup — temp email → magic-link login → onboarding → API key
+kind: composite
+domain: mem0
+
+triggers:
+  - run mem0 qa signup
+  - mem0 end to end signup
+  - create mem0 account and api key
+  - mem0 full login flow
+
+tags: [mem0, qa, signup]
+
+uses:
+  - tempmail.get_email
+  - tempmail.wait_for_magic_link
+  - mem0.request_magic_link
+  - mem0.complete_onboarding
+  - mem0.create_api_key
+
+inputs:
+  company_name:
+    type: string
+    required: true
+    description: Company name to enter during onboarding
+  usecase:
+    type: string
+    required: true
+    description: Use-case label to select during onboarding (e.g. "AI Companion")
+
+# browser_new_tab returns { tab_id }; bind it then reference {{bind.tab_id}}.
+# Sub-procedures that wrap browser_execute_js return { value: <JS-return>, ... }
+# at the outer envelope, so we drill into .value.<field> when binding their
+# results (e.g. {{get_temp_email.value.email}}).
+steps:
+  - id: open_tempmail_tab
+    action: browser_new_tab
+    with: {}
+    bind: tab_tempmail
+
+  - id: get_temp_email
+    action: tempmail.get_email
+    with:
+      tab_id: "{{tab_tempmail.tab_id}}"
+
+  - id: open_mem0_tab
+    action: browser_new_tab
+    with: {}
+    bind: tab_mem0
+
+  - id: request_magic_link
+    action: mem0.request_magic_link
+    with:
+      tab_id: "{{tab_mem0.tab_id}}"
+      email: "{{get_temp_email.value.email}}"
+
+  - id: wait_for_magic_link
+    action: tempmail.wait_for_magic_link
+    with:
+      tab_id: "{{tab_tempmail.tab_id}}"
+      sender_hint: mem0
+
+  - id: navigate_magic_link
+    action: browser_navigate
+    with:
+      tab_id: "{{tab_mem0.tab_id}}"
+      url: "{{wait_for_magic_link.value.magic_url}}"
+
+  - id: complete_onboarding
+    action: mem0.complete_onboarding
+    with:
+      tab_id: "{{tab_mem0.tab_id}}"
+      company_name: "{{input.company_name}}"
+      usecase: "{{input.usecase}}"
+
+  - id: create_api_key
+    action: mem0.create_api_key
+    with:
+      tab_id: "{{tab_mem0.tab_id}}"
