@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>BrowserOps — Setup</title>
+    <style>
+      :root { color-scheme: light; }
+      body {
+        font-family: -apple-system, system-ui, sans-serif;
+        background: #f7f6f2;
+        color: #1b1b1b;
+        margin: 0;
+        padding: 40px 32px;
+      }
+      main { max-width: 520px; margin: 0 auto; }
+      h1 { font-size: 22px; margin: 0 0 4px; font-weight: 600; }
+      .sub { color: #666; font-size: 13px; margin: 0 0 24px; }
+      .card {
+        background: #fff;
+        border: 1px solid #e2e2dc;
+        border-radius: 12px;
+        padding: 20px;
+        margin-bottom: 16px;
+      }
+      .card h2 {
+        font-size: 13px;
+        font-weight: 600;
+        color: #555;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        margin: 0 0 10px;
+      }
+      .code {
+        font-family: ui-monospace, Menlo, monospace;
+        font-size: 28px;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        background: #f3f1ea;
+        padding: 14px 18px;
+        border-radius: 10px;
+        text-align: center;
+      }
+      .token {
+        font-family: ui-monospace, Menlo, monospace;
+        font-size: 12px;
+        color: #777;
+        word-break: break-all;
+      }
+      .actions { display: flex; gap: 8px; margin-top: 8px; }
+      button {
+        padding: 10px 16px;
+        border: 0;
+        border-radius: 8px;
+        background: #1b1b1b;
+        color: #fff;
+        font-size: 14px;
+        font-weight: 500;
+        cursor: pointer;
+      }
+      button:hover { background: #333; }
+      button:disabled { background: #b8b7b0; cursor: default; }
+      button.ghost { background: #fff; color: #1b1b1b; border: 1px solid #d8d4c8; }
+      button.ghost:hover { background: #f3f1ea; }
+      .error {
+        background: #fde2e2;
+        color: #8a1a1a;
+        border: 1px solid #e2c7c8;
+      }
+      .success {
+        background: #dcf5e3;
+        color: #1b6b37;
+        border: 1px solid #bfe5c9;
+      }
+      .muted { color: #666; font-size: 13px; line-height: 1.5; }
+      .row { display: flex; gap: 8px; align-items: center; }
+      label { display: block; font-size: 12px; color: #555; margin-bottom: 4px; }
+      input {
+        padding: 7px 10px;
+        border: 1px solid #d8d4c8;
+        border-radius: 6px;
+        background: #fff;
+        font-size: 13px;
+        font-family: inherit;
+        width: 100%;
+        box-sizing: border-box;
+      }
+      .row > label { flex: 1; }
+      details {
+        margin-top: 12px;
+        font-size: 13px;
+      }
+      summary {
+        cursor: pointer;
+        color: #666;
+        padding: 4px 0;
+      }
+      summary:hover { color: #000; }
+      .spinner {
+        display: inline-block;
+        width: 14px;
+        height: 14px;
+        border: 2px solid #d8d4c8;
+        border-top-color: #1b1b1b;
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+        margin-right: 8px;
+        vertical-align: middle;
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Connect BrowserOps</h1>
+      <p class="sub">One click to pair this extension with the bridge running on your machine.</p>
+
+      <div id="view-loading" class="card">
+        <div class="row"><span class="spinner"></span><span>Looking for the bridge on <code>127.0.0.1:8765</code>…</span></div>
+      </div>
+
+      <div id="view-ready" class="card" hidden>
+        <h2>Pair code</h2>
+        <div class="code" id="pair-code">000-000</div>
+        <p class="muted" style="margin-top: 12px;">
+          This code should match the one printed in your bridge's terminal
+          output (look for <code>pair code …</code>). If it matches, click
+          Confirm to finish setup.
+        </p>
+        <div class="actions">
+          <button id="confirm" type="button">Confirm &amp; connect</button>
+          <button id="cancel" type="button" class="ghost">Cancel</button>
+        </div>
+      </div>
+
+      <div id="view-error" class="card error" hidden>
+        <h2 style="color: #8a1a1a;">Bridge not reachable</h2>
+        <p id="error-msg" class="muted" style="color: #6b1515;"></p>
+        <details>
+          <summary>Advanced: set host/port manually</summary>
+          <div style="margin-top: 12px;">
+            <div class="row">
+              <label>Host<input id="adv-host" type="text" value="127.0.0.1" /></label>
+              <label>Port<input id="adv-port" type="number" min="1" max="65535" value="8765" /></label>
+            </div>
+            <div class="actions">
+              <button id="retry" type="button">Retry</button>
+              <button id="open-options" type="button" class="ghost">Open options</button>
+            </div>
+          </div>
+        </details>
+      </div>
+
+      <div id="view-paired" class="card success" hidden>
+        <h2 style="color: #1b6b37;">Paired</h2>
+        <p class="muted" style="color: #1b6b37;">
+          Token saved. The extension is connecting — you can close this tab.
+          Next: click the BrowserOps icon in your toolbar and pin the tab
+          you want agents to drive.
+        </p>
+      </div>
+
+      <div id="view-consumed" class="card error" hidden>
+        <h2 style="color: #8a1a1a;">Already paired</h2>
+        <p class="muted" style="color: #6b1515;">
+          The pair code has already been used. If you need to re-pair,
+          restart the bridge and reload this page.
+        </p>
+        <div class="actions">
+          <button id="open-options-2" type="button" class="ghost">Open options</button>
+        </div>
+      </div>
+    </main>
+    <script type="module" src="./index.ts"></script>
+  </body>
+</html>

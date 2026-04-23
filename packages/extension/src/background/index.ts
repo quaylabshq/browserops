@@ -291,6 +291,28 @@ chrome.webNavigation.onHistoryStateUpdated.addListener((d) => {
   ctx.emitEvent("page_navigated", { tab_id: tabId, url: d.url, transition_type: d.transitionType });
 });
 
+// --- first-run onboarding -------------------------------------------------
+// Open the pair-code onboarding page when the extension is first installed.
+// Skips if a token is already configured (re-install onto an existing
+// profile) so we don't disturb already-paired users.
+
+const ONBOARD_PATH = "src/onboard/index.html";
+
+function openOnboardPage(): void {
+  const url = chrome.runtime.getURL(ONBOARD_PATH);
+  chrome.tabs.create({ url }).catch((err: unknown) => {
+    console.warn("[bg] failed to open onboarding tab:", err);
+  });
+}
+
+chrome.runtime.onInstalled.addListener((details) => {
+  if (details.reason !== "install") return;
+  void chrome.storage.local.get("token").then((s) => {
+    const token = typeof s["token"] === "string" ? s["token"] : "";
+    if (token === "") openOnboardPage();
+  });
+});
+
 // --- keep-alive alarm -----------------
 
 chrome.alarms.create("ws-keepalive", { periodInMinutes: 0.5 });
