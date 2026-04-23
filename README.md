@@ -12,47 +12,27 @@ An MCP server that drives your live Chrome browser. Any MCP-compatible client (C
 
 ## Quick start
 
-### 1. Install & build
+### 1. Scaffold the bridge
 
 ```bash
-pnpm install
-pnpm build
+npx @browserops/bridge init
 ```
 
-This produces:
+This generates `~/.browserops/token`, seeds the bundled procedure examples into `~/browserops/procedures/shared/`, and prints copy-paste MCP client config snippets for Claude Code, Cursor, Zed, and Continue. Pick the snippet for the client you use and add it to that client's MCP config.
 
-- `packages/bridge/dist/index.js` — the MCP server (Node binary, shebanged)
-- `packages/extension/dist/` — the unpacked extension
+(Cloning and building from source? See [Develop locally](#develop-locally).)
 
-### 2. Boot the bridge once to generate the token
-
-```bash
-node packages/bridge/dist/index.js
-```
-
-On first run it creates `~/.browserops/token` (32-byte hex, mode 0600) and prints its path on stderr. Copy the token to your clipboard, then `Ctrl-C` to stop.
-
-```bash
-cat ~/.browserops/token
-```
-
-### 3. Load the extension in Chrome
+### 2. Load the extension in Chrome
 
 1. Open `chrome://extensions`.
 2. Toggle **Developer mode** on (top right).
-3. Click **Load unpacked**.
-4. **Select `packages/extension/dist/`** — not `packages/extension/`. Common mistake.
-5. Note the extension id Chrome shows (32 chars, like `abcdefghijklmnopabcdefghijklmnop`).
-6. Click the extension's **Details → Extension options**.
-7. Paste the token from step 2. Leave host / port at defaults (`127.0.0.1` / `8765`). **Save**.
+3. Click **Load unpacked** and select the unpacked extension directory (clone the repo and use `packages/extension/dist/` after `pnpm build`).
+4. Click the extension's **Details → Extension options**.
+5. Paste the token from `~/.browserops/token`. Leave host / port at defaults (`127.0.0.1` / `8765`). **Save**.
 
 The options page status pill stays red ("disconnected") until the bridge is running — that's fine.
 
-### 4. Register the bridge with your MCP client
-
-See the next section. Pick the client you use.
-
-### 5. Use it
+### 3. Use it
 
 Open your MCP client. Chrome's extension icon turns green ("connected") within a second of the client spawning the bridge. Ask the agent things like:
 
@@ -64,13 +44,19 @@ Open your MCP client. Chrome's extension icon turns green ("connected") within a
 
 ## Connecting your MCP client
 
-The bridge is a plain stdio MCP server. Any client that can spawn such a server can use it. The command to run is always:
+`npx @browserops/bridge init` prints a snippet per client. The reference snippets below are kept for clarity if you'd rather configure by hand. The bridge is a plain stdio MCP server — any client that can spawn one can use it.
+
+Command:
+
+```
+browserops-bridge          # if installed globally or invoked via npx
+```
+
+or, from a clone:
 
 ```
 node <path-to-repo>/packages/bridge/dist/index.js
 ```
-
-(or, once published to npm, `npx browserops-bridge`).
 
 Pick your client below.
 
@@ -198,15 +184,23 @@ Full JSON schemas for each tool are declared in `packages/shared/src/tools.ts`.
 
 Procedures are named, parameterised, reusable action graphs that the agent can discover and replay without re-planning from a screenshot every time. They live in `~/browserops/procedures/` (user-visible, not hidden) and are surfaced through six MCP tools: `procedures_list`, `procedures_search`, `procedures_get`, `procedures_save`, `procedures_promote`, `procedures_delete`.
 
-To get started, copy an example from `examples/procedures/` into `~/browserops/procedures/shared/`:
+The bridge auto-seeds `examples/procedures/` into `~/browserops/procedures/shared/` on first start (and on every `npx @browserops/bridge init`). Local copies are never overwritten — if a bundled example ships an update, the bridge logs a notice on stderr and you copy it manually if you want the new version.
 
-```bash
-mkdir -p ~/browserops/procedures/shared/gmail.send_email
-cp examples/procedures/gmail.send_email/procedure.yaml \
-   ~/browserops/procedures/shared/gmail.send_email/procedure.yaml
-```
+Procedures default to `status: draft` until you record a successful run. `procedures_search` excludes drafts unless called with `include_drafts: true`. To mark one trusted, call `procedures_save` again with `bump_success: true` after a verified run; success_count increments and status flips to `trusted` once it reaches 1.
 
-See `examples/procedures/` for annotated seed procedures. The procedure schema and search ranking live in `packages/shared/src/procedures.ts`.
+Bindings of the form `{{step.field}}` are validated at save time against the referenced tool's `outputSchema`. References to fields that don't exist on the tool's output are rejected with `PROC_SCHEMA_INVALID` before the procedure ever runs.
+
+The procedure schema and search ranking live in `packages/shared/src/procedures.ts`.
+
+Authoring checklist:
+- Search first. If an existing procedure already covers the flow, reuse it and update it instead of writing a parallel version.
+- Write leaves around real UI states. Each leaf should represent one stable transition and should not assume hidden onboarding, modal, or branching screens.
+- Test every leaf on the live site before composing it. Do not save unverified procedures.
+- Use only schema-supported fields from `packages/shared/src/procedures.ts`; do not invent `wait_for` or step-result shapes.
+- Bind outputs only when the leaf returns those exact fields, and verify the bindings against the real result.
+- Prefer explicit waits and success criteria over implicit assumptions.
+- Split setup, onboarding, and final extraction into separate procedures when they are distinct screens or branches.
+- If the UI changes, fix the leaf first, then update the composite.
 
 ## Safety defaults
 
@@ -214,6 +208,19 @@ See `examples/procedures/` for annotated seed procedures. The procedure schema a
 - **Kill switch:** click the extension toolbar icon → **Disconnect**. Reconnect only from the options page (deliberate friction).
 - **Risky actions** (execute_js always; click and type on financial / credential-manager domains): the bridge sends a `safety_prompt` to the extension; the popup UI for it is stubbed in v1, so these currently deny after the 30 s timeout. For unattended testing, set `BROWSEROPS_AUTOCONFIRM=1`.
 - **Sensitive domain list:** `~/.browserops/risky-domains.json` (extends the built-in defaults in `packages/bridge/src/risky-domains.ts`).
+
+## Develop locally
+
+If you're hacking on browserops itself (or want to side-load before publish):
+
+```bash
+git clone https://github.com/<org>/browserops.git
+cd browserops
+pnpm install
+pnpm build
+```
+
+Produces `packages/bridge/dist/index.js` (the MCP server, shebanged) and `packages/extension/dist/` (the unpacked extension to load in Chrome). Then either point your MCP client at `node /absolute/path/to/packages/bridge/dist/index.js`, or run `node packages/bridge/dist/index.js init` to print snippets with the local path resolved for you.
 
 ## Dev loop
 
