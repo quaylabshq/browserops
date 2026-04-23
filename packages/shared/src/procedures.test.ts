@@ -129,6 +129,56 @@ describe("PROCEDURE_SCHEMA — valid cases", () => {
       }),
     ).toBe(true);
   });
+
+  it("accepts a step with a fully-populated expected_effect", () => {
+    expect(
+      valid({
+        schema_version: 1,
+        name: "my.proc",
+        description: "A procedure with expected_effect on a step",
+        kind: "leaf",
+        steps: [
+          {
+            id: "s1",
+            action: "browser_navigate",
+            with: { tab_id: "t_1", url: "https://example.com" },
+            expected_effect: {
+              dom: {
+                any: true,
+                added_min: 5,
+                removed_min: 0,
+                attr_changes_min: 2,
+                text_changes_min: 1,
+              },
+              url: { changed: true },
+              focus: { changed: false },
+              network: { requests_started_min: 3, requests_completed_min: 2 },
+              console_errors_max: 0,
+            },
+          },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  it("accepts a step with a partial expected_effect (only url.changed)", () => {
+    expect(
+      valid({
+        schema_version: 1,
+        name: "my.proc",
+        description: "Partial expected_effect",
+        kind: "leaf",
+        steps: [
+          {
+            id: "s1",
+            action: "browser_navigate",
+            with: { tab_id: "t_1", url: "https://example.com" },
+            expected_effect: { url: { changed: true } },
+          },
+        ],
+      }),
+    ).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -233,6 +283,25 @@ describe("PROCEDURE_SCHEMA — rejection cases", () => {
         description: "x".repeat(201),
         kind: "leaf",
         steps: [{ id: "s1", action: "browser_click" }],
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects expected_effect with an unknown sub-field (e.g. dom.unknown_field)", () => {
+    expect(
+      invalid({
+        schema_version: 1,
+        name: "my.proc",
+        description: "Bad expected_effect",
+        kind: "leaf",
+        steps: [
+          {
+            id: "s1",
+            action: "browser_click",
+            with: { tab_id: "t_1", ref: 1 },
+            expected_effect: { dom: { unknown_field: true } },
+          },
+        ],
       }),
     ).toBe(true);
   });
