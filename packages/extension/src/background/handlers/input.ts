@@ -1973,15 +1973,26 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
   router.register("browser.execute_js", async (raw) => {
     const params = parseExecuteJs(raw);
     const chromeId = resolveChromeId(tabIdMap, params.tab_id);
-    // args are intentionally ignored for v1: the injected wrapper uses
-    // indirect eval which has no parameter-binding site. Passing user args
-    // through would require wrapping `code` in a Function(...args) body,
-    // which re-introduces the string-interpolation attack surface the plan
-    // explicitly wants us to avoid. Document and move on.
-    const res = await execInTab(chromeId, injectedExecuteJs, [params.code] as const);
-    if (res.thrown) {
-      return { thrown: true, value: null, error: res.error ?? "" };
+    // Use CDP Runtime.evaluate instead of injected eval so this works on pages
+    // with Trusted Types CSP (e.g. Gmail), where string-based eval is blocked.
+    try {
+      const res = await cdp.withAttach(chromeId, () =>
+        cdp.send<{
+          result: { type: string; value?: unknown };
+          exceptionDetails?: { text: string; exception?: { description?: string } };
+        }>(chromeId, "Runtime.evaluate", {
+          expression: params.code,
+          returnByValue: true,
+          allowUnsafeEvalBlockedByCSP: true,
+        }),
+      );
+      if (res.exceptionDetails !== undefined) {
+        const msg = res.exceptionDetails.exception?.description ?? res.exceptionDetails.text;
+        return { thrown: true, value: null, error: msg ?? "runtime exception" };
+      }
+      return { thrown: false, value: res.result.value ?? null };
+    } catch (e) {
+      return { thrown: true, value: null, error: String(e) };
     }
-    return { thrown: false, value: res.value ?? null };
   });
 }
