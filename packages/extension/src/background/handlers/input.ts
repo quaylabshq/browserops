@@ -1966,7 +1966,7 @@ async function performTrustedType(
   text: string,
   delayMs: number,
   selector: string,
-): Promise<void> {
+): Promise<{ modeUsed: "insertText" | "trusted"; editorName: string | null }> {
   // Detect whether the focused element is a rich-text editor (Quill /
   // ProseMirror / Slate). For those frameworks, the per-char
   // keyDown+char+keyUp sequence double-inserts every character: the CDP
@@ -2020,7 +2020,6 @@ async function performTrustedType(
 
   const useInsertText = editorResult !== null && RICH_EDITOR_NAMES.has(editorResult.name);
 
-  // TODO(step 6): surface mode_used + editor in response
   await cdp.withAttach(chromeTabId, async () => {
     if (useInsertText) {
       // Single Input.insertText call: fires one beforeinput(insertText)
@@ -2057,6 +2056,11 @@ async function performTrustedType(
       }
     }
   });
+
+  return {
+    modeUsed: useInsertText ? "insertText" : "trusted",
+    editorName: editorResult?.name ?? null,
+  };
 }
 
 export function registerInputHandlers(router: Router, opts: InputOpts): void {
@@ -2069,6 +2073,8 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
     ): Promise<{
       clicked: boolean;
       mode: ClickMode;
+      mode_used: ClickMode;
+      site?: string;
       dismissed_overlay?: boolean;
       occluded?: boolean;
       occluder?: { tag: string; text: string; role: string | null } | null;
@@ -2078,9 +2084,26 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       const params = parseClick(raw);
       const chromeId = resolveChromeId(tabIdMap, params.tab_id);
       const selector = resolveSelector(refCache, params.tab_id, params.ref);
-      const mode: ClickMode = params.mode ?? "synthetic";
       const button = BUTTON_INDEX[params.button ?? "left"];
       const modifiers = params.modifiers ?? [];
+
+      // Auto-escalate to trusted mode on Tier 1 canvas apps when the caller
+      // did not explicitly specify a mode. Sites like Figma, Google Docs,
+      // Canva, Miro, Whimsical, and Figjam gate on isTrusted for click events.
+      let mode: ClickMode = params.mode ?? "synthetic";
+      let siteHostname: string | undefined;
+      if (params.mode === undefined) {
+        // Caller's explicit mode beats site hint auto-escalation.
+        const siteHint = await getSiteHintForTab(chromeId);
+        if (siteHint?.clickMode === "trusted") {
+          mode = "trusted";
+          // Retrieve the hostname for the site field in the response.
+          try {
+            const tab = await chrome.tabs.get(chromeId);
+            if (tab.url) siteHostname = new URL(tab.url).hostname;
+          } catch { /* ignore */ }
+        }
+      }
 
       if (mode === "trusted") {
         const center = await execInTab(chromeId, injectedResolveCenter, [selector] as const);
@@ -2098,7 +2121,14 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
           button as 0 | 1 | 2,
           modifiers,
         );
-        return { clicked: true, mode };
+        const result: {
+          clicked: true;
+          mode: ClickMode;
+          mode_used: ClickMode;
+          site?: string;
+        } = { clicked: true, mode, mode_used: mode };
+        if (siteHostname !== undefined) result.site = siteHostname;
+        return result;
       }
 
       const mods = modifierFlags(modifiers);
@@ -2129,12 +2159,15 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       const result: {
         clicked: boolean;
         mode: ClickMode;
+        mode_used: ClickMode;
+        site?: string;
         dismissed_overlay?: boolean;
         occluded?: boolean;
         occluder?: { tag: string; text: string; role: string | null } | null;
         retargeted?: boolean;
         suggestion?: string;
-      } = { clicked: true, mode };
+      } = { clicked: true, mode, mode_used: mode };
+      if (siteHostname !== undefined) result.site = siteHostname;
       if (dismissedOverlay) result.dismissed_overlay = true;
       if (res.occluded === true) {
         result.occluded = true;
@@ -2260,7 +2293,14 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
 
   router.register(
     "browser_type",
-    async (raw): Promise<{ typed: number; mode: TypeMode; cleared?: boolean }> => {
+    async (raw): Promise<{
+      typed: number;
+      mode: TypeMode;
+      mode_used: TypeMode | "insertText";
+      editor?: string;
+      site?: string;
+      cleared?: boolean;
+    }> => {
       const params = parseType(raw);
       const mode = resolveTypeMode(params.text, params.mode);
       const chromeId = resolveChromeId(tabIdMap, params.tab_id);
@@ -2300,7 +2340,7 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
           });
           cleared = true;
         }
-        await performTrustedType(cdp, chromeId, params.text, params.delay_ms ?? 0, selector);
+        const trustedInfo = await performTrustedType(cdp, chromeId, params.text, params.delay_ms ?? 0, selector);
         if (submit) {
           await cdp.withAttach(chromeId, async () => {
             await cdp.send(chromeId, "Input.dispatchKeyEvent", {
@@ -2311,10 +2351,31 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
             });
           });
         }
-        const result: { typed: number; mode: TypeMode; cleared?: boolean } = {
+        // Resolve site hostname if the site hint fired (editor detected via site tier).
+        let siteHostname: string | undefined;
+        if (trustedInfo.editorName !== null) {
+          const siteHint = await getSiteHintForTab(chromeId);
+          if (siteHint !== null) {
+            try {
+              const tab = await chrome.tabs.get(chromeId);
+              if (tab.url) siteHostname = new URL(tab.url).hostname;
+            } catch { /* ignore */ }
+          }
+        }
+        const result: {
+          typed: number;
+          mode: TypeMode;
+          mode_used: TypeMode | "insertText";
+          editor?: string;
+          site?: string;
+          cleared?: boolean;
+        } = {
           typed: params.text.length,
           mode,
+          mode_used: trustedInfo.modeUsed,
         };
+        if (trustedInfo.editorName !== null) result.editor = trustedInfo.editorName;
+        if (siteHostname !== undefined) result.site = siteHostname;
         if (cleared !== undefined) result.cleared = cleared;
         return result;
       }
@@ -2363,16 +2424,29 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
           `typed ${res.typed} characters but field content did not change; the target may be a rich-text wrapper that requires mode="trusted" or a different selector`,
         );
       }
-      const result: { typed: number; mode: TypeMode; cleared?: boolean } = {
+      const result: {
+        typed: number;
+        mode: TypeMode;
+        mode_used: TypeMode | "insertText";
+        editor?: string;
+        site?: string;
+        cleared?: boolean;
+      } = {
         typed: res.reflected,
         mode,
+        mode_used: mode,
       };
       if (cleared !== undefined) result.cleared = cleared;
       return result;
     },
   );
 
-  router.register("browser_press", async (raw): Promise<{ pressed: true }> => {
+  router.register("browser_press", async (raw): Promise<{
+    pressed: true;
+    dispatch: "synthetic" | "trusted";
+    editor?: string;
+    site?: string;
+  }> => {
     const params = parsePress(raw);
     const chromeId = resolveChromeId(tabIdMap, params.tab_id);
     // Partition into leading modifiers + trailing key. If the array is
@@ -2462,8 +2536,19 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
           });
         }
       });
-      // TODO(step 6): surface dispatch + editor in response
-      return { pressed: true };
+      // Surface dispatch mode, editor framework, and site hint in response.
+      const pressResult: { pressed: true; dispatch: "trusted"; editor?: string; site?: string } = {
+        pressed: true,
+        dispatch: "trusted",
+      };
+      if (probe.editor !== null) pressResult.editor = probe.editor;
+      if (siteHint !== null) {
+        try {
+          const tab = await chrome.tabs.get(chromeId);
+          if (tab.url) pressResult.site = new URL(tab.url).hostname;
+        } catch { /* ignore */ }
+      }
+      return pressResult;
     }
 
     // Synthetic path: dispatch KeyboardEvent to the drilled editor root (if
@@ -2476,8 +2561,19 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       injectedPress,
       [terminal, modifierFlags(mods), probe.rootSelector] as const,
     );
-    // TODO(step 6): surface dispatch + editor in response
-    return { pressed: true };
+    // Surface dispatch mode, editor framework, and site hint in response.
+    const pressResult: { pressed: true; dispatch: "synthetic"; editor?: string; site?: string } = {
+      pressed: true,
+      dispatch: "synthetic",
+    };
+    if (probe.editor !== null) pressResult.editor = probe.editor;
+    if (siteHint !== null) {
+      try {
+        const tab = await chrome.tabs.get(chromeId);
+        if (tab.url) pressResult.site = new URL(tab.url).hostname;
+      } catch { /* ignore */ }
+    }
+    return pressResult;
   });
 
   router.register("browser_scroll", async (raw): Promise<{ scrolled: true }> => {
