@@ -28,4 +28,6 @@ Work through them in this order unless you have a specific reason to reprioritiz
 - impl-02 (a11y verbose default): **shipped** — 4 commits.
 - impl-03 (browser_read pagination): **shipped** — 5 commits (Step 6 default tune deferred).
 - impl-04 (browser.find_and_replace): **shipped** — 9 commits.
-- impl-05: drafted, not implemented.
+- impl-05 (browser.query_selector): **shipped** — 5 commits.
+
+All five retrospective-§5 items are now implemented end-to-end. Each plan's step-by-step history is preserved in git log; see §5 of session-retrospective.md for the original priority ranking.
