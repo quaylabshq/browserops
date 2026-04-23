@@ -145,10 +145,11 @@ const pageEffectSchema: JSONSchemaObject = {
       required: ["requests_started", "requests_completed", "in_flight_at_end"] as const,
       additionalProperties: false,
     },
+    console_errors: { type: "integer", minimum: 0 },
     window_ms: { type: "integer", minimum: 0 },
     truncated: { type: "boolean" },
   },
-  required: ["dom", "url", "focus", "network", "window_ms"] as const,
+  required: ["dom", "url", "focus", "network", "console_errors", "window_ms"] as const,
   additionalProperties: true, // forward-compat for Phase 2+
 } as const;
 

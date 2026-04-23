@@ -132,6 +132,7 @@ export function registerNavigationHandlers(router: Router, opts: NavigationOpts)
           requests_completed: Math.max(0, netAfter.totalCompleted - netBefore.totalCompleted),
           in_flight_at_end: netAfter.inFlight,
         },
+        console_errors: 0,
         window_ms: 300,
       };
 
