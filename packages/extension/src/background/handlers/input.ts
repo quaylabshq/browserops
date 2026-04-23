@@ -330,10 +330,23 @@ function injectedClearField(
   selector: string,
   clearMode: string,
 ): { found: boolean; cleared: boolean } {
-  const el = document.querySelector(selector) as
+  const root = document.querySelector(selector) as
     | (HTMLElement & { value?: string })
     | null;
-  if (el === null) return { found: false, cleared: false };
+  if (root === null) return { found: false, cleared: false };
+  // Drill through role="textbox" wrappers (Slack Quill, Notion ProseMirror,
+  // Linear Lexical, Gmail Draft.js): the resolved element often isn't itself
+  // contenteditable and has no native value setter, so .value = "" would be a
+  // silent no-op on a plain <div>. Prefer the nearest descendant editor.
+  const elProto = Object.getPrototypeOf(root) as object | null;
+  const rootHasValueSetter = elProto !== null
+    && Object.getOwnPropertyDescriptor(elProto, "value")?.set !== undefined;
+  const inner = root.isContentEditable || rootHasValueSetter
+    ? null
+    : root.querySelector<HTMLElement & { value?: string }>(
+        '[contenteditable="true"], [contenteditable=""], .ql-editor, [data-slate-editor="true"], .ProseMirror, .public-DraftEditor-content',
+      );
+  const el = (inner ?? root) as HTMLElement & { value?: string };
   try { el.focus(); } catch { /* ignore */ }
 
   const isCE = el.isContentEditable;
@@ -410,13 +423,26 @@ function injectedTypePaste(
   selector: string,
   text: string,
   submit: boolean,
-): { found: boolean; typed: number } {
-  const el = document.querySelector(selector) as
+): { found: boolean; typed: number; reflected: number } {
+  const root = document.querySelector(selector) as
     | (HTMLElement & { value?: string; form?: HTMLFormElement })
     | null;
-  if (el === null) return { found: false, typed: 0 };
+  if (root === null) return { found: false, typed: 0, reflected: 0 };
+  // Drill into wrapper role="textbox" nodes (Slack Quill, Notion ProseMirror,
+  // Linear Lexical, Gmail Draft.js) so we hit the real contenteditable instead
+  // of silently no-op'ing a .value assignment on a plain <div>.
+  const rootProto = Object.getPrototypeOf(root) as object | null;
+  const rootHasValueSetter = rootProto !== null
+    && Object.getOwnPropertyDescriptor(rootProto, "value")?.set !== undefined;
+  const inner = root.isContentEditable || rootHasValueSetter
+    ? null
+    : root.querySelector<HTMLElement & { value?: string; form?: HTMLFormElement }>(
+        '[contenteditable="true"], [contenteditable=""], .ql-editor, [data-slate-editor="true"], .ProseMirror, .public-DraftEditor-content',
+      );
+  const el = (inner ?? root) as HTMLElement & { value?: string; form?: HTMLFormElement };
   el.focus();
 
+  const before = el.isContentEditable ? (el.textContent ?? "") : (el.value ?? "");
   if (el.isContentEditable) {
     document.execCommand("insertText", false, text);
   } else {
@@ -435,7 +461,8 @@ function injectedTypePaste(
   }
 
   if (submit) dispatchEnterAndSubmit(el);
-  return { found: true, typed: text.length };
+  const after = el.isContentEditable ? (el.textContent ?? "") : (el.value ?? "");
+  return { found: true, typed: text.length, reflected: Math.max(0, after.length - before.length) };
 }
 
 /**
@@ -453,16 +480,28 @@ function injectedTypeKeystroke(
   text: string,
   submit: boolean,
   delayMs: number,
-): Promise<{ found: boolean; typed: number }> {
-  return new Promise<{ found: boolean; typed: number }>((resolve) => {
-    const el = document.querySelector(selector) as
+): Promise<{ found: boolean; typed: number; reflected: number }> {
+  return new Promise<{ found: boolean; typed: number; reflected: number }>((resolve) => {
+    const root = document.querySelector(selector) as
       | (HTMLElement & { value?: string; form?: HTMLFormElement })
       | null;
-    if (el === null) {
-      resolve({ found: false, typed: 0 });
+    if (root === null) {
+      resolve({ found: false, typed: 0, reflected: 0 });
       return;
     }
+    // Drill past role="textbox" wrappers into the real editor so we don't fire
+    // per-char events at a plain <div> that no framework is listening to.
+    const rootProto = Object.getPrototypeOf(root) as object | null;
+    const rootHasValueSetter = rootProto !== null
+      && Object.getOwnPropertyDescriptor(rootProto, "value")?.set !== undefined;
+    const inner = root.isContentEditable || rootHasValueSetter
+      ? null
+      : root.querySelector<HTMLElement & { value?: string; form?: HTMLFormElement }>(
+          '[contenteditable="true"], [contenteditable=""], .ql-editor, [data-slate-editor="true"], .ProseMirror, .public-DraftEditor-content',
+        );
+    const el = (inner ?? root) as HTMLElement & { value?: string; form?: HTMLFormElement };
     el.focus();
+    const before = el.isContentEditable ? (el.textContent ?? "") : (el.value ?? "");
 
     const proto = Object.getPrototypeOf(el) as object | null;
     const setter = proto === null
@@ -493,7 +532,12 @@ function injectedTypeKeystroke(
     const typeOne = (): void => {
       if (index >= text.length) {
         if (submit) dispatchEnterAndSubmit(el);
-        resolve({ found: true, typed: text.length });
+        const after = el.isContentEditable ? (el.textContent ?? "") : (el.value ?? "");
+        resolve({
+          found: true,
+          typed: text.length,
+          reflected: Math.max(0, after.length - before.length),
+        });
         return;
       }
       const ch = text.charAt(index);
@@ -1953,7 +1997,7 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
         cleared = clearRes.cleared;
       }
 
-      let res: { found: boolean; typed: number };
+      let res: { found: boolean; typed: number; reflected: number };
       if (mode === "paste") {
         res = await execInTab(
           chromeId,
@@ -1971,8 +2015,19 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       if (res.found === false) {
         throw codedError("REF_STALE", `ref ${params.ref} no longer resolves in tab ${params.tab_id}`);
       }
+      // Verify the write actually landed. Rich-text editors (Quill, ProseMirror,
+      // Lexical, Draft.js) and some React-controlled inputs silently drop
+      // synthetic writes — the injected function dispatched N char events but
+      // the field contains nothing. Surface that explicitly so agents can
+      // fall back to clear_mode=select_all, mode=trusted, or execute_js.
+      if (params.text.length > 0 && res.reflected === 0) {
+        throw codedError(
+          "WRITE_NOT_REFLECTED",
+          `typed ${res.typed} characters but field content did not change; the target may be a rich-text wrapper that requires mode="trusted" or a different selector`,
+        );
+      }
       const result: { typed: number; mode: TypeMode; cleared?: boolean } = {
-        typed: res.typed,
+        typed: res.reflected,
         mode,
       };
       if (cleared !== undefined) result.cleared = cleared;
