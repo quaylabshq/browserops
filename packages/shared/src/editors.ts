@@ -17,7 +17,7 @@ export interface SiteEntry {
 
 export const SITE_REGISTRY: readonly SiteEntry[] = [
   // Quill
-  { match: /(^|\.)slack\.com$/, framework: 'quill', semanticKeyMode: 'trusted' },
+  { match: /(^|\.)slack\.com$/, framework: 'quill', semanticKeyMode: 'trusted', clickMode: 'trusted' },
   { match: /(^|\.)zendesk\.com$/, framework: 'quill' },
   { match: /(^|\.)intercom\.com$/, framework: 'quill' },
   { match: /(^|\.)trello\.com$/, framework: 'quill' },
