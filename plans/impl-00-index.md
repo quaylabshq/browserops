@@ -19,6 +19,7 @@ Each plan is self-contained and sequenceable. All plans share these conventions:
 | 03 | [browser_read pagination + selector](impl-03-browser-read-pagination.md) | §5 #4 | Kill disk round-trips |
 | 04 | [browser.find_and_replace](impl-04-find-and-replace.md) | §5 #6 | Substring edits in contenteditable |
 | 05 | [browser.query_selector](impl-05-query-selector.md) | §5 #8 | CSS-keyed describe_ref |
+| 06 | [Procedure memory](impl-06-procedures.md) | User request 2026-04-23 | Reusable action graphs |
 
 Work through them in this order unless you have a specific reason to reprioritize. Each plan notes its critical files and a list of open questions to decide before/during Step 1.
 
@@ -29,5 +30,6 @@ Work through them in this order unless you have a specific reason to reprioritiz
 - impl-03 (browser_read pagination): **shipped** — 5 commits (Step 6 default tune deferred).
 - impl-04 (browser.find_and_replace): **shipped** — 9 commits.
 - impl-05 (browser.query_selector): **shipped** — 5 commits.
+- impl-06 (procedure memory): **shipped** — 7 commits (G on).
 
-All five retrospective-§5 items are now implemented end-to-end. Each plan's step-by-step history is preserved in git log; see §5 of session-retrospective.md for the original priority ranking.
+All five retrospective-§5 items are implemented end-to-end. Plan 06 is a new initiative outside the retrospective — see the plan file for its design. Each plan's step-by-step history is preserved in git log; see §5 of session-retrospective.md for the original priority ranking.
