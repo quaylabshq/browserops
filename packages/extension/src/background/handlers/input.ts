@@ -6,7 +6,7 @@ import type { CdpManager } from "../cdp.js";
 /**
  * browser_click / type / press / scroll / hover / execute_js handlers.
  *
- * v1 coverage (plan 04 §4.3.12–4.3.18): DOM-only via
+ * v1 coverage: DOM-only via
  * chrome.scripting.executeScript. No CDP attach; the richer CDP-based
  * implementations described in plan 04 are deferred until we add a
  * debugger-session manager. In practice a DOM-only path handles ~90% of

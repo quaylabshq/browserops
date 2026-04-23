@@ -6,7 +6,6 @@ import type { Router } from "../router.js";
  *
  * Bridge-side autoconfirm (BROWSEROPS_AUTOCONFIRM) short-circuits before
  * the request is sent, so we always assume a real user decision is required.
- * See plans/06-autonomy-safety.md §4.5.
  *
  * UX (v1): flip action badge to "!", persist prompt to chrome.storage.session,
  * attempt to openPopup (MV3 requires a user gesture, so this often no-ops —

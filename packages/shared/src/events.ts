@@ -1,6 +1,5 @@
 /**
  * Named Event payloads from extension → bridge.
- * See plans/02-bridge-protocol.md §D5 and plans/03-extension.md.
  */
 
 export interface TabCreatedPayload {

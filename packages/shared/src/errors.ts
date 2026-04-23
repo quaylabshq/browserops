@@ -1,6 +1,5 @@
 /**
  * Canonical error codes for tool results and WebSocket Response envelopes.
- * See plans/00-overview.md §4.3.
  */
 export const ERROR_CODES = [
   "TAB_NOT_FOUND",
@@ -33,7 +32,7 @@ export function isErrorCode(value: unknown): value is ErrorCode {
 }
 
 /**
- * Canonical WebSocket close codes. See plans/00-overview.md §4.3.1.
+ * Canonical WebSocket close codes.
  */
 export const CloseCode = {
   BAD_TOKEN: 4001,

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { validateProcedure } from "./validator.js";
 
 // ---------------------------------------------------------------------------
-// Canonical §5 example (leaf) — same object proven valid in procedures.test.ts
+// Canonical example (leaf) — same object proven valid in procedures.test.ts
 // ---------------------------------------------------------------------------
 
 const EXAMPLE_LEAF = {
@@ -59,7 +59,7 @@ const EXAMPLE_LEAF = {
 // ---------------------------------------------------------------------------
 
 describe("validateProcedure — valid", () => {
-  it("accepts the §5 canonical leaf example", () => {
+  it("accepts the canonical leaf example", () => {
     const result = validateProcedure(EXAMPLE_LEAF);
     expect(result.valid).toBe(true);
     expect(result.errors).toBeUndefined();

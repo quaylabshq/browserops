@@ -63,7 +63,7 @@ async function readTabUrl(chromeTabId: number): Promise<string> {
  * "ref" matches if the selector resolves to an element that is present,
  * connected, and has a non-zero bounding box (a minimal visibility proxy
  * consistent with the DOM-only v1 path — a fuller CDP-based visibility
- * check is deferred; see plan 04 §4.3.17 for v2).
+ * check is deferred; see plan 04 for v2).
  */
 function injectedCheckWaitFor(
   selector: string | null,
