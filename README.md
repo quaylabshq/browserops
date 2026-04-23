@@ -1,6 +1,6 @@
 # browserops
 
-Claude Code plugin that drives your live Chrome browser. Claude calls MCP tools → a local Node bridge forwards them to a Chrome MV3 extension over WebSocket → the extension uses `chrome.tabs` / `chrome.scripting` / `chrome.debugger` to control your real browsing session (including logged-in sites).
+An MCP server that drives your live Chrome browser. Any MCP-compatible client (Claude Code, Cursor, Zed, Continue, Windsurf, custom SDK agents, …) calls `browser.*` tools → a local Node bridge forwards them to a Chrome MV3 extension over WebSocket → the extension uses `chrome.tabs` / `chrome.scripting` / `chrome.debugger` to control your real browsing session (including logged-in sites).
 
 See `plans/00-overview.md` for the full design.
 
@@ -10,7 +10,7 @@ See `plans/00-overview.md` for the full design.
 - Node.js ≥ 20.10
 - pnpm ≥ 9
 - Chrome ≥ 120
-- [Claude Code](https://docs.claude.com/en/docs/claude-code) installed
+- An MCP-compatible client (see [Connecting your MCP client](#connecting-your-mcp-client) below)
 
 ## Quick start
 
@@ -50,7 +50,33 @@ cat ~/.browserops/token
 
 The options page status pill stays red ("disconnected") until the bridge is running — that's fine.
 
-### 4. Register the bridge as an MCP server in Claude Code
+### 4. Register the bridge with your MCP client
+
+See the next section. Pick the client you use.
+
+### 5. Use it
+
+Open your MCP client. Chrome's extension icon turns green ("connected") within a second of the client spawning the bridge. Ask the agent things like:
+
+> What tabs do I have open?
+
+> Open a new tab to news.ycombinator.com and read the top story.
+
+> Take a screenshot of this tab.
+
+## Connecting your MCP client
+
+The bridge is a plain stdio MCP server. Any client that can spawn such a server can use it. The command to run is always:
+
+```
+node <path-to-repo>/packages/bridge/dist/index.js
+```
+
+(or, once published to npm, `npx browserops-bridge`).
+
+Pick your client below.
+
+### Claude Code
 
 ```bash
 claude mcp add browserops --scope user -- node "$PWD/packages/bridge/dist/index.js"
@@ -62,17 +88,94 @@ Verify:
 claude mcp list
 ```
 
-Claude Code launches the bridge on demand. You don't need to leave `node .../index.js` running — the MCP registration handles process lifecycle.
+### Cursor
 
-### 5. Use it
+Add to `~/.cursor/mcp.json` (global) or `.cursor/mcp.json` (project):
 
-Open Claude Code. Chrome's extension icon turns green ("connected") within a second. Ask Claude things like:
+```json
+{
+  "mcpServers": {
+    "browserops": {
+      "command": "node",
+      "args": ["/absolute/path/to/browser-exp/packages/bridge/dist/index.js"]
+    }
+  }
+}
+```
 
-> What tabs do I have open?
+Then enable **browserops** under Cursor Settings → MCP.
 
-> Open a new tab to news.ycombinator.com and read the top story.
+### Zed
 
-> Take a screenshot of this tab.
+Add to `~/.config/zed/settings.json`:
+
+```json
+{
+  "context_servers": {
+    "browserops": {
+      "command": {
+        "path": "node",
+        "args": ["/absolute/path/to/browser-exp/packages/bridge/dist/index.js"]
+      }
+    }
+  }
+}
+```
+
+### Continue (VS Code / JetBrains)
+
+Add to your Continue `config.json` under `experimental.modelContextProtocolServers`:
+
+```json
+{
+  "experimental": {
+    "modelContextProtocolServers": [
+      {
+        "transport": {
+          "type": "stdio",
+          "command": "node",
+          "args": ["/absolute/path/to/browser-exp/packages/bridge/dist/index.js"]
+        }
+      }
+    ]
+  }
+}
+```
+
+### Windsurf / Codeium
+
+Add to `~/.codeium/windsurf/mcp_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "browserops": {
+      "command": "node",
+      "args": ["/absolute/path/to/browser-exp/packages/bridge/dist/index.js"]
+    }
+  }
+}
+```
+
+### Custom / SDK-based agents
+
+The bridge speaks MCP over stdio using `@modelcontextprotocol/sdk`. Any client built on the official Python, TypeScript, Java, or C# SDKs can connect with:
+
+- `command`: `node`
+- `args`: `["/absolute/path/to/browser-exp/packages/bridge/dist/index.js"]`
+- no env vars required (token + extension ID are handled through `~/.browserops/`)
+
+The bridge also runs fine as `npx browserops-bridge` when the `@browserops/bridge` package is published.
+
+### Setting environment variables
+
+All clients support an `env` block next to `command` / `args`. For example, to bind a non-default port, put:
+
+```json
+"env": { "BROWSEROPS_PORT": "9876" }
+```
+
+Then mirror the same port in the extension's options page.
 
 ## Available tools (v1)
 
@@ -150,8 +253,8 @@ Currently: 14 shared tests (envelope guards + tool catalogue invariants), 12 bri
 
 ## Troubleshooting
 
-**Extension shows "disconnected" after Claude Code is running.**
-Check `~/.browserops/log.jsonl` — look for `{"dir":"system","event":"boot"}`. If absent, the bridge didn't launch; `claude mcp list` should show it.
+**Extension shows "disconnected" after the client is running.**
+Check `~/.browserops/log.jsonl` — look for `{"dir":"system","event":"boot"}`. If absent, the bridge didn't launch. Run the client's MCP-list command (e.g. `claude mcp list`, Cursor's MCP settings page) to confirm it's registered and the command path resolves.
 
 **"Bad token" close (code 4001) in the log.**
 Token mismatch. Re-copy `~/.browserops/token` into the extension's options page. Save.
@@ -164,6 +267,9 @@ Use `full_page: false` (default). Full-page capture ships with the v2 CDP work.
 
 **Port conflict on 8765.**
 Set `BROWSEROPS_PORT=9876` in your MCP config's `env` block, and put the same in the extension's options page.
+
+**Multiple MCP clients at once.**
+The bridge supports a primary/secondary role split: the first process to bind `:8765` owns the WebSocket to the extension, and subsequent bridge processes (e.g. a second client in another editor) proxy through a local control socket. No config change needed — just register the same command in both clients.
 
 ## Project layout
 
