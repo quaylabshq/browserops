@@ -4,7 +4,17 @@ import type { Router } from "../router.js";
 import type { RefCache } from "../ref-cache.js";
 import type { CdpManager } from "../cdp.js";
 import type { NetworkTracker } from "../network-tracker.js";
-import { withEffectObservation } from "./effects.js";
+import { withEffectObservation, checkEffectExpectation } from "./effects.js";
+
+type ExpectEffect = "any" | "dom" | "navigation" | "none";
+
+function parseExpectEffect(raw: unknown): ExpectEffect | undefined {
+  if (raw === undefined) return undefined;
+  if (raw !== "any" && raw !== "dom" && raw !== "navigation" && raw !== "none") {
+    throw Object.assign(new Error("expect_effect must be any|dom|navigation|none"), { code: "INVALID_PARAMS" as ErrorCode });
+  }
+  return raw;
+}
 
 /**
  * browser_click / type / press / scroll / hover / execute_js handlers.
@@ -82,6 +92,7 @@ interface ClickParams {
   modifiers?: readonly Modifier[];
   mode?: ClickMode;
   observe_effects?: boolean;
+  expect_effect?: ExpectEffect;
 }
 
 interface ClickAtParams {
@@ -151,12 +162,14 @@ interface TypeParams {
   clear_mode?: ClearMode;
   delay_ms?: number;
   observe_effects?: boolean;
+  expect_effect?: ExpectEffect;
 }
 
 interface PressParams {
   tab_id: string;
   keys: readonly string[];
   observe_effects?: boolean;
+  expect_effect?: ExpectEffect;
 }
 
 interface ScrollParams {
@@ -1584,6 +1597,8 @@ function parseClick(raw: Record<string, unknown>): ClickParams {
   if (mode !== undefined) result.mode = mode;
   // observe_effects defaults to true; only false explicitly disables observation.
   if (raw["observe_effects"] === false) result.observe_effects = false;
+  const expectEffect = parseExpectEffect(raw["expect_effect"]);
+  if (expectEffect !== undefined) result.expect_effect = expectEffect;
   return result;
 }
 
@@ -1655,6 +1670,8 @@ function parseType(raw: Record<string, unknown>): TypeParams {
   if (typeof delay === "number") result.delay_ms = delay;
   // observe_effects defaults to true; only false explicitly disables observation.
   if (raw["observe_effects"] === false) result.observe_effects = false;
+  const expectEffect = parseExpectEffect(raw["expect_effect"]);
+  if (expectEffect !== undefined) result.expect_effect = expectEffect;
   return result;
 }
 
@@ -1690,6 +1707,8 @@ function parsePress(raw: Record<string, unknown>): PressParams {
   const result: PressParams = { tab_id, keys: keys as string[] };
   // observe_effects defaults to true; only false explicitly disables observation.
   if (raw["observe_effects"] === false) result.observe_effects = false;
+  const expectEffect = parseExpectEffect(raw["expect_effect"]);
+  if (expectEffect !== undefined) result.expect_effect = expectEffect;
   return result;
 }
 
@@ -2112,6 +2131,7 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       retargeted?: boolean;
       suggestion?: string;
       page_effect?: PageEffect;
+      warnings?: string[];
     }> => {
       const params = parseClick(raw);
       const chromeId = resolveChromeId(tabIdMap, params.tab_id);
@@ -2120,6 +2140,7 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       const modifiers = params.modifiers ?? [];
       // observe_effects defaults to true; callers pass false to opt out.
       const observeEffects = params.observe_effects !== false;
+      const expectEffect = params.expect_effect;
 
       // Auto-escalate to trusted mode on Tier 1 canvas apps when the caller
       // did not explicitly specify a mode. Sites like Figma, Google Docs,
@@ -2177,7 +2198,14 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
             { chromeTabId: chromeId, windowMs: 300, networkTracker: network },
             dispatchTrusted,
           );
-          return { ...result, page_effect: effect };
+          const warning = checkEffectExpectation(effect, expectEffect);
+          const out: typeof result & { page_effect: PageEffect; warnings?: string[] } = { ...result, page_effect: effect };
+          if (warning !== null) out.warnings = [warning];
+          return out;
+        }
+        if (expectEffect !== undefined) {
+          const r = await dispatchTrusted();
+          return { ...r, warnings: ["expect_effect set but observe_effects:false — no effect data to verify against"] };
         }
         return dispatchTrusted();
       }
@@ -2249,7 +2277,14 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
           { chromeTabId: chromeId, windowMs: 300, networkTracker: network },
           async () => buildSyntheticResult(),
         );
-        return { ...result, page_effect: effect };
+        const warning = checkEffectExpectation(effect, expectEffect);
+        const out: typeof result & { page_effect: PageEffect; warnings?: string[] } = { ...result, page_effect: effect };
+        if (warning !== null) out.warnings = [warning];
+        return out;
+      }
+      if (expectEffect !== undefined) {
+        const r = buildSyntheticResult();
+        return { ...r, warnings: ["expect_effect set but observe_effects:false — no effect data to verify against"] };
       }
       return buildSyntheticResult();
     },
@@ -2368,6 +2403,7 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       site?: string;
       cleared?: boolean;
       page_effect?: PageEffect;
+      warnings?: string[];
     }> => {
       const params = parseType(raw);
       const mode = resolveTypeMode(params.text, params.mode);
@@ -2377,6 +2413,7 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       const clearMode = resolveClearMode(params);
       // observe_effects defaults to true; callers pass false to opt out.
       const observeEffects = params.observe_effects !== false;
+      const expectEffect = params.expect_effect;
       let cleared: boolean | undefined;
 
       if (mode === "trusted") {
@@ -2466,7 +2503,14 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
             { chromeTabId: chromeId, windowMs: 300, networkTracker: network },
             dispatchTrusted,
           );
-          return { ...result, page_effect: effect };
+          const warning = checkEffectExpectation(effect, expectEffect);
+          const out: typeof result & { page_effect: PageEffect; warnings?: string[] } = { ...result, page_effect: effect };
+          if (warning !== null) out.warnings = [warning];
+          return out;
+        }
+        if (expectEffect !== undefined) {
+          const r = await dispatchTrusted();
+          return { ...r, warnings: ["expect_effect set but observe_effects:false — no effect data to verify against"] };
         }
         return dispatchTrusted();
       }
@@ -2545,7 +2589,14 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
           { chromeTabId: chromeId, windowMs: 300, networkTracker: network },
           dispatchSynthetic,
         );
-        return { ...result, page_effect: effect };
+        const warning = checkEffectExpectation(effect, expectEffect);
+        const out: typeof result & { page_effect: PageEffect; warnings?: string[] } = { ...result, page_effect: effect };
+        if (warning !== null) out.warnings = [warning];
+        return out;
+      }
+      if (expectEffect !== undefined) {
+        const r = await dispatchSynthetic();
+        return { ...r, warnings: ["expect_effect set but observe_effects:false — no effect data to verify against"] };
       }
       return dispatchSynthetic();
     },
@@ -2557,11 +2608,13 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
     editor?: string;
     site?: string;
     page_effect?: PageEffect;
+    warnings?: string[];
   }> => {
     const params = parsePress(raw);
     const chromeId = resolveChromeId(tabIdMap, params.tab_id);
     // observe_effects defaults to true; callers pass false to opt out.
     const observeEffects = params.observe_effects !== false;
+    const expectEffect = params.expect_effect;
     // Partition into leading modifiers + trailing key. If the array is
     // entirely modifiers, fire the last one as the key (matches "hold Ctrl"
     // semantics for chord primitives). Accepts Primary as a modifier and
@@ -2675,7 +2728,14 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
           { chromeTabId: chromeId, windowMs: 300, networkTracker: network },
           dispatchTrustedPress,
         );
-        return { ...result, page_effect: effect };
+        const warning = checkEffectExpectation(effect, expectEffect);
+        const out: typeof result & { page_effect: PageEffect; warnings?: string[] } = { ...result, page_effect: effect };
+        if (warning !== null) out.warnings = [warning];
+        return out;
+      }
+      if (expectEffect !== undefined) {
+        const r = await dispatchTrustedPress();
+        return { ...r, warnings: ["expect_effect set but observe_effects:false — no effect data to verify against"] };
       }
       return dispatchTrustedPress();
     }
@@ -2716,7 +2776,14 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
         { chromeTabId: chromeId, windowMs: 300, networkTracker: network },
         dispatchSyntheticPress,
       );
-      return { ...result, page_effect: effect };
+      const warning = checkEffectExpectation(effect, expectEffect);
+      const out: typeof result & { page_effect: PageEffect; warnings?: string[] } = { ...result, page_effect: effect };
+      if (warning !== null) out.warnings = [warning];
+      return out;
+    }
+    if (expectEffect !== undefined) {
+      const r = await dispatchSyntheticPress();
+      return { ...r, warnings: ["expect_effect set but observe_effects:false — no effect data to verify against"] };
     }
     return dispatchSyntheticPress();
   });

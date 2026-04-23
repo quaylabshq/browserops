@@ -1,4 +1,5 @@
 import { NAVIGATE_TIMEOUT_MS, WAIT_FOR_TIMEOUT_CAP_MS, type ErrorCode, type PageEffect } from "@browserops/shared";
+import { checkEffectExpectation } from "./effects.js";
 import type { Router } from "../router.js";
 import type { RefCache } from "../ref-cache.js";
 import type { NetworkTracker } from "../network-tracker.js";
@@ -89,7 +90,7 @@ export function registerNavigationHandlers(router: Router, opts: NavigationOpts)
 
   router.register(
     "browser_navigate",
-    async (params): Promise<{ final_url: string; page_effect?: PageEffect }> => {
+    async (params): Promise<{ final_url: string; page_effect?: PageEffect; warnings?: string[] }> => {
       const chromeId = resolveChromeId(tabIdMap, params["tab_id"]);
       const url = params["url"];
       if (typeof url !== "string") {
@@ -99,6 +100,22 @@ export function registerNavigationHandlers(router: Router, opts: NavigationOpts)
       const shouldWait = waitForLoadRaw !== false;
       // observe_effects defaults to true; only explicit false opts out.
       const observeEffects = params["observe_effects"] !== false;
+
+      // Parse expect_effect
+      const expectEffectRaw = params["expect_effect"];
+      type ExpectEffect = "any" | "dom" | "navigation" | "none";
+      let expectEffect: ExpectEffect | undefined;
+      if (expectEffectRaw !== undefined) {
+        if (
+          expectEffectRaw !== "any" &&
+          expectEffectRaw !== "dom" &&
+          expectEffectRaw !== "navigation" &&
+          expectEffectRaw !== "none"
+        ) {
+          throw makeError("INVALID_PARAMS", "expect_effect must be any|dom|navigation|none");
+        }
+        expectEffect = expectEffectRaw as ExpectEffect;
+      }
 
       // Capture baseline before navigation begins.
       const baselineUrl = observeEffects ? await readTabUrl(chromeId) : "";
@@ -111,6 +128,12 @@ export function registerNavigationHandlers(router: Router, opts: NavigationOpts)
       const finalUrl = await readTabUrl(chromeId);
 
       if (!observeEffects || netBefore === null) {
+        if (expectEffect !== undefined) {
+          return {
+            final_url: finalUrl,
+            warnings: ["expect_effect set but observe_effects:false — no effect data to verify against"],
+          };
+        }
         return { final_url: finalUrl };
       }
 
@@ -136,7 +159,13 @@ export function registerNavigationHandlers(router: Router, opts: NavigationOpts)
         window_ms: 300,
       };
 
-      return { final_url: finalUrl, page_effect: effect };
+      const warning = checkEffectExpectation(effect, expectEffect);
+      const out: { final_url: string; page_effect: PageEffect; warnings?: string[] } = {
+        final_url: finalUrl,
+        page_effect: effect,
+      };
+      if (warning !== null) out.warnings = [warning];
+      return out;
     },
   );
 
