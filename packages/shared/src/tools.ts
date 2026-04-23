@@ -697,7 +697,17 @@ const typeTool: ToolDef = {
         enum: ["keystroke", "paste", "trusted"] as const,
       },
       submit: { type: "boolean", default: false },
-      clear_first: { type: "boolean", default: false },
+      clear_first: {
+        type: "boolean",
+        default: false,
+        description:
+          "Shorthand for clear_mode: 'auto'. When true, the field is cleared before typing. Prefer clear_mode for explicit control; leaving clear_first at its default plus setting clear_mode is the forward-compatible pattern.",
+      },
+      clear_mode: {
+        description:
+          "How to clear the field before typing when clear_first (or clear_mode itself) is set. 'value' assigns el.value='' — fastest, but silently skips contenteditable editors (Gmail body, Notion, Slack). 'select_all' uses a range/.select()+delete path with a keyboard-fallback — works on contenteditable. 'auto' (default when clearing) picks 'value' for form inputs and 'select_all' for contenteditable, then verifies the field is empty and retries with select_all+keyboard-delete if not.",
+        enum: ["value", "select_all", "auto"] as const,
+      },
       delay_ms: { type: "integer", minimum: 0, maximum: 200, default: 0 },
     },
   },
@@ -710,6 +720,10 @@ const typeTool: ToolDef = {
       mode: { enum: ["keystroke", "paste", "trusted"] as const },
       submitted: { type: "boolean" },
       navigated: { type: "boolean" },
+      cleared: {
+        type: "boolean",
+        description: "True when the field was cleared before typing (clear_first or clear_mode was set).",
+      },
     },
   },
   action_weight: 1,
