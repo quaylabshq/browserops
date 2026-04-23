@@ -23,6 +23,7 @@ import type { RateLimiter } from "./rate-limiter.js";
 import type { Safety, TabInfo } from "./safety.js";
 import type { TabRegistry } from "./tab-registry.js";
 import type { Logger } from "./logger.js";
+import { PROCEDURE_HANDLERS } from "./procedures/handlers.js";
 
 /**
  * Minimal shape McpBridgeServer needs to talk to the extension. Implemented
@@ -257,7 +258,26 @@ export class McpBridgeServer {
       return this.reply(id, name, toolError({ code: "INVALID_PARAMS", message }));
     }
 
-    // 4. Look up tab info (optional).
+    // 4a. In-process procedure handlers — bypass extension WebSocket entirely.
+    if (name.startsWith("procedures.")) {
+      const handler = PROCEDURE_HANDLERS[name];
+      if (handler) {
+        try {
+          const result = await handler(params);
+          return this.reply(id, name, toolOk(result));
+        } catch (err) {
+          const code = extractErrorCode(err);
+          const message = err instanceof Error ? err.message : String(err);
+          const details = err instanceof Error && "details" in err
+            ? (err as { details?: unknown }).details
+            : undefined;
+          return this.reply(id, name, toolError({ code, message, details }));
+        }
+      }
+      // Unknown procedures.* tool — fall through to let MethodNotFound fire below.
+    }
+
+    // 4b. Look up tab info (optional).
     const tabIdRaw = params["tab_id"];
     const tabId = typeof tabIdRaw === "string" ? tabIdRaw : undefined;
     let tab: TabInfo | undefined;

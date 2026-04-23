@@ -18,6 +18,8 @@ import { Safety } from "./safety.js";
 import { TabRegistry, type TabRecord } from "./tab-registry.js";
 import { loadOrCreateToken } from "./token.js";
 import { WSBridge } from "./ws-server.js";
+import { ensureIndex } from "./procedures/index-builder.js";
+import { proceduresRoot } from "./procedures/paths.js";
 
 const VERSION = "0.1.0";
 
@@ -75,6 +77,16 @@ async function main(): Promise<void> {
   const confirmation =
     role === "primary" ? wsBridge!.confirmation : (wsLike as RemoteWSBridge).confirmation;
   const safety = new Safety(riskyMatcher, confirmation, logger);
+
+  // Ensure procedure index is up-to-date before starting the MCP server.
+  // A broken procedure tree must not prevent the bridge from starting.
+  try {
+    await ensureIndex(proceduresRoot());
+    await logger.write({ dir: "system", event: "procedure_index_ready" });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`browserops: warn: failed to build procedure index: ${msg}\n`);
+  }
 
   const mcp = new McpBridgeServer({
     wsBridge: wsLike,
