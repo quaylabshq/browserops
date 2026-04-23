@@ -2,7 +2,7 @@ import type { ErrorCode } from "./errors.js";
 
 /**
  * Minimal structural representation of a JSON Schema draft 2020-12 object
- * sufficient for describing v1 browser.* tool params and results.
+ * sufficient for describing v1 browser_* tool params and results.
  * Authoritative schemas live in plans/04-tools.md.
  */
 export type JSONSchemaObject = {
@@ -117,7 +117,7 @@ const PROC_CODES = [
 // ---------------------------------------------------------------------------
 
 const listTabs: ToolDef = {
-  name: "browser.list_tabs",
+  name: "browser_list_tabs",
   description: "List all open tabs in the user's Chrome profile visible to the extension.",
   inputSchema: {
     type: "object",
@@ -141,7 +141,7 @@ const listTabs: ToolDef = {
 } as const;
 
 const currentTab: ToolDef = {
-  name: "browser.current_tab",
+  name: "browser_current_tab",
   description: "Return the currently active tab in the focused window.",
   inputSchema: {
     type: "object",
@@ -165,7 +165,7 @@ const currentTab: ToolDef = {
 } as const;
 
 const newTab: ToolDef = {
-  name: "browser.new_tab",
+  name: "browser_new_tab",
   description: "Open a new tab, optionally at a URL, optionally making it active.",
   inputSchema: {
     type: "object",
@@ -190,7 +190,7 @@ const newTab: ToolDef = {
 } as const;
 
 const closeTab: ToolDef = {
-  name: "browser.close_tab",
+  name: "browser_close_tab",
   description: "Close a tab.",
   inputSchema: {
     type: "object",
@@ -214,7 +214,7 @@ const closeTab: ToolDef = {
 } as const;
 
 const pinnedTab: ToolDef = {
-  name: "browser.pinned_tab",
+  name: "browser_pinned_tab",
   description:
     "Return the user-selected \"home base\" tab (set via the extension popup \"Use this tab\" button). Call this FIRST when the user refers to \"this tab\" or is working on a specific page they already have open — thread the returned tab_id through the rest of the turn instead of opening a new tab. Errors with NO_PINNED_TAB if the user has not pinned one. Typically called from a navigator sub-agent.",
   inputSchema: {
@@ -238,7 +238,7 @@ const pinnedTab: ToolDef = {
 } as const;
 
 const switchTab: ToolDef = {
-  name: "browser.switch_tab",
+  name: "browser_switch_tab",
   description: "Make the given tab active and focus its window.",
   inputSchema: {
     type: "object",
@@ -263,7 +263,7 @@ const switchTab: ToolDef = {
 } as const;
 
 const navigate: ToolDef = {
-  name: "browser.navigate",
+  name: "browser_navigate",
   description: "Point the tab at a URL and optionally wait for page load.",
   inputSchema: {
     type: "object",
@@ -298,7 +298,7 @@ const navigate: ToolDef = {
 } as const;
 
 const back: ToolDef = {
-  name: "browser.back",
+  name: "browser_back",
   description: "Go back one step in the tab's history.",
   inputSchema: {
     type: "object",
@@ -327,7 +327,7 @@ const back: ToolDef = {
 } as const;
 
 const forward: ToolDef = {
-  name: "browser.forward",
+  name: "browser_forward",
   description: "Go forward one step in the tab's history.",
   inputSchema: {
     type: "object",
@@ -356,7 +356,7 @@ const forward: ToolDef = {
 } as const;
 
 const reload: ToolDef = {
-  name: "browser.reload",
+  name: "browser_reload",
   description: "Reload the current page.",
   inputSchema: {
     type: "object",
@@ -386,7 +386,7 @@ const reload: ToolDef = {
 } as const;
 
 const screenshot: ToolDef = {
-  name: "browser.screenshot",
+  name: "browser_screenshot",
   description:
     "Capture a JPEG (default) or PNG of the tab and return it base64-encoded. Default is JPEG quality 40, downscaled so the longest edge is <= 1024 px, which typically yields 30-50k base64 chars. Set full_quality:true to bypass downscale and use quality 95; override max_dimension or quality individually for finer control.",
   inputSchema: {
@@ -423,7 +423,7 @@ const screenshot: ToolDef = {
 } as const;
 
 const read: ToolDef = {
-  name: "browser.read",
+  name: "browser_read",
   description:
     "Read structured page content in one of four modes (a11y_tree, markdown, sanitized_html, text). a11y_tree is the canonical source of refs. By default a11y_tree returns a compact tree dropping role='generic' / name-less nodes; pass verbose:true for the legacy full tree.",
   inputSchema: {
@@ -498,7 +498,7 @@ const read: ToolDef = {
 } as const;
 
 const click: ToolDef = {
-  name: "browser.click",
+  name: "browser_click",
   description:
     "Click an element identified by ref. Two dispatch modes: 'synthetic' (default, DOM-only — fires pointer/mouse events in the page's main world; works on >90% of real pages), 'trusted' (CDP Input.dispatchMouseEvent — real trusted events; required for sites that gate on isTrusted like Cloudflare Turnstile, canvas widgets, and some e-commerce CAPTCHA layers). Trusted mode attaches chrome.debugger which briefly shows the \"being controlled by automation\" banner.",
   inputSchema: {
@@ -568,9 +568,9 @@ const click: ToolDef = {
 } as const;
 
 const clickAt: ToolDef = {
-  name: "browser.click_at",
+  name: "browser_click_at",
   description:
-    "Click at viewport coordinates (x, y) — no ref required. Escape hatch for canvas, maps, games, and anything the a11y walker can't address. Supports the same synthetic/trusted modes as browser.click.",
+    "Click at viewport coordinates (x, y) — no ref required. Escape hatch for canvas, maps, games, and anything the a11y walker can't address. Supports the same synthetic/trusted modes as browser_click.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -610,9 +610,9 @@ const clickAt: ToolDef = {
 } as const;
 
 const clickByText: ToolDef = {
-  name: "browser.click_by_text",
+  name: "browser_click_by_text",
   description:
-    "Click the visible element whose accessible name matches the given text. Bypasses the a11y-tree ref mechanism — use this when browser.read didn't surface the element as a ref (common on SPA sites with div-wrapped click handlers), or when the agent knows the exact button label and doesn't want to pay for a full read first. Typically called from an operator sub-agent.",
+    "Click the visible element whose accessible name matches the given text. Bypasses the a11y-tree ref mechanism — use this when browser_read didn't surface the element as a ref (common on SPA sites with div-wrapped click handlers), or when the agent knows the exact button label and doesn't want to pay for a full read first. Typically called from an operator sub-agent.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -676,7 +676,7 @@ const clickByText: ToolDef = {
 } as const;
 
 const typeTool: ToolDef = {
-  name: "browser.type",
+  name: "browser_type",
   description:
     "Type text into an element identified by ref. Three dispatch modes: 'keystroke' (default for short text, fires per-character keydown/beforeinput/input/keyup — what autocompletes and per-keystroke validators need), 'paste' (bulk-assign the value in one shot, use for long text where per-char events are wasteful), 'trusted' (CDP-backed real trusted events; requires debugger attach). Default resolves to 'keystroke' for text <=64 chars, 'paste' otherwise.",
   inputSchema: {
@@ -720,9 +720,9 @@ const typeTool: ToolDef = {
 } as const;
 
 const findAndReplace: ToolDef = {
-  name: "browser.find_and_replace",
+  name: "browser_find_and_replace",
   description:
-    "Replace a substring inside an editable element without clearing the whole field. Works on <input>, <textarea>, and contenteditable. Target resolves to `ref` if given, otherwise document.activeElement. Two dispatch modes mirror browser.type: 'synthetic' (default; beforeinput + execCommand insertText + Range fallback) and 'trusted' (CDP Input.insertText; required on rich editors like Gmail/Notion/Slate that gate on isTrusted).",
+    "Replace a substring inside an editable element without clearing the whole field. Works on <input>, <textarea>, and contenteditable. Target resolves to `ref` if given, otherwise document.activeElement. Two dispatch modes mirror browser_type: 'synthetic' (default; beforeinput + execCommand insertText + Range fallback) and 'trusted' (CDP Input.insertText; required on rich editors like Gmail/Notion/Slate that gate on isTrusted).",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -760,7 +760,7 @@ const findAndReplace: ToolDef = {
 } as const;
 
 const press: ToolDef = {
-  name: "browser.press",
+  name: "browser_press",
   description:
     "Send a keyboard-only chord to the tab (CDP key names). Does not target a specific ref.",
   inputSchema: {
@@ -797,7 +797,7 @@ const press: ToolDef = {
 } as const;
 
 const scroll: ToolDef = {
-  name: "browser.scroll",
+  name: "browser_scroll",
   description:
     "Scroll the page (directional) or scroll a specific element into view (ref-based). Exactly one of direction or ref.",
   inputSchema: {
@@ -842,7 +842,7 @@ const scroll: ToolDef = {
 } as const;
 
 const hover: ToolDef = {
-  name: "browser.hover",
+  name: "browser_hover",
   description:
     "Move the synthetic mouse over an element identified by ref (fires CSS :hover and pointer events).",
   inputSchema: {
@@ -873,9 +873,9 @@ const hover: ToolDef = {
 } as const;
 
 const describeRef: ToolDef = {
-  name: "browser.describe_ref",
+  name: "browser_describe_ref",
   description:
-    "Return the live state of an element referenced by a prior browser.read(a11y_tree). Cheaper than re-reading the whole tree when you just need to check \"is the button enabled yet?\", \"did my input land?\", or \"is the focus where I expect?\". Does not mutate the page.",
+    "Return the live state of an element referenced by a prior browser_read(a11y_tree). Cheaper than re-reading the whole tree when you just need to check \"is the button enabled yet?\", \"did my input land?\", or \"is the focus where I expect?\". Does not mutate the page.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -957,7 +957,7 @@ const elementStateSchema = {
 } as const;
 
 const querySelector: ToolDef = {
-  name: "browser.query_selector",
+  name: "browser_query_selector",
   description:
     "Read-only CSS-selector inspector. Returns the same element-state shape as describe_ref, keyed on a selector rather than a ref — use when the a11y walker didn't emit a ref for the element you need (generic div, unusual role, etc.). all:true returns up to 50 matches with a `total` count for truncation detection. No ref assignment, no mutation.",
   inputSchema: {
@@ -986,7 +986,7 @@ const querySelector: ToolDef = {
 } as const;
 
 const waitFor: ToolDef = {
-  name: "browser.wait_for",
+  name: "browser_wait_for",
   description:
     "Block until a ref, a text substring, or a URL pattern appears. Post-navigation/XHR synchronisation.",
   inputSchema: {
@@ -1027,9 +1027,9 @@ const waitFor: ToolDef = {
 } as const;
 
 const waitForIdle: ToolDef = {
-  name: "browser.wait_for_idle",
+  name: "browser_wait_for_idle",
   description:
-    "Block until the tab has no in-flight HTTP requests for `quiet_ms` consecutive milliseconds, or until `timeout_ms` elapses. Use after navigate/click when the DOM is drawn but async data is still loading — browser.wait_for only sees DOM signals, this sees the network. Requires webRequest permission.",
+    "Block until the tab has no in-flight HTTP requests for `quiet_ms` consecutive milliseconds, or until `timeout_ms` elapses. Use after navigate/click when the DOM is drawn but async data is still loading — browser_wait_for only sees DOM signals, this sees the network. Requires webRequest permission.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -1058,7 +1058,7 @@ const waitForIdle: ToolDef = {
 } as const;
 
 const executeJs: ToolDef = {
-  name: "browser.execute_js",
+  name: "browser_execute_js",
   description:
     "Execute JavaScript inside the tab's main world. Always risky; gated on every invocation.",
   inputSchema: {
@@ -1123,11 +1123,11 @@ const entrySchema: JSONSchemaObject = {
 } as const;
 
 const proceduresList: ToolDef = {
-  name: "procedures.list",
+  name: "procedures_list",
   description:
     "List all stored procedures as metadata-only entries (no YAML bodies). " +
     "Scope to a specific domain or composite procedure. " +
-    "Use procedures.get to retrieve a full YAML body.",
+    "Use procedures_get to retrieve a full YAML body.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -1174,10 +1174,11 @@ const proceduresList: ToolDef = {
 } as const;
 
 const proceduresSearch: ToolDef = {
-  name: "procedures.search",
+  name: "procedures_search",
   description:
     "Full-text search over the procedure catalogue using pre-tokenized index fields. " +
-    "Returns ranked metadata-only matches; retrieve the YAML body with procedures.get.",
+    "Returns ranked metadata-only matches; retrieve the YAML body with procedures_get. " +
+    'REQUIRED ARGUMENTS: {"query": "<search tokens>"}. Example: {"query": "mem0 login"}.',
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -1211,10 +1212,11 @@ const proceduresSearch: ToolDef = {
 } as const;
 
 const proceduresGet: ToolDef = {
-  name: "procedures.get",
+  name: "procedures_get",
   description:
     "Retrieve the full raw YAML body and metadata for a single procedure by name. " +
-    "Errors with PROC_NOT_FOUND if the name does not exist in the index.",
+    "Errors with PROC_NOT_FOUND if the name does not exist in the index. " +
+    'REQUIRED ARGUMENTS: {"name": "<procedure name>"}. Example: {"name": "tempmail.get_email"}.',
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -1250,11 +1252,12 @@ const proceduresGet: ToolDef = {
 } as const;
 
 const proceduresSave: ToolDef = {
-  name: "procedures.save",
+  name: "procedures_save",
   description:
     "Validate and persist a procedure YAML. Parses, schema-validates, resolves uses: references, " +
     "then atomically writes to disk and rebuilds the search index. " +
-    "Set overwrite: true to update an existing procedure.",
+    "Set overwrite: true to update an existing procedure. " +
+    'REQUIRED ARGUMENTS: {"name": "<procedure name>", "yaml": "<full YAML body>"}.',
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -1282,10 +1285,11 @@ const proceduresSave: ToolDef = {
 } as const;
 
 const proceduresPromote: ToolDef = {
-  name: "procedures.promote",
+  name: "procedures_promote",
   description:
     "Move a sub-procedure from a composite's subs/ folder into the top-level shared/ folder, " +
-    "making it independently reusable. Rebuilds the index and rewrites any affected uses: references.",
+    "making it independently reusable. Rebuilds the index and rewrites any affected uses: references. " +
+    'REQUIRED ARGUMENTS: {"name": "<sub-procedure name>", "from_owner": "<composite name>"}.',
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -1312,11 +1316,12 @@ const proceduresPromote: ToolDef = {
 } as const;
 
 const proceduresDelete: ToolDef = {
-  name: "procedures.delete",
+  name: "procedures_delete",
   description:
     "Delete a procedure by name, cascading to sub-procedures for composites. " +
     "Refuses if the procedure is referenced by others unless force: true is set. " +
-    "Rebuilds the search index after deletion.",
+    "Rebuilds the search index after deletion. " +
+    'REQUIRED ARGUMENTS: {"name": "<procedure name>"}.',
   inputSchema: {
     type: "object",
     additionalProperties: false,

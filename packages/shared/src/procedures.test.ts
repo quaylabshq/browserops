@@ -52,7 +52,7 @@ const EXAMPLE_LEAF_PROCEDURE = {
     {
       url_matches: "^https://mail\\.google\\.com/",
       fallback: {
-        action: "browser.navigate",
+        action: "browser_navigate",
         with: { url: "https://mail.google.com/mail/u/0/" },
       },
     },
@@ -60,14 +60,14 @@ const EXAMPLE_LEAF_PROCEDURE = {
   steps: [
     {
       id: "open_compose",
-      action: "browser.click_by_text",
+      action: "browser_click_by_text",
       with: {
         tab_id: "{{tab_id}}",
         text: "Compose",
       },
       wait_for: { selector: ".compose-dialog" },
       bind: "compose_ref",
-      on_fail: [{ action: "browser.click", with: { tab_id: "{{tab_id}}", ref: 1 } }],
+      on_fail: [{ action: "browser_click", with: { tab_id: "{{tab_id}}", ref: 1 } }],
     },
   ],
   success_criteria: [{ toast_text: "Message sent" }],
@@ -125,7 +125,7 @@ describe("PROCEDURE_SCHEMA — valid cases", () => {
         name: "my.proc",
         description: "A minimal procedure",
         kind: "leaf",
-        steps: [{ id: "s1", action: "browser.click", with: { ref: 1 } }],
+        steps: [{ id: "s1", action: "browser_click", with: { ref: 1 } }],
       }),
     ).toBe(true);
   });
@@ -156,7 +156,7 @@ describe("PROCEDURE_SCHEMA — rejection cases", () => {
         name: "Gmail.SendEmail",
         description: "Bad name",
         kind: "leaf",
-        steps: [{ id: "s1", action: "browser.click" }],
+        steps: [{ id: "s1", action: "browser_click" }],
       }),
     ).toBe(true);
   });
@@ -168,7 +168,7 @@ describe("PROCEDURE_SCHEMA — rejection cases", () => {
         name: "1proc",
         description: "Bad name",
         kind: "leaf",
-        steps: [{ id: "s1", action: "browser.click" }],
+        steps: [{ id: "s1", action: "browser_click" }],
       }),
     ).toBe(true);
   });
@@ -176,7 +176,7 @@ describe("PROCEDURE_SCHEMA — rejection cases", () => {
   it("rejects steps array exceeding maxItems (40)", () => {
     const manySteps = Array.from({ length: 41 }, (_, i) => ({
       id: `s${i}`,
-      action: "browser.click",
+      action: "browser_click",
     }));
     expect(
       invalid({
@@ -196,7 +196,7 @@ describe("PROCEDURE_SCHEMA — rejection cases", () => {
         name: "my.proc",
         description: "Too many tags",
         kind: "leaf",
-        steps: [{ id: "s1", action: "browser.click" }],
+        steps: [{ id: "s1", action: "browser_click" }],
         tags: ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k"],
       }),
     ).toBe(true);
@@ -208,7 +208,7 @@ describe("PROCEDURE_SCHEMA — rejection cases", () => {
         schema_version: 1,
         description: "Missing name",
         kind: "leaf",
-        steps: [{ id: "s1", action: "browser.click" }],
+        steps: [{ id: "s1", action: "browser_click" }],
       }),
     ).toBe(true);
   });
@@ -232,7 +232,7 @@ describe("PROCEDURE_SCHEMA — rejection cases", () => {
         name: "my.proc",
         description: "x".repeat(201),
         kind: "leaf",
-        steps: [{ id: "s1", action: "browser.click" }],
+        steps: [{ id: "s1", action: "browser_click" }],
       }),
     ).toBe(true);
   });

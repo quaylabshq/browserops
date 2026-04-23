@@ -45,6 +45,6 @@ Run mem0.qa_signup. Report the temp email used and the API key string.
 - A procedure is trusted only when `success_count >= 1`.
 - For multi-step flows: test each leaf individually first, then compose.
 
-### Use `browser.wait_for` for polling, not manual reloads
-- Any step that waits for async state (email arriving, page loading, element appearing) must use a `browser.wait_for` action step with an explicit `timeout`.
-- Never use `browser.reload` as a substitute for polling — it fires once and does not retry.
+### Use `browser_wait_for` for polling, not manual reloads
+- Any step that waits for async state (email arriving, page loading, element appearing) must use a `browser_wait_for` action step with an explicit `timeout`.
+- Never use `browser_reload` as a substitute for polling — it fires once and does not retry.

@@ -32,9 +32,9 @@ export interface ConfirmationChannel {
  * Bridge-side safety layer. See plans/06-autonomy-safety.md.
  *
  * Coarse heuristic in v1:
- * - `browser.execute_js` → always risky.
- * - `browser.type` with `submit: true` on a sensitive URL → risky.
- * - `browser.click` on a sensitive URL → risky (no ref-metadata inspection yet).
+ * - `browser_execute_js` → always risky.
+ * - `browser_type` with `submit: true` on a sensitive URL → risky.
+ * - `browser_click` on a sensitive URL → risky (no ref-metadata inspection yet).
  *
  * Refinement to include ref role/name and password-field detection is
  * deferred to v2 per plan 06 open questions.
@@ -58,22 +58,22 @@ export class Safety {
   checkRisky(input: SafetyCheckInput): RiskVerdict {
     const { tool, params, tab } = input;
 
-    if (tool === "browser.execute_js") {
+    if (tool === "browser_execute_js") {
       return { risky: true, reason: "execute_js is always treated as risky" };
     }
 
     const url = tab?.url;
     const sensitive = url ? this.matcher.matches(url) : false;
 
-    if (tool === "browser.type" && params["submit"] === true && sensitive) {
+    if (tool === "browser_type" && params["submit"] === true && sensitive) {
       return { risky: true, reason: `type with submit on sensitive domain (${hostOf(url)})` };
     }
 
-    if (tool === "browser.click" && sensitive) {
+    if (tool === "browser_click" && sensitive) {
       return { risky: true, reason: `click on sensitive domain (${hostOf(url)})` };
     }
 
-    if (tool === "browser.find_and_replace" && sensitive) {
+    if (tool === "browser_find_and_replace" && sensitive) {
       return {
         risky: true,
         reason: `find_and_replace on sensitive domain (${hostOf(url)})`,

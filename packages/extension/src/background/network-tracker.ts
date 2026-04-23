@@ -1,6 +1,6 @@
 /**
  * Tracks in-flight HTTP requests per chrome tab via chrome.webRequest.
- * Consumed by browser.wait_for_idle to know when the network has quiesced.
+ * Consumed by browser_wait_for_idle to know when the network has quiesced.
  *
  * Limitations:
  *   - Redirects bump the count briefly (onBeforeRequest fires for the

@@ -34,11 +34,11 @@ function makeSafety(sensitive: readonly string[]): Safety {
   return new Safety(stubMatcher(sensitive), stubChannel(), stubLogger());
 }
 
-describe("Safety.checkRisky for browser.find_and_replace", () => {
+describe("Safety.checkRisky for browser_find_and_replace", () => {
   it("is risky on a sensitive domain", () => {
     const s = makeSafety(["chase.com"]);
     const v = s.checkRisky({
-      tool: "browser.find_and_replace",
+      tool: "browser_find_and_replace",
       params: { tab_id: "t_1", find: "x", replace: "y" },
       tab: { url: "https://www.chase.com/transfer" },
     });
@@ -49,7 +49,7 @@ describe("Safety.checkRisky for browser.find_and_replace", () => {
   it("is not risky on a non-sensitive domain", () => {
     const s = makeSafety(["chase.com"]);
     const v = s.checkRisky({
-      tool: "browser.find_and_replace",
+      tool: "browser_find_and_replace",
       params: { tab_id: "t_1", find: "x", replace: "y" },
       tab: { url: "https://example.com/" },
     });
@@ -59,7 +59,7 @@ describe("Safety.checkRisky for browser.find_and_replace", () => {
   it("is not risky without a tab (no URL to classify)", () => {
     const s = makeSafety(["chase.com"]);
     const v = s.checkRisky({
-      tool: "browser.find_and_replace",
+      tool: "browser_find_and_replace",
       params: { tab_id: "t_1", find: "x", replace: "y" },
       tab: undefined,
     });
