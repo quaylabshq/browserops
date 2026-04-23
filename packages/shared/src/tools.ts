@@ -94,6 +94,74 @@ const tabSummarySchema: JSONSchemaObject = {
 } as const;
 
 // ---------------------------------------------------------------------------
+// Shared page_effect schema fragment (returned by the four mutating tools
+// when observe_effects is true / not suppressed).
+// ---------------------------------------------------------------------------
+
+const pageEffectSchema: JSONSchemaObject = {
+  type: "object",
+  description:
+    "Measurable changes observed on the page in ~300ms after dispatch. " +
+    "Omitted when observe_effects is false.",
+  properties: {
+    dom: {
+      type: "object",
+      properties: {
+        added: { type: "integer", minimum: 0 },
+        removed: { type: "integer", minimum: 0 },
+        attr_changes: { type: "integer", minimum: 0 },
+        text_changes: { type: "integer", minimum: 0 },
+      },
+      required: ["added", "removed", "attr_changes", "text_changes"] as const,
+      additionalProperties: false,
+    },
+    url: {
+      type: "object",
+      properties: {
+        changed: { type: "boolean" },
+        before: { type: "string" },
+        after: { type: "string" },
+      },
+      required: ["changed"] as const,
+      additionalProperties: false,
+    },
+    focus: {
+      type: "object",
+      properties: {
+        changed: { type: "boolean" },
+        before_selector: { type: ["string", "null"] },
+        after_selector: { type: ["string", "null"] },
+      },
+      required: ["changed"] as const,
+      additionalProperties: false,
+    },
+    network: {
+      type: "object",
+      properties: {
+        requests_started: { type: "integer", minimum: 0 },
+        requests_completed: { type: "integer", minimum: 0 },
+        in_flight_at_end: { type: "integer", minimum: 0 },
+      },
+      required: ["requests_started", "requests_completed", "in_flight_at_end"] as const,
+      additionalProperties: false,
+    },
+    window_ms: { type: "integer", minimum: 0 },
+    truncated: { type: "boolean" },
+  },
+  required: ["dom", "url", "focus", "network", "window_ms"] as const,
+  additionalProperties: true, // forward-compat for Phase 2+
+} as const;
+
+const observeEffectsInputSchema: JSONSchemaObject = {
+  type: "boolean",
+  default: true,
+  description:
+    "Observe page effects (DOM mutations, URL change, focus change, " +
+    "network activity) in a short window after dispatch and return them " +
+    "as page_effect. Set to false to skip observation for zero overhead.",
+} as const;
+
+// ---------------------------------------------------------------------------
 // Error-code bundles
 // ---------------------------------------------------------------------------
 
@@ -268,7 +336,7 @@ const switchTab: ToolDef = {
 
 const navigate: ToolDef = {
   name: "browser_navigate",
-  description: "Point the tab at a URL and optionally wait for page load.",
+  description: "Point the tab at a URL and optionally wait for page load. Returns page_effect when observe_effects is on.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -277,6 +345,7 @@ const navigate: ToolDef = {
       tab_id: tabIdSchema,
       url: urlSchema,
       wait_for_load: { type: "boolean", default: true },
+      observe_effects: observeEffectsInputSchema,
     },
   },
   outputSchema: {
@@ -288,6 +357,7 @@ const navigate: ToolDef = {
       // status_code is not populated in the DOM-only v1 path: without a CDP
       // attach we cannot observe the HTTP response code for the navigation.
       // Deferred to v2.
+      page_effect: pageEffectSchema,
     },
   },
   action_weight: 1,
@@ -504,7 +574,7 @@ const read: ToolDef = {
 const click: ToolDef = {
   name: "browser_click",
   description:
-    "Click an element identified by ref. Two dispatch modes: 'synthetic' (default, DOM-only — fires pointer/mouse events in the page's main world; works on >90% of real pages), 'trusted' (CDP Input.dispatchMouseEvent — real trusted events; required for sites that gate on isTrusted like Cloudflare Turnstile, canvas widgets, and some e-commerce CAPTCHA layers). Trusted mode attaches chrome.debugger which briefly shows the \"being controlled by automation\" banner. On Tier 1 canvas apps (Figma, Google Docs, Canva, Miro, Whimsical, Figjam) the extension auto-escalates to trusted mode when the caller does not specify a mode. Returns `{clicked, mode_used, site?}`. `mode_used` is the dispatch mode that actually ran (may differ from requested `mode` after canvas-app auto-escalation). `site` is the matched hostname when a Tier 1 site triggered auto-escalation.",
+    "Click an element identified by ref. Two dispatch modes: 'synthetic' (default, DOM-only — fires pointer/mouse events in the page's main world; works on >90% of real pages), 'trusted' (CDP Input.dispatchMouseEvent — real trusted events; required for sites that gate on isTrusted like Cloudflare Turnstile, canvas widgets, and some e-commerce CAPTCHA layers). Trusted mode attaches chrome.debugger which briefly shows the \"being controlled by automation\" banner. On Tier 1 canvas apps (Figma, Google Docs, Canva, Miro, Whimsical, Figjam) the extension auto-escalates to trusted mode when the caller does not specify a mode. Returns `{clicked, mode_used, site?, page_effect?}`. `mode_used` is the dispatch mode that actually ran (may differ from requested `mode` after canvas-app auto-escalation). `site` is the matched hostname when a Tier 1 site triggered auto-escalation.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -527,6 +597,7 @@ const click: ToolDef = {
         type: "boolean",
         default: false,
       },
+      observe_effects: observeEffectsInputSchema,
     },
   },
   outputSchema: {
@@ -561,6 +632,7 @@ const click: ToolDef = {
       // True when the selector landed on a non-interactive descendant and
       // we walked up to the nearest interactive ancestor to dispatch on.
       retargeted: { type: "boolean" },
+      page_effect: pageEffectSchema,
     },
   },
   action_weight: 1,
@@ -687,7 +759,7 @@ const clickByText: ToolDef = {
 const typeTool: ToolDef = {
   name: "browser_type",
   description:
-    "Type text into an element identified by ref. Three dispatch modes: 'keystroke' (default for short text, fires per-character keydown/beforeinput/input/keyup — what autocompletes and per-keystroke validators need), 'paste' (bulk-assign the value in one shot, use for long text where per-char events are wasteful), 'trusted' (CDP-backed real trusted events; requires debugger attach). Default resolves to 'keystroke' for text <=64 chars, 'paste' otherwise. Returns `{typed, mode, mode_used, editor?, site?}`. `mode_used` is the dispatch mode that actually ran (may differ from requested `mode` — on Quill/ProseMirror/Slate editors, trusted-mode typing auto-uses CDP `Input.insertText` to avoid double-insertion, reported as `mode_used: 'insertText'`). `editor` is present when a rich-text framework was detected. `site` is the matched hostname when the Tier 1 site registry fired.",
+    "Type text into an element identified by ref. Three dispatch modes: 'keystroke' (default for short text, fires per-character keydown/beforeinput/input/keyup — what autocompletes and per-keystroke validators need), 'paste' (bulk-assign the value in one shot, use for long text where per-char events are wasteful), 'trusted' (CDP-backed real trusted events; requires debugger attach). Default resolves to 'keystroke' for text <=64 chars, 'paste' otherwise. Returns `{typed, mode, mode_used, editor?, site?, page_effect?}`. `mode_used` is the dispatch mode that actually ran (may differ from requested `mode` — on Quill/ProseMirror/Slate editors, trusted-mode typing auto-uses CDP `Input.insertText` to avoid double-insertion, reported as `mode_used: 'insertText'`). `editor` is present when a rich-text framework was detected. `site` is the matched hostname when the Tier 1 site registry fired.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -714,6 +786,7 @@ const typeTool: ToolDef = {
         enum: ["value", "select_all", "auto"] as const,
       },
       delay_ms: { type: "integer", minimum: 0, maximum: 200, default: 0 },
+      observe_effects: observeEffectsInputSchema,
     },
   },
   outputSchema: {
@@ -737,6 +810,7 @@ const typeTool: ToolDef = {
         type: "boolean",
         description: "True when the field was cleared before typing (clear_first or clear_mode was set).",
       },
+      page_effect: pageEffectSchema,
     },
   },
   action_weight: 1,
@@ -793,7 +867,7 @@ const findAndReplace: ToolDef = {
 const press: ToolDef = {
   name: "browser_press",
   description:
-    "Send a keyboard-only chord to the tab (CDP key names). Does not target a specific ref. Leading entries are treated as modifiers and the final entry as the key — e.g. [\"Primary\",\"KeyA\"] sends select-all. Use `Primary` instead of Meta/Control for portable chords; the extension resolves it to Meta on macOS and Control elsewhere at dispatch time. Returns `{pressed, dispatch, editor?, site?}`. `dispatch` is 'trusted' when CDP was used (Enter/Escape/Tab on Quill/ProseMirror/Slate), 'synthetic' otherwise. `editor` and `site` are present when the editor/site registry matched.",
+    "Send a keyboard-only chord to the tab (CDP key names). Does not target a specific ref. Leading entries are treated as modifiers and the final entry as the key — e.g. [\"Primary\",\"KeyA\"] sends select-all. Use `Primary` instead of Meta/Control for portable chords; the extension resolves it to Meta on macOS and Control elsewhere at dispatch time. Returns `{pressed, dispatch, editor?, site?, page_effect?}`. `dispatch` is 'trusted' when CDP was used (Enter/Escape/Tab on Quill/ProseMirror/Slate), 'synthetic' otherwise. `editor` and `site` are present when the editor/site registry matched.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -813,6 +887,7 @@ const press: ToolDef = {
         },
       },
       repeat: { type: "integer", minimum: 1, maximum: 20, default: 1 },
+      observe_effects: observeEffectsInputSchema,
     },
   },
   outputSchema: {
@@ -827,6 +902,7 @@ const press: ToolDef = {
       editor: { type: "string" },
       // Present when the Tier 1 site registry matched.
       site: { type: "string" },
+      page_effect: pageEffectSchema,
     },
   },
   action_weight: 1,
