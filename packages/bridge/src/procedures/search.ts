@@ -34,6 +34,8 @@ export interface SearchOptions {
   scope?: "all" | "shared" | `composite:${string}`;
   /** When true, also tokenise step bodies for matching. Default false. */
   deep?: boolean;
+  /** When true, include status:draft entries. Default false. */
+  include_drafts?: boolean;
 }
 
 export interface SearchMatch {
@@ -288,6 +290,7 @@ export async function search(
   const scope: "all" | "shared" | `composite:${string}` =
     options?.scope ?? "all";
   const deep = options?.deep ?? false;
+  const includeDrafts = options?.include_drafts ?? false;
 
   // Normalisation denominator
   const normDenom = queryTokens.length * 10;
@@ -310,6 +313,9 @@ export async function search(
 
     // Scope filter
     if (!passesScopeFilter(name, entry, scope)) continue;
+
+    // Status filter — drafts are excluded unless explicitly requested.
+    if (!includeDrafts && entry.status === "draft") continue;
 
     // Shallow score
     const { raw, fromName, fromTriggers, fromDescription } = shallowScore(

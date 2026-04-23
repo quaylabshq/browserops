@@ -256,6 +256,12 @@ export async function handleSearch(raw: Record<string, unknown>): Promise<unknow
     }
     options.deep = raw["deep"] as boolean;
   }
+  if (raw["include_drafts"] !== undefined) {
+    if (typeof raw["include_drafts"] !== "boolean") {
+      throw new CodedError("INVALID_PARAMS", "include_drafts must be a boolean");
+    }
+    options.include_drafts = raw["include_drafts"] as boolean;
+  }
 
   const root = proceduresRoot();
   const manifest = await ensureIndex(root);
