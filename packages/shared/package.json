@@ -19,6 +19,7 @@
     "test": "vitest run"
   },
   "devDependencies": {
+    "ajv": "^8.17.0",
     "typescript": "^5.4.0",
     "vitest": "^2.0.0"
   }
