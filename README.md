@@ -54,15 +54,9 @@ Open your MCP client (already configured with the snippet from Step 1) and try:
 
 ## Connecting your MCP client
 
-`npx @browserops/bridge init` prints a snippet per client. The reference snippets below are kept for clarity if you'd rather configure by hand. The bridge is a plain stdio MCP server — any client that can spawn one can use it.
+`pnpm setup` prints a snippet per client (re-run `node packages/bridge/dist/index.js init` any time you want them reprinted). The reference snippets below are kept for clarity if you'd rather configure by hand. The bridge is a plain stdio MCP server — any client that can spawn one can use it.
 
-Command:
-
-```
-browserops-bridge          # if installed globally or invoked via npx
-```
-
-or, from a clone:
+Command (from a clone):
 
 ```
 node <path-to-repo>/packages/bridge/dist/index.js
@@ -194,7 +188,7 @@ Full JSON schemas for each tool are declared in `packages/shared/src/tools.ts`.
 
 Procedures are named, parameterised, reusable action graphs that the agent can discover and replay without re-planning from a screenshot every time. They live in `~/browserops/procedures/` (user-visible, not hidden) and are surfaced through six MCP tools: `procedures_list`, `procedures_search`, `procedures_get`, `procedures_save`, `procedures_promote`, `procedures_delete`.
 
-The bridge auto-seeds `examples/procedures/` into `~/browserops/procedures/shared/` on first start (and on every `npx @browserops/bridge init`). Local copies are never overwritten — if a bundled example ships an update, the bridge logs a notice on stderr and you copy it manually if you want the new version.
+The bridge auto-seeds `examples/procedures/` into `~/browserops/procedures/shared/` on first start (and on every `pnpm setup` / `node packages/bridge/dist/index.js init` run). Local copies are never overwritten — if a bundled example ships an update, the bridge logs a notice on stderr and you copy it manually if you want the new version.
 
 Procedures default to `status: draft` until you record a successful run. `procedures_search` excludes drafts unless called with `include_drafts: true`. To mark one trusted, call `procedures_save` again with `bump_success: true` after a verified run; success_count increments and status flips to `trusted` once it reaches 1.
 
