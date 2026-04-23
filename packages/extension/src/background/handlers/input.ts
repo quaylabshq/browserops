@@ -150,6 +150,7 @@ interface TypeParams {
   clear_first?: boolean;
   clear_mode?: ClearMode;
   delay_ms?: number;
+  observe_effects?: boolean;
 }
 
 interface PressParams {
@@ -1651,6 +1652,8 @@ function parseType(raw: Record<string, unknown>): TypeParams {
   if (mode !== undefined) result.mode = mode as TypeMode;
   if (clearMode !== undefined) result.clear_mode = clearMode as ClearMode;
   if (typeof delay === "number") result.delay_ms = delay;
+  // observe_effects defaults to true; only false explicitly disables observation.
+  if (raw["observe_effects"] === false) result.observe_effects = false;
   return result;
 }
 
@@ -2360,6 +2363,7 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       editor?: string;
       site?: string;
       cleared?: boolean;
+      page_effect?: PageEffect;
     }> => {
       const params = parseType(raw);
       const mode = resolveTypeMode(params.text, params.mode);
@@ -2367,6 +2371,8 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       const selector = resolveSelector(refCache, params.tab_id, params.ref);
       const submit = params.submit ?? false;
       const clearMode = resolveClearMode(params);
+      // observe_effects defaults to true; callers pass false to opt out.
+      const observeEffects = params.observe_effects !== false;
       let cleared: boolean | undefined;
 
       if (mode === "trusted") {
@@ -2400,44 +2406,65 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
           });
           cleared = true;
         }
-        const trustedInfo = await performTrustedType(cdp, chromeId, params.text, params.delay_ms ?? 0, selector);
-        if (submit) {
-          await cdp.withAttach(chromeId, async () => {
-            await cdp.send(chromeId, "Input.dispatchKeyEvent", {
-              type: "keyDown", key: "Enter", text: "\r",
-            });
-            await cdp.send(chromeId, "Input.dispatchKeyEvent", {
-              type: "keyUp", key: "Enter",
-            });
-          });
-        }
-        // Resolve site hostname if the site hint fired (editor detected via site tier).
-        let siteHostname: string | undefined;
-        if (trustedInfo.editorName !== null) {
-          const siteHint = await getSiteHintForTab(chromeId);
-          if (siteHint !== null) {
-            try {
-              const tab = await chrome.tabs.get(chromeId);
-              if (tab.url) siteHostname = new URL(tab.url).hostname;
-            } catch { /* ignore */ }
-          }
-        }
-        const result: {
+
+        // Wrap the actual text dispatch (performTrustedType + optional submit).
+        // Focus-drilling and clear happen before the observation window.
+        const dispatchTrusted = async (): Promise<{
           typed: number;
           mode: TypeMode;
           mode_used: TypeMode | "insertText";
           editor?: string;
           site?: string;
           cleared?: boolean;
-        } = {
-          typed: params.text.length,
-          mode,
-          mode_used: trustedInfo.modeUsed,
+        }> => {
+          const trustedInfo = await performTrustedType(cdp, chromeId, params.text, params.delay_ms ?? 0, selector);
+          if (submit) {
+            await cdp.withAttach(chromeId, async () => {
+              await cdp.send(chromeId, "Input.dispatchKeyEvent", {
+                type: "keyDown", key: "Enter", text: "\r",
+              });
+              await cdp.send(chromeId, "Input.dispatchKeyEvent", {
+                type: "keyUp", key: "Enter",
+              });
+            });
+          }
+          // Resolve site hostname if the site hint fired (editor detected via site tier).
+          let siteHostname: string | undefined;
+          if (trustedInfo.editorName !== null) {
+            const siteHint = await getSiteHintForTab(chromeId);
+            if (siteHint !== null) {
+              try {
+                const tab = await chrome.tabs.get(chromeId);
+                if (tab.url) siteHostname = new URL(tab.url).hostname;
+              } catch { /* ignore */ }
+            }
+          }
+          const r: {
+            typed: number;
+            mode: TypeMode;
+            mode_used: TypeMode | "insertText";
+            editor?: string;
+            site?: string;
+            cleared?: boolean;
+          } = {
+            typed: params.text.length,
+            mode,
+            mode_used: trustedInfo.modeUsed,
+          };
+          if (trustedInfo.editorName !== null) r.editor = trustedInfo.editorName;
+          if (siteHostname !== undefined) r.site = siteHostname;
+          if (cleared !== undefined) r.cleared = cleared;
+          return r;
         };
-        if (trustedInfo.editorName !== null) result.editor = trustedInfo.editorName;
-        if (siteHostname !== undefined) result.site = siteHostname;
-        if (cleared !== undefined) result.cleared = cleared;
-        return result;
+
+        if (observeEffects) {
+          const { result, effect } = await withEffectObservation(
+            { chromeTabId: chromeId, windowMs: 300, networkTracker: network },
+            dispatchTrusted,
+          );
+          return { ...result, page_effect: effect };
+        }
+        return dispatchTrusted();
       }
 
       if (clearMode !== undefined) {
@@ -2455,55 +2482,68 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
         cleared = clearRes.cleared;
       }
 
-      let res: { found: boolean; typed: number; reflected: number };
-      if (mode === "paste") {
-        res = await execInTab(
-          chromeId,
-          injectedTypePaste,
-          [selector, params.text, submit] as const,
-        );
-      } else {
-        const delayMs = params.delay_ms ?? 0;
-        res = await execInTab(
-          chromeId,
-          injectedTypeKeystroke,
-          [selector, params.text, submit, delayMs] as const,
-        );
-      }
-      if (res.found === false) {
-        throw codedError("REF_STALE", `ref ${params.ref} no longer resolves in tab ${params.tab_id}`);
-      }
-      // Verify the write actually landed. Rich-text editors (Quill, ProseMirror,
-      // Lexical, Draft.js) and some React-controlled inputs silently drop
-      // synthetic writes — the injected function dispatched N char events but
-      // the field contains nothing. Surface that explicitly so agents can
-      // fall back to clear_mode=select_all, mode=trusted, or execute_js.
-      if (params.text.length > 0 && res.reflected === 0) {
-        throw codedError(
-          "WRITE_NOT_REFLECTED",
-          `typed ${res.typed} characters but field content did not change; the target may be a rich-text wrapper that requires mode="trusted" or a different selector`,
-        );
-      }
-      if (params.text.length > 0 && res.reflected >= params.text.length * 2) {
-        throw codedError(
-          "WRITE_AMPLIFIED",
-          `typed ${res.typed} characters but field reflected ${res.reflected} — likely double-insertion by a stacked beforeinput handler`,
-        );
-      }
-      const result: {
+      // Wrap only the final dispatch. Clear happens before the observation window.
+      type SyntheticTypeResult = {
         typed: number;
         mode: TypeMode;
         mode_used: TypeMode | "insertText";
         editor?: string;
         site?: string;
         cleared?: boolean;
-      } = {
-        typed: res.reflected,
-        mode,
-        mode_used: mode,
       };
-      if (cleared !== undefined) result.cleared = cleared;
-      return result;
+      const dispatchSynthetic = async (): Promise<SyntheticTypeResult> => {
+        let res: { found: boolean; typed: number; reflected: number };
+        if (mode === "paste") {
+          res = await execInTab(
+            chromeId,
+            injectedTypePaste,
+            [selector, params.text, submit] as const,
+          );
+        } else {
+          const delayMs = params.delay_ms ?? 0;
+          res = await execInTab(
+            chromeId,
+            injectedTypeKeystroke,
+            [selector, params.text, submit, delayMs] as const,
+          );
+        }
+        if (res.found === false) {
+          throw codedError("REF_STALE", `ref ${params.ref} no longer resolves in tab ${params.tab_id}`);
+        }
+        // Verify the write actually landed. Rich-text editors (Quill, ProseMirror,
+        // Lexical, Draft.js) and some React-controlled inputs silently drop
+        // synthetic writes — the injected function dispatched N char events but
+        // the field contains nothing. Surface that explicitly so agents can
+        // fall back to clear_mode=select_all, mode=trusted, or execute_js.
+        if (params.text.length > 0 && res.reflected === 0) {
+          throw codedError(
+            "WRITE_NOT_REFLECTED",
+            `typed ${res.typed} characters but field content did not change; the target may be a rich-text wrapper that requires mode="trusted" or a different selector`,
+          );
+        }
+        if (params.text.length > 0 && res.reflected >= params.text.length * 2) {
+          throw codedError(
+            "WRITE_AMPLIFIED",
+            `typed ${res.typed} characters but field reflected ${res.reflected} — likely double-insertion by a stacked beforeinput handler`,
+          );
+        }
+        const r: SyntheticTypeResult = {
+          typed: res.reflected,
+          mode,
+          mode_used: mode,
+        };
+        if (cleared !== undefined) r.cleared = cleared;
+        return r;
+      };
+
+      if (observeEffects) {
+        const { result, effect } = await withEffectObservation(
+          { chromeTabId: chromeId, windowMs: 300, networkTracker: network },
+          dispatchSynthetic,
+        );
+        return { ...result, page_effect: effect };
+      }
+      return dispatchSynthetic();
     },
   );
 
