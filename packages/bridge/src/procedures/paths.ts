@@ -40,3 +40,11 @@ export const procedureYamlPath = (
   owner === null
     ? path.join(ROOT, "shared", dirName(name), "procedure.yaml")
     : path.join(ROOT, dirName(owner), "subs", dirName(name), "procedure.yaml");
+
+/** Absolute path to a composite owner's top-level directory. */
+export const compositeOwnerDir = (ownerName: string): string =>
+  path.join(ROOT, dirName(ownerName));
+
+/** Absolute path to a composite owner's subs/ subdirectory. */
+export const subsDir = (ownerName: string): string =>
+  path.join(ROOT, dirName(ownerName), "subs");
