@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   CodedError,
+  atomicWriteFile,
   deleteProcedureDir,
   moveProcedureDir,
   readProcedureYaml,
@@ -200,5 +201,33 @@ describe("moveProcedureDir", () => {
     // Both directories must still exist.
     await expect(fs.access(src)).resolves.toBeUndefined();
     await expect(fs.access(dst)).resolves.toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// atomicWriteFile
+// ---------------------------------------------------------------------------
+
+describe("atomicWriteFile", () => {
+  it("writes text to a new file, creating parent dirs", async () => {
+    const target = absPath("deep", "nested", "file.json");
+    await atomicWriteFile(target, '{"ok":true}');
+    const content = await fs.readFile(target, "utf8");
+    expect(content).toBe('{"ok":true}');
+  });
+
+  it("overwrites an existing file atomically", async () => {
+    const target = absPath("overwrite.json");
+    await atomicWriteFile(target, "first");
+    await atomicWriteFile(target, "second");
+    expect(await fs.readFile(target, "utf8")).toBe("second");
+  });
+
+  it("leaves no .tmp files on success", async () => {
+    const target = absPath("clean", "file.json");
+    await atomicWriteFile(target, "clean content");
+    const dir = path.dirname(target);
+    const entries = await fs.readdir(dir);
+    expect(entries.filter((e) => e.includes(".tmp-"))).toHaveLength(0);
   });
 });
