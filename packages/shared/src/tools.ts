@@ -68,7 +68,12 @@ const urlSchema: JSONSchemaObject = {
 
 const modifiersSchema: JSONSchemaObject = {
   type: "array",
-  items: { type: "string", enum: ["Control", "Alt", "Shift", "Meta"] as const },
+  items: {
+    type: "string",
+    enum: ["Control", "Alt", "Shift", "Meta", "Primary"] as const,
+    description:
+      "Modifier key. `Primary` is a logical alias that the extension resolves at dispatch time to `Meta` on macOS or `Control` elsewhere — use it for portable chords like Primary+A (select all) or Primary+Z (undo).",
+  },
   uniqueItems: true,
   maxItems: 4,
   default: [],
@@ -761,7 +766,7 @@ const findAndReplace: ToolDef = {
 const press: ToolDef = {
   name: "browser_press",
   description:
-    "Send a keyboard-only chord to the tab (CDP key names). Does not target a specific ref.",
+    "Send a keyboard-only chord to the tab (CDP key names). Does not target a specific ref. Leading entries are treated as modifiers and the final entry as the key — e.g. [\"Primary\",\"KeyA\"] sends select-all. Use `Primary` instead of Meta/Control for portable chords; the extension resolves it to Meta on macOS and Control elsewhere at dispatch time.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -772,7 +777,13 @@ const press: ToolDef = {
         type: "array",
         minItems: 1,
         maxItems: 8,
-        items: { type: "string", minLength: 1, maxLength: 32 },
+        items: {
+          type: "string",
+          minLength: 1,
+          maxLength: 32,
+          description:
+            "CDP key name (e.g. `KeyA`, `Enter`, `Escape`, `Delete`, `Backspace`, `Tab`, `ArrowLeft`) or one of the modifiers `Control`, `Alt`, `Shift`, `Meta`, `Primary`.",
+        },
       },
       repeat: { type: "integer", minimum: 1, maximum: 20, default: 1 },
     },
