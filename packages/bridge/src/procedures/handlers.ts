@@ -39,6 +39,7 @@ import {
   type Manifest,
 } from "./index-builder.js";
 import { validateProcedure } from "./validator.js";
+import { validateBindings } from "./binding-validator.js";
 import { search } from "./search.js";
 import type { SearchOptions } from "./search.js";
 
@@ -416,6 +417,15 @@ export async function handleSave(raw: Record<string, unknown>): Promise<SaveResu
   if (!validation.valid) {
     const msgs = (validation.errors ?? []).join("; ");
     throw new CodedError("PROC_SCHEMA_INVALID", `schema validation failed: ${msgs}`);
+  }
+
+  // Validate {{...}} binding references against tool outputSchemas
+  const bindingResult = validateBindings(parsed);
+  if (!bindingResult.valid) {
+    const msgs = (bindingResult.errors ?? [])
+      .map((e) => `${e.instancePath} ${e.message}`)
+      .join("; ");
+    throw new CodedError("PROC_SCHEMA_INVALID", `binding validation failed: ${msgs}`);
   }
 
   const manifest = await ensureIndex(proceduresRoot());
