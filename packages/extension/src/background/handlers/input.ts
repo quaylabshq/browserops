@@ -89,6 +89,7 @@ interface ClickAtParams {
 }
 
 type TypeMode = "keystroke" | "paste" | "trusted";
+type ClearMode = "value" | "select_all" | "auto";
 const KEYSTROKE_AUTO_THRESHOLD = 64;
 
 interface TypeParams {
@@ -98,6 +99,7 @@ interface TypeParams {
   mode?: TypeMode;
   submit?: boolean;
   clear_first?: boolean;
+  clear_mode?: ClearMode;
   delay_ms?: number;
 }
 
@@ -309,6 +311,96 @@ function injectedClick(
 }
 
 /**
+ * Clear the element's current value/content. Three strategies:
+ *
+ *   "value"      — el.value = ""  (fast, but silently no-ops on
+ *                  contenteditable — docs flag this as the opt-in behaviour).
+ *   "select_all" — range-select or .select() + execCommand("delete"), falling
+ *                  back to keyboard Delete/Backspace events if content
+ *                  remains.
+ *   "auto"       — "value" for form inputs, "select_all" for contenteditable.
+ *                  Verifies emptiness afterwards and retries with the
+ *                  select_all+keyboard path if content remains.
+ *
+ * Returns { found, cleared } where `cleared` is true only if the element
+ * appears empty at the end.
+ */
+function injectedClearField(
+  selector: string,
+  clearMode: string,
+): { found: boolean; cleared: boolean } {
+  const el = document.querySelector(selector) as
+    | (HTMLElement & { value?: string })
+    | null;
+  if (el === null) return { found: false, cleared: false };
+  try { el.focus(); } catch { /* ignore */ }
+
+  const isCE = el.isContentEditable;
+
+  function currentContent(): string {
+    if (isCE) return (el!.textContent ?? "").trim();
+    return ((el as { value?: string }).value ?? "").trim();
+  }
+
+  function assignValue(): void {
+    if (isCE) return;
+    const proto = Object.getPrototypeOf(el as object) as object | null;
+    const setter = proto === null
+      ? undefined
+      : (Object.getOwnPropertyDescriptor(proto, "value")?.set as
+          | ((v: string) => void)
+          | undefined);
+    if (setter !== undefined) setter.call(el, "");
+    else (el as { value?: string }).value = "";
+    el!.dispatchEvent(new Event("input", { bubbles: true }));
+    el!.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  function selectAllAndDelete(): void {
+    if (isCE) {
+      const sel = window.getSelection();
+      if (sel !== null) {
+        const range = document.createRange();
+        range.selectNodeContents(el as Node);
+        sel.removeAllRanges();
+        sel.addRange(range);
+      }
+      document.execCommand("delete", false);
+    } else {
+      (el as unknown as { select?: () => void }).select?.();
+      document.execCommand("delete", false);
+    }
+  }
+
+  function keyboardDelete(): void {
+    // Real key events at the focused element. Some rich editors (Monaco,
+    // CodeMirror, ProseMirror) handle Delete via keydown listeners rather
+    // than execCommand, so this is the last-resort fallback.
+    for (const key of ["Delete", "Backspace"]) {
+      el!.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+      el!.dispatchEvent(new KeyboardEvent("keyup", { key, bubbles: true, cancelable: true }));
+    }
+  }
+
+  if (clearMode === "value") {
+    assignValue();
+  } else if (clearMode === "select_all") {
+    selectAllAndDelete();
+    if (currentContent() !== "") keyboardDelete();
+  } else {
+    // auto
+    if (isCE) selectAllAndDelete();
+    else assignValue();
+    if (currentContent() !== "") {
+      selectAllAndDelete();
+      if (currentContent() !== "") keyboardDelete();
+    }
+  }
+
+  return { found: true, cleared: currentContent() === "" };
+}
+
+/**
  * "paste" mode — bulk-assign the element's value in one shot. Fires a single
  * input + change event at the end. Best for long text where per-character
  * events would be wasteful and no per-keystroke handler cares.
@@ -317,7 +409,6 @@ function injectedTypePaste(
   selector: string,
   text: string,
   submit: boolean,
-  clearFirst: boolean,
 ): { found: boolean; typed: number } {
   const el = document.querySelector(selector) as
     | (HTMLElement & { value?: string; form?: HTMLFormElement })
@@ -326,23 +417,8 @@ function injectedTypePaste(
   el.focus();
 
   if (el.isContentEditable) {
-    if (clearFirst) {
-      const sel = window.getSelection();
-      if (sel !== null) {
-        const range = document.createRange();
-        range.selectNodeContents(el);
-        sel.removeAllRanges();
-        sel.addRange(range);
-      }
-      document.execCommand("delete", false);
-    }
     document.execCommand("insertText", false, text);
   } else {
-    if (clearFirst) {
-      const selectable = el as unknown as { select?: () => void };
-      selectable.select?.();
-      document.execCommand("delete", false);
-    }
     const proto = Object.getPrototypeOf(el) as object | null;
     const setter = proto === null
       ? undefined
@@ -375,7 +451,6 @@ function injectedTypeKeystroke(
   selector: string,
   text: string,
   submit: boolean,
-  clearFirst: boolean,
   delayMs: number,
 ): Promise<{ found: boolean; typed: number }> {
   return new Promise<{ found: boolean; typed: number }>((resolve) => {
@@ -387,22 +462,6 @@ function injectedTypeKeystroke(
       return;
     }
     el.focus();
-
-    if (clearFirst) {
-      if (el.isContentEditable) {
-        const sel = window.getSelection();
-        if (sel !== null) {
-          const range = document.createRange();
-          range.selectNodeContents(el);
-          sel.removeAllRanges();
-          sel.addRange(range);
-        }
-        document.execCommand("delete", false);
-      } else {
-        (el as unknown as { select?: () => void }).select?.();
-        document.execCommand("delete", false);
-      }
-    }
 
     const proto = Object.getPrototypeOf(el) as object | null;
     const setter = proto === null
@@ -1241,6 +1300,15 @@ function parseType(raw: Record<string, unknown>): TypeParams {
   }
   const submit = raw["submit"];
   const clearFirst = raw["clear_first"];
+  const clearMode = raw["clear_mode"];
+  if (
+    clearMode !== undefined &&
+    clearMode !== "value" &&
+    clearMode !== "select_all" &&
+    clearMode !== "auto"
+  ) {
+    throw codedError("INVALID_PARAMS", "clear_mode must be value|select_all|auto");
+  }
   const delay = raw["delay_ms"];
   if (delay !== undefined && (typeof delay !== "number" || !Number.isInteger(delay) || delay < 0)) {
     throw codedError("INVALID_PARAMS", "delay_ms must be a non-negative integer");
@@ -1253,8 +1321,21 @@ function parseType(raw: Record<string, unknown>): TypeParams {
     clear_first: typeof clearFirst === "boolean" ? clearFirst : false,
   };
   if (mode !== undefined) result.mode = mode as TypeMode;
+  if (clearMode !== undefined) result.clear_mode = clearMode as ClearMode;
   if (typeof delay === "number") result.delay_ms = delay;
   return result;
+}
+
+/**
+ * Resolve the effective clearMode for this call. If clear_mode is set
+ * explicitly, use it. Otherwise clear_first:true defaults to "auto" (the
+ * robust path); clear_first:false (or omitted) means "do not clear" —
+ * returned as undefined.
+ */
+function resolveClearMode(params: TypeParams): ClearMode | undefined {
+  if (params.clear_mode !== undefined) return params.clear_mode;
+  if (params.clear_first) return "auto";
+  return undefined;
 }
 
 function resolveTypeMode(text: string, explicit: TypeMode | undefined): TypeMode {
@@ -1797,18 +1878,18 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
 
   router.register(
     "browser_type",
-    async (raw): Promise<{ typed: number; mode: TypeMode }> => {
+    async (raw): Promise<{ typed: number; mode: TypeMode; cleared?: boolean }> => {
       const params = parseType(raw);
       const mode = resolveTypeMode(params.text, params.mode);
       const chromeId = resolveChromeId(tabIdMap, params.tab_id);
       const selector = resolveSelector(refCache, params.tab_id, params.ref);
       const submit = params.submit ?? false;
-      const clearFirst = params.clear_first ?? false;
+      const clearMode = resolveClearMode(params);
+      let cleared: boolean | undefined;
 
       if (mode === "trusted") {
         // Focus the element first (via executeScript), then let CDP do the
-        // trusted keystrokes at the currently-focused field. clear_first is
-        // implemented via select-all + delete in the same focused context.
+        // trusted keystrokes at the currently-focused field.
         const focused = await execInTab(chromeId, injectedFocusSelector, [selector] as const);
         if (focused.found === false) {
           throw codedError(
@@ -1816,7 +1897,7 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
             `ref ${params.ref} no longer resolves in tab ${params.tab_id}`,
           );
         }
-        if (clearFirst) {
+        if (clearMode !== undefined) {
           // Select-all + delete via CDP keystrokes. Meta on mac, Control elsewhere.
           // We can't easily detect platform from the SW; send both modifiers.
           await cdp.withAttach(chromeId, async () => {
@@ -1835,6 +1916,7 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
               type: "keyUp", key: "Delete",
             });
           });
+          cleared = true;
         }
         await performTrustedType(cdp, chromeId, params.text, params.delay_ms ?? 0);
         if (submit) {
@@ -1847,7 +1929,27 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
             });
           });
         }
-        return { typed: params.text.length, mode };
+        const result: { typed: number; mode: TypeMode; cleared?: boolean } = {
+          typed: params.text.length,
+          mode,
+        };
+        if (cleared !== undefined) result.cleared = cleared;
+        return result;
+      }
+
+      if (clearMode !== undefined) {
+        const clearRes = await execInTab(
+          chromeId,
+          injectedClearField,
+          [selector, clearMode] as const,
+        );
+        if (clearRes.found === false) {
+          throw codedError(
+            "REF_STALE",
+            `ref ${params.ref} no longer resolves in tab ${params.tab_id}`,
+          );
+        }
+        cleared = clearRes.cleared;
       }
 
       let res: { found: boolean; typed: number };
@@ -1855,20 +1957,25 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
         res = await execInTab(
           chromeId,
           injectedTypePaste,
-          [selector, params.text, submit, clearFirst] as const,
+          [selector, params.text, submit] as const,
         );
       } else {
         const delayMs = params.delay_ms ?? 0;
         res = await execInTab(
           chromeId,
           injectedTypeKeystroke,
-          [selector, params.text, submit, clearFirst, delayMs] as const,
+          [selector, params.text, submit, delayMs] as const,
         );
       }
       if (res.found === false) {
         throw codedError("REF_STALE", `ref ${params.ref} no longer resolves in tab ${params.tab_id}`);
       }
-      return { typed: res.typed, mode };
+      const result: { typed: number; mode: TypeMode; cleared?: boolean } = {
+        typed: res.typed,
+        mode,
+      };
+      if (cleared !== undefined) result.cleared = cleared;
+      return result;
     },
   );
 
