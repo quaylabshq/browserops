@@ -15,7 +15,7 @@ import type { RefCache, RefEntry, RefSnapshot } from "../ref-cache.js";
  *     post-processed in the SW with regex stripping (MV3 SWs have no
  *     DOMParser; see plan 04).
  *   - "a11y_tree": DOM-only walker (no CDP) in the ISOLATED world. See
- *     plan 05-element-refs.md §4. Produces numbered RefEntry[] which are
+ *     plan 05-element-refs.md Produces numbered RefEntry[] which are
  *     stored in the shared RefCache for later click/type dereference.
  */
 
@@ -258,7 +258,7 @@ function injectedReadMarkdown(selector: string | null): string | null {
 
 /**
  * DOM-only a11y tree walker. Runs in the ISOLATED world of the target tab.
- * Must be fully self-contained — no outer closure refs (plan 05 §4).
+ * Must be fully self-contained — no outer closure refs.
  *
  * Pruning: keep interactive or structural elements that are visible.
  * Numbering: 1-based refs assigned in DFS order. Capped at 500.

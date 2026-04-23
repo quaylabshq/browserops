@@ -9,7 +9,7 @@ export interface TabRecord {
 
 /**
  * Mints opaque tab ids (t_<base36-monotonic>) and tracks tab metadata
- * from extension events. See plans/00-overview.md §4.1.
+ * from extension events.
  */
 export class TabRegistry {
   private seq = 0;

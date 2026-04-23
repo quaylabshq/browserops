@@ -1,5 +1,5 @@
 /**
- * WebSocket transport defaults. See plans/00-overview.md §5 and plans/02-bridge-protocol.md.
+ * WebSocket transport defaults.
  */
 export const DEFAULT_WS_HOST = "127.0.0.1";
 export const DEFAULT_WS_PORT = 8765;
@@ -10,19 +10,19 @@ export const DEFAULT_WS_PORT = 8765;
 export const MAX_FRAME_BYTES = 16 * 1024 * 1024;
 
 /**
- * Per-tool default timeouts (ms). See plans/00-overview.md §4.5.
+ * Per-tool default timeouts (ms).
  */
 export const DEFAULT_TOOL_TIMEOUT_MS = 30_000;
 export const NAVIGATE_TIMEOUT_MS = 45_000;
 export const WAIT_FOR_TIMEOUT_CAP_MS = 120_000;
 
 /**
- * Hello frame handshake. See plans/02-bridge-protocol.md.
+ * Hello frame handshake.
  */
 export const HELLO_TIMEOUT_MS = 5_000;
 
 /**
- * Rate-limiter defaults. See plans/06-autonomy-safety.md.
+ * Rate-limiter defaults.
  */
 export const RATE_LIMIT_PER_TAB_PER_MIN = 16;
 export const RATE_LIMIT_GLOBAL_PER_MIN_DEFAULT = 60;

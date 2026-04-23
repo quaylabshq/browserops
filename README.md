@@ -2,8 +2,6 @@
 
 An MCP server that drives your live Chrome browser. Any MCP-compatible client (Claude Code, Cursor, Zed, Continue, Windsurf, custom SDK agents, …) calls `browser_*` tools → a local Node bridge forwards them to a Chrome MV3 extension over WebSocket → the extension uses `chrome.tabs` / `chrome.scripting` / `chrome.debugger` to control your real browsing session (including logged-in sites).
 
-See `plans/00-overview.md` for the full design.
-
 ## Prerequisites
 
 - macOS or Linux (Windows via WSL)
@@ -187,12 +185,12 @@ Content: `browser_screenshot` (viewport), `browser_read` (`text` / `markdown` / 
 
 Input: `browser_click`, `browser_type`, `browser_press`, `browser_scroll`, `browser_hover`, `browser_execute_js`
 
-See `plans/04-tools.md` for full schemas.
+Full JSON schemas for each tool are declared in `packages/shared/src/tools.ts`.
 
 **How click/type work.** First call `browser_read` with `mode: "a11y_tree"` on the tab — you get back a numbered tree of interactive elements and their refs. Then call `browser_click({tab_id, ref})` or `browser_type({tab_id, ref, text})` using those refs. Refs invalidate on navigation (same-doc or cross-doc) — re-read the tree after a navigation.
 
 **v1 limitations:**
-- Click / type fire synthetic DOM events (`isTrusted: false`). Sites that hard-check trusted events (reCAPTCHA, some banks) will refuse them. The plan-05 CDP path is the v2 fix for trusted events.
+- Click / type fire synthetic DOM events (`isTrusted: false`). Sites that hard-check trusted events (reCAPTCHA, some banks) will refuse them. A CDP-based trusted-events path is planned for v2.
 - `browser_screenshot` with `full_page: true` returns `INTERNAL` — viewport-only in v1.
 - Risky actions (`execute_js` always, click/type on financial domains) currently deny after the 30 s confirmation timeout because the extension popup doesn't yet render the confirmation UI. Set `BROWSEROPS_AUTOCONFIRM=1` to bypass during testing.
 
@@ -208,7 +206,7 @@ cp examples/procedures/gmail.send_email/procedure.yaml \
    ~/browserops/procedures/shared/gmail.send_email/procedure.yaml
 ```
 
-See `examples/procedures/` for annotated seed procedures and `plans/impl-06-procedures.md` for the full design (schema, search ranking, MCP tool specs, and disk layout).
+See `examples/procedures/` for annotated seed procedures. The procedure schema and search ranking live in `packages/shared/src/procedures.ts`.
 
 ## Safety defaults
 
@@ -238,7 +236,7 @@ pnpm test              # all unit tests
 pnpm -F @browserops/bridge test   # bridge only
 ```
 
-Currently: 14 shared tests (envelope guards + tool catalogue invariants), 12 bridge tests (rate limiter math + risky-domain glob matching). Playwright smoke suite is planned; see `plans/08-testing.md`.
+Currently ~220 unit tests total across shared (envelope guards, tool catalogue invariants, procedure schema) and bridge (rate limiter, risky-domain globs, procedure store, index builder, search ranker, handlers). A Playwright smoke suite is planned.
 
 ## Environment variables
 
@@ -279,6 +277,6 @@ browserops/
 │   ├── shared/        # protocol types, error codes, tool catalogue
 │   ├── bridge/        # MCP + WebSocket server (single Node process)
 │   └── extension/     # MV3 extension (background SW, options, popup)
-├── plans/             # design docs — 00-overview + 8 sub-plans
+├── examples/          # seed procedures you can copy into ~/browserops/procedures
 └── sanitize_html.py   # reference HTML sanitizer reused by read tool
 ```

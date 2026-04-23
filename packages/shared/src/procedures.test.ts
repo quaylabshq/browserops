@@ -28,7 +28,7 @@ function invalid(obj: unknown): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// §5 example procedure (constructed literally — no YAML file read)
+// example procedure (constructed literally — no YAML file read)
 // ---------------------------------------------------------------------------
 
 const EXAMPLE_LEAF_PROCEDURE = {
@@ -110,7 +110,7 @@ const EXAMPLE_COMPOSITE_PROCEDURE = {
 // ---------------------------------------------------------------------------
 
 describe("PROCEDURE_SCHEMA — valid cases", () => {
-  it("accepts the §5 leaf example", () => {
+  it("accepts the leaf example", () => {
     expect(valid(EXAMPLE_LEAF_PROCEDURE)).toBe(true);
   });
 
@@ -243,7 +243,7 @@ describe("PROCEDURE_SCHEMA — rejection cases", () => {
 // ---------------------------------------------------------------------------
 
 describe("STOP_WORDS", () => {
-  it("contains canonical words from §8", () => {
+  it("contains canonical words from", () => {
     const expected = [
       "a", "an", "the", "and", "or", "for", "in", "to", "with",
       "is", "are", "was", "be", "been", "has", "have", "do",

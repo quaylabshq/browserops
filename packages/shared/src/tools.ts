@@ -3,7 +3,6 @@ import type { ErrorCode } from "./errors.js";
 /**
  * Minimal structural representation of a JSON Schema draft 2020-12 object
  * sufficient for describing v1 browser_* tool params and results.
- * Authoritative schemas live in plans/04-tools.md.
  */
 export type JSONSchemaObject = {
   type?: string | string[];
@@ -48,7 +47,7 @@ export interface ToolDef {
 }
 
 // ---------------------------------------------------------------------------
-// Shared schema fragments (plan 04 §4.2)
+// Shared schema fragments
 // ---------------------------------------------------------------------------
 
 const tabIdSchema: JSONSchemaObject = {
@@ -90,7 +89,7 @@ const tabSummarySchema: JSONSchemaObject = {
 } as const;
 
 // ---------------------------------------------------------------------------
-// Error-code bundles (see plan 04 §4.3 and user spec)
+// Error-code bundles
 // ---------------------------------------------------------------------------
 
 const BASE_CODES = ["TIMEOUT", "INTERNAL", "INVALID_PARAMS"] as const satisfies readonly ErrorCode[];
@@ -113,7 +112,7 @@ const PROC_CODES = [
 ] as const satisfies readonly ErrorCode[];
 
 // ---------------------------------------------------------------------------
-// Tool definitions (plan 04 §4.3)
+// Tool definitions
 // ---------------------------------------------------------------------------
 
 const listTabs: ToolDef = {
@@ -283,7 +282,7 @@ const navigate: ToolDef = {
       final_url: { type: "string" },
       // status_code is not populated in the DOM-only v1 path: without a CDP
       // attach we cannot observe the HTTP response code for the navigation.
-      // Deferred to v2 (see plan 04 §4.3.6).
+      // Deferred to v2.
     },
   },
   action_weight: 1,
@@ -1100,7 +1099,7 @@ const executeJs: ToolDef = {
 } as const;
 
 // ---------------------------------------------------------------------------
-// Procedure-memory tools (plan 06 §7)
+// Procedure-memory tools
 // ---------------------------------------------------------------------------
 
 const procedureNamePattern = "^[a-z][a-z0-9._-]{0,79}$";

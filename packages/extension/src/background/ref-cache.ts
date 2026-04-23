@@ -4,7 +4,7 @@
  * `browser_read(mode: "a11y_tree")` produces a numbered list of elements.
  * Those refs are looked up here by later click/type/hover handlers.
  *
- * Staleness model (plans/05-element-refs.md §4.7): a snapshot is dropped
+ * Staleness model: a snapshot is dropped
  * when the tab navigates (chrome.webNavigation.onCommitted), when a new
  * read replaces it, or when the tab URL no longer matches what we stored
  * (restored from session storage after SW eviction).

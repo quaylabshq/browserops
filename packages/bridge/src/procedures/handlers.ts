@@ -5,7 +5,7 @@
  *  1. Validates and coerces raw params — throws CodedError("INVALID_PARAMS") on bad shape.
  *  2. Calls ensureIndex() to get a fresh manifest (cheap mtime check).
  *  3. Performs the operation.
- *  4. Returns the exact output shape specified in plan §7.
+ *  4. Returns the exact output shape specified in
  *
  * YAML round-trip decision (handleSave):
  *   We inject the server-controlled `meta` block into the parsed YAML object

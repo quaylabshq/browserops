@@ -2,7 +2,6 @@ import type { ErrorCode } from "./errors.js";
 
 /**
  * Current WebSocket protocol version. Bump on breaking envelope changes.
- * See plans/00-overview.md §4.7 and plans/02-bridge-protocol.md.
  */
 export const PROTOCOL_VERSION = 1;
 
