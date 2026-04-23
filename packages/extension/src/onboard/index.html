@@ -3,170 +3,123 @@
   <head>
     <meta charset="utf-8" />
     <title>BrowserOps — Setup</title>
+    <link rel="stylesheet" href="../ui/tokens.css" />
     <style>
-      :root { color-scheme: light; }
-      body {
-        font-family: -apple-system, system-ui, sans-serif;
-        background: #f7f6f2;
-        color: #1b1b1b;
-        margin: 0;
-        padding: 40px 32px;
-      }
-      main { max-width: 520px; margin: 0 auto; }
-      h1 { font-size: 22px; margin: 0 0 4px; font-weight: 600; }
-      .sub { color: #666; font-size: 13px; margin: 0 0 24px; }
-      .card {
-        background: #fff;
-        border: 1px solid #e2e2dc;
-        border-radius: 12px;
-        padding: 20px;
-        margin-bottom: 16px;
-      }
-      .card h2 {
-        font-size: 13px;
-        font-weight: 600;
-        color: #555;
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
-        margin: 0 0 10px;
-      }
-      .code {
-        font-family: ui-monospace, Menlo, monospace;
-        font-size: 28px;
-        font-weight: 600;
-        letter-spacing: 0.08em;
-        background: #f3f1ea;
-        padding: 14px 18px;
-        border-radius: 10px;
-        text-align: center;
-      }
-      .token {
-        font-family: ui-monospace, Menlo, monospace;
-        font-size: 12px;
-        color: #777;
-        word-break: break-all;
-      }
-      .actions { display: flex; gap: 8px; margin-top: 8px; }
-      button {
-        padding: 10px 16px;
-        border: 0;
-        border-radius: 8px;
-        background: #1b1b1b;
-        color: #fff;
-        font-size: 14px;
+      body { padding: 56px 32px 40px; }
+      main { max-width: 460px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+
+      .head { display: flex; flex-direction: column; gap: 4px; margin-bottom: 4px; }
+      .head__sub { color: var(--ink-45); }
+
+      /* --- pair code centerpiece ------------------------------------- */
+      .pair-code-wrap { display: flex; flex-direction: column; gap: 10px; align-items: stretch; }
+      .pair-code {
+        font-family: var(--font-mono);
+        font-size: 26px;
         font-weight: 500;
+        letter-spacing: 0.12em;
+        text-align: center;
+        padding: 16px 18px;
+        background: var(--ink-03);
+        border: 1px solid var(--ink-06);
+        border-radius: var(--r-xl);
+        color: var(--ink);
+      }
+
+      .card__body { color: var(--ink-60); line-height: var(--lh); }
+      .card__actions { display: flex; gap: 8px; margin-top: 10px; }
+
+      /* --- form row for host/port override --------------------------- */
+      details.advanced { margin-top: 10px; }
+      details.advanced summary {
         cursor: pointer;
-      }
-      button:hover { background: #333; }
-      button:disabled { background: #b8b7b0; cursor: default; }
-      button.ghost { background: #fff; color: #1b1b1b; border: 1px solid #d8d4c8; }
-      button.ghost:hover { background: #f3f1ea; }
-      .error {
-        background: #fde2e2;
-        color: #8a1a1a;
-        border: 1px solid #e2c7c8;
-      }
-      .success {
-        background: #dcf5e3;
-        color: #1b6b37;
-        border: 1px solid #bfe5c9;
-      }
-      .muted { color: #666; font-size: 13px; line-height: 1.5; }
-      .row { display: flex; gap: 8px; align-items: center; }
-      label { display: block; font-size: 12px; color: #555; margin-bottom: 4px; }
-      input {
-        padding: 7px 10px;
-        border: 1px solid #d8d4c8;
-        border-radius: 6px;
-        background: #fff;
-        font-size: 13px;
-        font-family: inherit;
-        width: 100%;
-        box-sizing: border-box;
-      }
-      .row > label { flex: 1; }
-      details {
-        margin-top: 12px;
-        font-size: 13px;
-      }
-      summary {
-        cursor: pointer;
-        color: #666;
+        color: var(--ink-45);
+        list-style: none;
         padding: 4px 0;
       }
-      summary:hover { color: #000; }
-      .spinner {
-        display: inline-block;
-        width: 14px;
-        height: 14px;
-        border: 2px solid #d8d4c8;
-        border-top-color: #1b1b1b;
-        border-radius: 50%;
-        animation: spin 0.8s linear infinite;
-        margin-right: 8px;
-        vertical-align: middle;
+      details.advanced summary::-webkit-details-marker { display: none; }
+      details.advanced summary:hover { color: var(--ink); }
+      details.advanced summary::before { content: "›  "; display: inline-block; transition: transform 150ms ease; }
+      details.advanced[open] summary::before { transform: rotate(90deg); }
+      .adv-form { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+      .adv-form__row { display: flex; gap: 8px; }
+      .adv-form__row > label { flex: 1; }
+
+      /* --- loading state --------------------------------------------- */
+      #view-loading .loading-row { display: flex; align-items: center; gap: 10px; color: var(--ink-60); }
+      #view-loading .loading-row code {
+        font-size: var(--fs-10);
+        background: var(--ink-04);
+        padding: 1px 6px;
+        border-radius: var(--r-sm);
       }
-      @keyframes spin { to { transform: rotate(360deg); } }
     </style>
   </head>
   <body>
     <main>
-      <h1>Connect BrowserOps</h1>
-      <p class="sub">One click to pair this extension with the bridge running on your machine.</p>
-
-      <div id="view-loading" class="card">
-        <div class="row"><span class="spinner"></span><span>Looking for the bridge on <code>127.0.0.1:8765</code>…</span></div>
+      <div class="head">
+        <h1>Connect BrowserOps</h1>
+        <div class="head__sub">One click to pair this extension with the bridge on your machine.</div>
       </div>
 
-      <div id="view-ready" class="card" hidden>
-        <h2>Pair code</h2>
-        <div class="code" id="pair-code">000-000</div>
-        <p class="muted" style="margin-top: 12px;">
-          This code should match the one printed in your bridge's terminal
-          output (look for <code>pair code …</code>). If it matches, click
-          Confirm to finish setup.
-        </p>
-        <div class="actions">
-          <button id="confirm" type="button">Confirm &amp; connect</button>
-          <button id="cancel" type="button" class="ghost">Cancel</button>
+      <div id="view-loading" class="card">
+        <div class="loading-row">
+          <span class="spinner"></span>
+          <span>Looking for the bridge on <code>127.0.0.1:8765</code>…</span>
         </div>
       </div>
 
-      <div id="view-error" class="card error" hidden>
-        <h2 style="color: #8a1a1a;">Bridge not reachable</h2>
-        <p id="error-msg" class="muted" style="color: #6b1515;"></p>
-        <details>
-          <summary>Advanced: set host/port manually</summary>
-          <div style="margin-top: 12px;">
-            <div class="row">
-              <label>Host<input id="adv-host" type="text" value="127.0.0.1" /></label>
-              <label>Port<input id="adv-port" type="number" min="1" max="65535" value="8765" /></label>
+      <div id="view-ready" class="card" hidden>
+        <div class="card__title">Pair code</div>
+        <div class="pair-code-wrap">
+          <div class="pair-code" id="pair-code">000-000</div>
+          <div class="card__body">
+            This code should match the one printed in your bridge's terminal
+            (look for <code>pair code …</code>). If it matches, click Confirm
+            to finish setup.
+          </div>
+        </div>
+        <div class="card__actions">
+          <button id="confirm" type="button" class="btn">Confirm &amp; connect</button>
+          <button id="cancel" type="button" class="btn btn--ghost">Cancel</button>
+        </div>
+      </div>
+
+      <div id="view-error" class="card card--danger" hidden>
+        <div class="card__title">Bridge not reachable</div>
+        <p id="error-msg" class="card__body" style="color: var(--danger-ink);"></p>
+        <details class="advanced">
+          <summary>Set host/port manually</summary>
+          <div class="adv-form">
+            <div class="adv-form__row">
+              <label class="label">Host<input id="adv-host" type="text" class="input" value="127.0.0.1" /></label>
+              <label class="label">Port<input id="adv-port" type="number" class="input" min="1" max="65535" value="8765" /></label>
             </div>
-            <div class="actions">
-              <button id="retry" type="button">Retry</button>
-              <button id="open-options" type="button" class="ghost">Open options</button>
+            <div class="card__actions" style="margin-top: 0;">
+              <button id="retry" type="button" class="btn">Retry</button>
+              <button id="open-options" type="button" class="btn btn--ghost">Open options</button>
             </div>
           </div>
         </details>
       </div>
 
-      <div id="view-paired" class="card success" hidden>
-        <h2 style="color: #1b6b37;">Paired</h2>
-        <p class="muted" style="color: #1b6b37;">
+      <div id="view-paired" class="card card--success" hidden>
+        <div class="card__title">Paired</div>
+        <p class="card__body" style="color: var(--success-ink);">
           Token saved. The extension is connecting — you can close this tab.
           Next: click the BrowserOps icon in your toolbar and pin the tab
           you want agents to drive.
         </p>
       </div>
 
-      <div id="view-consumed" class="card error" hidden>
-        <h2 style="color: #8a1a1a;">Already paired</h2>
-        <p class="muted" style="color: #6b1515;">
+      <div id="view-consumed" class="card card--danger" hidden>
+        <div class="card__title">Already paired</div>
+        <p class="card__body" style="color: var(--danger-ink);">
           The pair code has already been used. If you need to re-pair,
           restart the bridge and reload this page.
         </p>
-        <div class="actions">
-          <button id="open-options-2" type="button" class="ghost">Open options</button>
+        <div class="card__actions">
+          <button id="open-options-2" type="button" class="btn btn--ghost">Open options</button>
         </div>
       </div>
     </main>
