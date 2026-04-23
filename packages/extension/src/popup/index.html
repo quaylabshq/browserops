@@ -6,34 +6,51 @@
     <link rel="stylesheet" href="../ui/tokens.css" />
     <style>
       html, body { width: 320px; }
+      /* Popup scale is small — use a single white canvas with subtle inline
+         dividers instead of the gray+white card-on-canvas pattern lucerna
+         uses at dashboard scale. A 320 px popup doesn't have enough room
+         for competing surfaces without looking banded. */
       body {
-        min-height: 200px;
-        padding: 14px;
+        background: var(--surface);
+        min-height: 0;
+        padding: 0;
         box-sizing: border-box;
         display: flex;
         flex-direction: column;
-        gap: 10px;
       }
 
-      .head { display: flex; align-items: center; justify-content: space-between; }
+      .section {
+        padding: 12px 14px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        border-top: 1px solid var(--ink-06);
+      }
+      /* The top section has nothing above it to divide from. */
+      .head { border-top: 0; }
+
+      .head { flex-direction: row; align-items: center; justify-content: space-between; gap: 8px; }
       .head h1 { font-size: var(--fs-13); }
 
-      .status-row { display: flex; align-items: center; gap: 8px; }
-
-      #main { display: flex; flex-direction: column; gap: 10px; }
+      #main { display: flex; flex-direction: column; }
       #main.hidden { display: none; }
-
-      /* When no token is configured, collapse everything except the setup card. */
+      /* When no token is configured, collapse everything except the setup section. */
       #main.unconfigured > :not(#setup) { display: none; }
 
-      /* --- setup card (first run) ------------------------------------ */
+      /* --- setup section (first run) --------------------------------- */
       #setup { display: none; }
-      #setup.active { display: flex; flex-direction: column; gap: 8px; }
-      #setup .setup-title { font-weight: 500; }
-      #setup .setup-desc { color: var(--ink-45); }
+      #setup.active { display: flex; }
+      .setup-title { font-weight: 500; }
+      .setup-desc { color: var(--ink-45); }
 
       /* --- pinned section -------------------------------------------- */
-      #pinned-section { display: flex; flex-direction: column; gap: 8px; }
+      .section__title {
+        font-size: var(--fs-10);
+        font-weight: 500;
+        color: var(--ink-45);
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
       .pinned-empty { color: var(--ink-45); }
       .pinned-info { display: flex; flex-direction: column; gap: 2px; }
       .pinned-title {
@@ -51,8 +68,8 @@
         overflow: hidden;
         text-overflow: ellipsis;
       }
-      .pinned-actions { display: flex; gap: 6px; }
-      .pinned-actions .btn { flex: 1; height: 24px; padding: 0 8px; font-size: var(--fs-10); }
+      .pinned-actions { display: flex; gap: 6px; margin-top: 2px; }
+      .pinned-actions .btn { flex: 1; height: 26px; padding: 0 10px; }
 
       /* --- yolo toggle ----------------------------------------------- */
       .yolo-row {
@@ -66,27 +83,34 @@
       .yolo-row input { margin: 0; accent-color: var(--ink); }
 
       /* --- safety confirmation --------------------------------------- */
-      #safety { display: none; }
-      #safety.active { display: flex; flex-direction: column; gap: 8px; }
-      .safety-tool {
-        font-family: var(--font-mono);
-        color: var(--ink-60);
-      }
+      #safety { display: none; background: var(--danger-bg); }
+      #safety.active { display: flex; }
+      .safety-tool { font-family: var(--font-mono); color: var(--danger-ink); }
       .safety-reason { color: var(--ink); }
       .safety-actions { display: flex; gap: 6px; }
       .safety-actions .btn { flex: 1; }
 
-      .spacer { flex: 1; min-height: 4px; }
+      /* --- footer action / link -------------------------------------- */
+      .footer {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        padding: 12px 14px;
+        background: var(--surface-2);
+        border-top: 1px solid var(--ink-06);
+      }
+      .footer .btn--block { width: 100%; }
+      .footer a { align-self: center; }
     </style>
   </head>
   <body>
-    <div class="head">
+    <div class="section head">
       <h1>BrowserOps</h1>
       <span id="status" class="pill pill--off">disconnected</span>
     </div>
 
-    <div id="safety" class="card card--danger">
-      <div class="card__title">Confirm risky action</div>
+    <div id="safety" class="section">
+      <div class="section__title">Confirm risky action</div>
       <div class="safety-tool" id="safety-tool"></div>
       <div class="safety-reason" id="safety-reason"></div>
       <div class="safety-actions">
@@ -96,7 +120,7 @@
     </div>
 
     <div id="main">
-      <div id="setup" class="card">
+      <div id="setup" class="section">
         <div class="setup-title">Finish setup</div>
         <div class="setup-desc">
           BrowserOps isn't paired with the bridge yet. Run setup to connect
@@ -105,8 +129,8 @@
         <button id="run-setup" type="button" class="btn btn--block">Run setup</button>
       </div>
 
-      <div id="pinned-section" class="card">
-        <div class="card__title">Pinned tab</div>
+      <div id="pinned-section" class="section">
+        <div class="section__title">Pinned tab</div>
         <div id="pinned-empty" class="pinned-empty">None — pin a tab to let agents use it as home base.</div>
         <div id="pinned-info" class="pinned-info" hidden>
           <div class="pinned-title" id="pinned-title"></div>
@@ -118,14 +142,15 @@
         </div>
       </div>
 
-      <label class="yolo-row" title="Session only. Cleared on browser restart or Disconnect.">
+      <label class="section yolo-row" title="Session only. Cleared on browser restart or Disconnect.">
         <input type="checkbox" id="yolo" />
         <span>Auto-approve risky actions (this session)</span>
       </label>
 
-      <div class="spacer"></div>
-      <button id="kill" type="button" class="btn btn--danger">Disconnect</button>
-      <a id="options" class="link">Open options</a>
+      <div class="footer">
+        <button id="kill" type="button" class="btn btn--danger btn--block">Disconnect</button>
+        <a id="options" class="link">Open options</a>
+      </div>
     </div>
     <script type="module" src="./index.ts"></script>
   </body>
