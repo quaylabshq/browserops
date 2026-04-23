@@ -27,10 +27,9 @@ This generates `~/.browserops/token`, seeds the bundled procedure examples into 
 1. Open `chrome://extensions`.
 2. Toggle **Developer mode** on (top right).
 3. Click **Load unpacked** and select the unpacked extension directory (clone the repo and use `packages/extension/dist/` after `pnpm build`).
-4. Click the extension's **Details → Extension options**.
-5. Paste the token from `~/.browserops/token`. Leave host / port at defaults (`127.0.0.1` / `8765`). **Save**.
+4. An onboarding tab opens automatically. Once the bridge is running (your MCP client will spawn it the first time you use the `browser_*` tools), click **Confirm & connect** — no token copy-paste required.
 
-The options page status pill stays red ("disconnected") until the bridge is running — that's fine.
+The 6-digit **pair code** shown on the onboarding page should match the one the bridge prints to its stderr (`pair code XXX-XXX`). If you missed the tab, open the popup and click **Run setup**. Prefer the old copy-paste flow? Open the extension's options page and paste `~/.browserops/token` there.
 
 ### 3. Use it
 
@@ -262,7 +261,7 @@ Currently ~220 unit tests total across shared (envelope guards, tool catalogue i
 Check `~/.browserops/log.jsonl` — look for `{"dir":"system","event":"boot"}`. If absent, the bridge didn't launch. Run the client's MCP-list command (e.g. `claude mcp list`, Cursor's MCP settings page) to confirm it's registered and the command path resolves.
 
 **"Bad token" close (code 4001) in the log.**
-Token mismatch. Re-copy `~/.browserops/token` into the extension's options page. Save.
+Token mismatch — usually because `~/.browserops/token` was regenerated since the extension last paired. Easiest fix: restart the bridge (so it mints a fresh pair code), open the extension popup → **Run setup**, and confirm. Or paste the current token into the options page manually.
 
 **`list_tabs` returns fewer tabs than I see in Chrome.**
 The bridge mints `tab_id`s only for tabs the extension observed being created. Restart the extension (toggle off/on in `chrome://extensions`) to re-enumerate existing tabs — or close and reopen the tabs you care about.

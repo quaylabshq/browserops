@@ -95,6 +95,9 @@ export async function runInit(): Promise<void> {
   );
   printSnippets(binaryInvocation(), host, port);
 
-  out.write("Next: load the Chrome extension (chrome://extensions → Load unpacked)\n");
-  out.write("then click 'Use this tab' in the extension popup on the page you want to drive.\n");
+  out.write("Next: load the Chrome extension (chrome://extensions → Load unpacked).\n");
+  out.write("An onboarding tab opens automatically — once your MCP client starts the\n");
+  out.write("bridge, click 'Confirm & connect' to pair. (No token copy-paste required;\n");
+  out.write("the bridge prints a 6-digit pair code to its stderr for visual verification.)\n");
+  out.write("Then click the BrowserOps icon and 'Use this tab' on the page you want to drive.\n");
 }
