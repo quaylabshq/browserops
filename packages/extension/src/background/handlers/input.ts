@@ -805,8 +805,7 @@ type FindReplaceSyntheticResult =
   | { status: "ok"; replaced: number; used_fallback: boolean; kind: "input" | "textarea" | "contenteditable" }
   | { status: "no_target" }
   | { status: "not_found" }
-  | { status: "unsupported_kind"; tag: string }
-  | { status: "not_implemented"; kind: "contenteditable" };
+  | { status: "unsupported_kind"; tag: string };
 
 function injectedFindAndReplaceSynthetic(
   selectorOrNull: string | null,
@@ -871,7 +870,91 @@ function injectedFindAndReplaceSynthetic(
     return { status: "ok", replaced: 1, used_fallback: false, kind: tag };
   }
   if ((root as HTMLElement).isContentEditable === true) {
-    return { status: "not_implemented", kind: "contenteditable" };
+    const host = root as HTMLElement;
+    // Build a flat text-node map: one contiguous string plus the per-segment
+    // (node, startOffsetInNode) so we can translate a logical match back to
+    // a DOM Range that spans across text-node boundaries.
+    interface Seg { node: Text; start: number; end: number }
+    const segs: Seg[] = [];
+    const walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT);
+    let running = 0;
+    let logical = "";
+    let cur: Node | null = walker.nextNode();
+    while (cur !== null) {
+      const t = cur as Text;
+      const data = t.data;
+      segs.push({ node: t, start: running, end: running + data.length });
+      running += data.length;
+      logical += data;
+      cur = walker.nextNode();
+    }
+    const haystack = caseSensitive ? logical : logical.toLowerCase();
+    const needle = caseSensitive ? find : find.toLowerCase();
+    const hit = haystack.indexOf(needle);
+    if (hit < 0) return { status: "not_found" };
+    const hitEnd = hit + find.length;
+    // Resolve start and end (node, offset) by binary-walking segs.
+    const locate = (pos: number): { node: Text; offset: number } | null => {
+      for (const seg of segs) {
+        if (pos >= seg.start && pos <= seg.end) {
+          return { node: seg.node, offset: pos - seg.start };
+        }
+      }
+      return null;
+    };
+    const startPt = locate(hit);
+    const endPt = locate(hitEnd);
+    if (startPt === null || endPt === null) return { status: "not_found" };
+    const range = document.createRange();
+    range.setStart(startPt.node, startPt.offset);
+    range.setEnd(endPt.node, endPt.offset);
+    host.focus();
+    const sel = window.getSelection();
+    if (sel !== null) {
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+    try {
+      const evt = new InputEvent("beforeinput", {
+        inputType: "insertReplacementText",
+        data: replace,
+        cancelable: true,
+        bubbles: true,
+      });
+      host.dispatchEvent(evt);
+    } catch {
+      // ignore constructor quirks
+    }
+    let usedFallback = false;
+    let ok = false;
+    try {
+      ok = document.execCommand("insertText", false, replace);
+    } catch {
+      ok = false;
+    }
+    if (!ok) {
+      usedFallback = true;
+      range.deleteContents();
+      const tn = document.createTextNode(replace);
+      range.insertNode(tn);
+      range.setStart(tn, replace.length);
+      range.setEnd(tn, replace.length);
+      if (sel !== null) {
+        sel.removeAllRanges();
+        sel.addRange(range);
+      }
+      try {
+        const evt = new InputEvent("input", {
+          inputType: "insertReplacementText",
+          data: replace,
+          bubbles: true,
+        });
+        host.dispatchEvent(evt);
+      } catch {
+        host.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+    }
+    return { status: "ok", replaced: 1, used_fallback: usedFallback, kind: "contenteditable" };
   }
   return { status: "unsupported_kind", tag };
 }
@@ -1717,12 +1800,6 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       throw codedError(
         "INTERNAL",
         `element <${res.tag}> is not editable (expected input, textarea, or contenteditable)`,
-      );
-    }
-    if (res.status === "not_implemented") {
-      throw codedError(
-        "INTERNAL",
-        `synthetic find_and_replace on ${res.kind} is not yet implemented (impl-04 Step 5)`,
       );
     }
     return {
