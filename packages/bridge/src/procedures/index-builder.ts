@@ -39,6 +39,10 @@ export interface ManifestEntry {
   usedBy: string[];
   /** Pre-tokenized union of all discoverable text fields; deduplicated. */
   tokens: string[];
+  /** Verification state. Procedures default to "draft" until bump_success. */
+  status: "draft" | "trusted";
+  /** Number of recorded successful runs (via procedures_save bump_success). */
+  success_count: number;
 }
 
 export interface Manifest {
@@ -151,6 +155,10 @@ function buildEntry(
   owner: string | null,
   subsNames?: string[],
 ): ManifestEntry {
+  const successCount = proc.meta?.success_count ?? 0;
+  const status: "draft" | "trusted" =
+    proc.meta?.status ?? (successCount >= 1 ? "trusted" : "draft");
+
   const entry: ManifestEntry = {
     path: relPath,
     kind: proc.kind,
@@ -162,6 +170,8 @@ function buildEntry(
     owner,
     usedBy: [], // populated in second pass
     tokens: buildTokens(proc),
+    status,
+    success_count: successCount,
   };
 
   if (proc.kind === "composite") {

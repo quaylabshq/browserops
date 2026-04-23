@@ -30,6 +30,8 @@ function makeEntry(
     owner: null,
     usedBy: [],
     tokens: [],
+    status: "trusted",
+    success_count: 1,
     ...partial,
   };
 }
