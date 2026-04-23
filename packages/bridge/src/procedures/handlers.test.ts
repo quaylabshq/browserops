@@ -144,11 +144,24 @@ steps:
 // Fixture helpers
 // ---------------------------------------------------------------------------
 
+// Appended to every fixture YAML so the index loads them as `status: trusted`
+// and search returns them by default (drafts are filtered out under the
+// status:draft default introduced alongside bump_success).
+const TRUSTED_META = `
+meta:
+  version: 1
+  created: 2026-01-01T00:00:00.000Z
+  last_verified: 2026-01-01T00:00:00.000Z
+  success_count: 1
+  failure_count: 0
+  status: trusted
+`;
+
 async function writeFixture(root: string): Promise<void> {
   async function writeFile(relParts: string[], content: string): Promise<void> {
     const abs = path.join(root, ...relParts);
     await fs.mkdir(path.dirname(abs), { recursive: true });
-    await fs.writeFile(abs, content, "utf8");
+    await fs.writeFile(abs, content + TRUSTED_META, "utf8");
   }
 
   await writeFile(["shared", "gmail.send_email", "procedure.yaml"], SHARED_LEAF_YAML);
