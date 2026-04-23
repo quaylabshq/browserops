@@ -34,6 +34,15 @@ preconditions:
       with:
         url: "https://mail.google.com/mail/u/0/"
 
+# Canonical pattern: read → bind → act-by-ref.
+#
+# browser_type requires `ref` (an integer from the a11y_tree). To target a
+# specific field deterministically, the procedure does a scoped browser_read
+# of the compose dialog, binds the result, and lets the agent select the
+# correct ref from {{compose.refs}} by role+name (e.g. role=textbox, name~="To").
+# Sub-keys of object outputs (.refs.<...>) are agent-resolved at runtime;
+# the binding validator only checks that the first segment (.refs) exists
+# in the tool's outputSchema.
 steps:
   - id: open_compose
     action: browser_click_by_text
@@ -41,27 +50,35 @@ steps:
       tab_id: "{{tab_id}}"
       text: "Compose"
     wait_for:
-      selector: "[data-testid='compose-dialog'], .AD, .dw"
+      selector: "[role='dialog'][aria-label*='New Message'], [role='dialog'][aria-label*='Message']"
+
+  - id: read_compose
+    action: browser_read
+    with:
+      tab_id: "{{tab_id}}"
+      mode: "a11y_tree"
+      selector: "[role='dialog']"
+    bind: compose
 
   - id: fill_recipient
     action: browser_type
     with:
       tab_id: "{{tab_id}}"
-      selector: "[name='to'], .agP input"
+      ref: "{{compose.refs.to}}"
       text: "{{input.to}}"
 
   - id: fill_subject
     action: browser_type
     with:
       tab_id: "{{tab_id}}"
-      selector: "[name='subjectbox'], .aoT"
+      ref: "{{compose.refs.subject}}"
       text: "{{input.subject}}"
 
   - id: fill_body
     action: browser_type
     with:
       tab_id: "{{tab_id}}"
-      selector: "[role='textbox'][aria-label*='Message'], .Am"
+      ref: "{{compose.refs.body}}"
       text: "{{input.body}}"
 
   - id: send
