@@ -261,6 +261,22 @@ browserops/
 
 ---
 
+## 8.1 Procedure runtime
+
+Procedures are persistent, per-user, YAML-on-disk action graphs stored in
+`~/browserops/procedures/`. Each procedure is a versioned directory containing a
+`procedure.yaml` file that declares inputs, preconditions, steps (referencing
+`browser.*` primitives or other procedures via `uses:`), and optional
+`success_criteria`. Six MCP tools surface the subsystem: `procedures.list`,
+`procedures.search`, `procedures.get`, `procedures.save`, `procedures.promote`,
+and `procedures.delete`. The bridge owns persistence, schema validation, index
+building, and search ranking — it never executes procedures. Execution is
+agent-side: the agent reads the YAML body via `procedures.get`, interprets the
+`steps:` sequence, and calls the `browser.*` primitives itself. Canonical design:
+[impl-06-procedures.md](impl-06-procedures.md).
+
+---
+
 ## 9. Open questions deferred from v1
 
 These are intentional gaps that sub-plans should **not** try to close:
