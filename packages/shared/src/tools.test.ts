@@ -101,6 +101,53 @@ describe("browser.read schema", () => {
   });
 });
 
+describe("browser.query_selector schema", () => {
+  const tool = TOOL_DEF_MAP["browser.query_selector"];
+  const inProps = tool?.inputSchema.properties as
+    | Record<string, Record<string, unknown>>
+    | undefined;
+  const outProps = tool?.outputSchema.properties as
+    | Record<string, Record<string, unknown>>
+    | undefined;
+
+  it("is registered", () => {
+    expect(tool).toBeDefined();
+  });
+
+  it("is observation-weight and never risky", () => {
+    expect(tool?.action_weight).toBe(0);
+    expect(tool?.risky).toBe("never");
+  });
+
+  it("requires tab_id and selector", () => {
+    expect(tool?.inputSchema.required).toEqual(["tab_id", "selector"]);
+  });
+
+  it("selector is 1-2048 chars", () => {
+    expect(inProps?.selector?.minLength).toBe(1);
+    expect(inProps?.selector?.maxLength).toBe(2048);
+  });
+
+  it("all defaults to false", () => {
+    expect(inProps?.all?.default).toBe(false);
+  });
+
+  it("output exposes match and matches/total/truncated", () => {
+    expect(outProps?.match).toBeDefined();
+    expect(outProps?.matches?.maxItems).toBe(50);
+    expect(outProps?.total?.type).toBe("integer");
+    expect(outProps?.truncated?.type).toBe("boolean");
+  });
+
+  it("does not include REF error codes (not ref-based)", () => {
+    const codes = tool?.errorCodes ?? [];
+    for (const code of codes) {
+      expect(code).not.toBe("REF_STALE");
+      expect(code).not.toBe("REF_NOT_FOUND");
+    }
+  });
+});
+
 describe("browser.find_and_replace schema", () => {
   const tool = TOOL_DEF_MAP["browser.find_and_replace"];
   const props = tool?.inputSchema.properties as
