@@ -672,59 +672,64 @@ function injectedDescribe(selector: string): {
   aria?: Record<string, string>;
   rect?: { x: number; y: number; width: number; height: number };
 } {
+  // Shared element → state encoder. Duplicated verbatim in
+  // injectedQuerySelector below because MAIN-world injection cannot close
+  // over outer helpers.
+  const describeOne = (el: HTMLElement) => {
+    const tag = el.tagName.toLowerCase();
+    const role = el.getAttribute("role") ?? "";
+    const aria: Record<string, string> = {};
+    for (const a of el.getAttributeNames()) {
+      if (a.startsWith("aria-")) {
+        const v = el.getAttribute(a);
+        if (v !== null) aria[a] = v;
+      }
+    }
+    const attrs: Record<string, string> = {};
+    for (const a of ["id", "class", "name", "type", "href", "placeholder", "data-testid"]) {
+      const v = el.getAttribute(a);
+      if (v !== null) attrs[a] = v;
+    }
+    const rect = el.getBoundingClientRect();
+    const style = window.getComputedStyle(el);
+    const visible =
+      rect.width > 0 &&
+      rect.height > 0 &&
+      style.visibility !== "hidden" &&
+      style.display !== "none" &&
+      style.opacity !== "0";
+    const disabled =
+      (el as HTMLButtonElement).disabled === true ||
+      el.getAttribute("aria-disabled") === "true";
+    const focused = document.activeElement === el;
+    const checked =
+      (el as HTMLInputElement).checked === true ||
+      el.getAttribute("aria-checked") === "true";
+    const valueField = (el as HTMLInputElement).value;
+    const value = typeof valueField === "string" ? valueField : undefined;
+    let name = el.getAttribute("aria-label") ?? "";
+    if (name === "") {
+      const text = (el.textContent ?? "").trim();
+      if (text.length > 0) name = text;
+    }
+    return {
+      role,
+      name: name.slice(0, 200),
+      tag,
+      visible,
+      disabled,
+      focused,
+      checked,
+      value: value !== undefined ? value.slice(0, 1024) : undefined,
+      attrs,
+      aria,
+      rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+    };
+  };
   const el = document.querySelector(selector) as HTMLElement | null;
   if (el === null) return { found: false };
-  const tag = el.tagName.toLowerCase();
-  const role = el.getAttribute("role") ?? "";
-  const aria: Record<string, string> = {};
-  for (const a of el.getAttributeNames()) {
-    if (a.startsWith("aria-")) {
-      const v = el.getAttribute(a);
-      if (v !== null) aria[a] = v;
-    }
-  }
-  const attrs: Record<string, string> = {};
-  for (const a of ["id", "class", "name", "type", "href", "placeholder", "data-testid"]) {
-    const v = el.getAttribute(a);
-    if (v !== null) attrs[a] = v;
-  }
-  const rect = el.getBoundingClientRect();
-  const style = window.getComputedStyle(el);
-  const visible =
-    rect.width > 0 &&
-    rect.height > 0 &&
-    style.visibility !== "hidden" &&
-    style.display !== "none" &&
-    style.opacity !== "0";
-  const disabled =
-    (el as HTMLButtonElement).disabled === true ||
-    el.getAttribute("aria-disabled") === "true";
-  const focused = document.activeElement === el;
-  const checked =
-    (el as HTMLInputElement).checked === true ||
-    el.getAttribute("aria-checked") === "true";
-  const valueField = (el as HTMLInputElement).value;
-  const value = typeof valueField === "string" ? valueField : undefined;
-  let name = el.getAttribute("aria-label") ?? "";
-  if (name === "") {
-    const text = (el.textContent ?? "").trim();
-    if (text.length > 0) name = text;
-  }
-
-  return {
-    found: true,
-    role,
-    name: name.slice(0, 200),
-    tag,
-    visible,
-    disabled,
-    focused,
-    checked,
-    value: value !== undefined ? value.slice(0, 1024) : undefined,
-    attrs,
-    aria,
-    rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
-  };
+  const out = describeOne(el);
+  return { found: true, ...out };
 }
 
 export function registerReadHandler(
