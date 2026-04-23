@@ -17,6 +17,13 @@ export const ERROR_CODES = [
   "EXTENSION_DISCONNECTED",
   "INVALID_PARAMS",
   "INTERNAL",
+  // Procedures errors (plan 06)
+  "PROC_NOT_FOUND",
+  "PROC_ALREADY_EXISTS",
+  "PROC_SCHEMA_INVALID",
+  "PROC_IN_USE",
+  "PROC_OWNER_INVALID",
+  "PROC_DOMAIN_INVALID",
 ] as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[number];
