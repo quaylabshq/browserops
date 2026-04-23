@@ -15,7 +15,7 @@ import { registerSafetyHandler, resolveSafetyDecision } from "./handlers/safety.
 const EXTENSION_VERSION = chrome.runtime.getManifest().version;
 
 // Opaque bridge-issued tab_id ↔ chrome tabId. Rehydrated from
-// chrome.storage.session on SW revive (plans/03-extension.md §D3/D5).
+// chrome.storage.session on SW revive.
 const tabIdToChromeId = new Map<string, number>();
 const chromeIdToTabId = new Map<number, string>();
 
@@ -98,7 +98,7 @@ async function unpinTab(): Promise<void> {
   if (tabId !== null) ctx.emitEvent("tab_unpinned", { tab_id: tabId });
 }
 
-// Inline assign_tab_id handler (plans/03-extension.md §D5). Other handlers
+// Inline assign_tab_id handler. Other handlers
 // will be registered by their own modules in a later PR.
 registerTabHandlers(router, {
   tabIdMap: tabIdToChromeId,
@@ -188,7 +188,6 @@ async function rehydrate(): Promise<void> {
 
 // The user's "Disconnect" intent must survive SW restart (alarms, event
 // wakeups) but not browser restart — storage.session matches that lifetime.
-// plans/03-extension.md §D9 and plans/06-autonomy-safety.md §4.5.
 const KILLED_KEY = "killed";
 
 async function isKilled(): Promise<boolean> {
@@ -292,7 +291,7 @@ chrome.webNavigation.onHistoryStateUpdated.addListener((d) => {
   ctx.emitEvent("page_navigated", { tab_id: tabId, url: d.url, transition_type: d.transitionType });
 });
 
-// --- keep-alive alarm (plans/03-extension.md §D2 step 5) -----------------
+// --- keep-alive alarm -----------------
 
 chrome.alarms.create("ws-keepalive", { periodInMinutes: 0.5 });
 chrome.alarms.onAlarm.addListener((alarm) => {

@@ -12,7 +12,7 @@ interface Bucket {
 }
 
 /**
- * Token-bucket rate limiter. See plans/06-autonomy-safety.md §4.1.
+ * Token-bucket rate limiter.
  *
  * Per-tab capacity: 16 tokens, refill 16/60s (continuous).
  * Global capacity: 60 tokens, refill 60/60s (continuous).

@@ -9,7 +9,7 @@ import type { Router } from "../router.js";
  *
  * v1: viewport-only capture via chrome.tabs.captureVisibleTab. full_page
  * requires CDP Page.captureScreenshot (deferred — see plan 04-tools.md
- * §4.3.10). width/height are sourced from chrome.tabs.get; if the view
+ *). width/height are sourced from chrome.tabs.get; if the view
  * geometry is unavailable we fall back to 0/0 placeholders so the result
  * still matches the schema's required keys.
  */

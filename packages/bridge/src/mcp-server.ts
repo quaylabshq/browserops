@@ -261,7 +261,7 @@ export class McpBridgeServer {
   }
 
   // -------------------------------------------------------------------------
-  // Dispatch pipeline (see plans/01-mcp-server.md §4.5).
+  // Dispatch pipeline.
   // -------------------------------------------------------------------------
 
   private async dispatch(

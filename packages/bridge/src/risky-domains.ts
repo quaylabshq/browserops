@@ -3,7 +3,6 @@ import { riskyDomainsPath } from "./paths.js";
 
 /**
  * Starter sensitive-domain list. User extends via ~/.browserops/risky-domains.json.
- * See plans/06-autonomy-safety.md §4.2.
  */
 const DEFAULT_PATTERNS: readonly string[] = [
   "*.chase.com",

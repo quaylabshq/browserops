@@ -20,7 +20,7 @@ export interface WsClientOptions {
   onConnectionChange: (connected: boolean) => void;
 }
 
-// Fatal close codes from the bridge — do not auto-reconnect (§4.3.1).
+// Fatal close codes from the bridge — do not auto-reconnect.
 const FATAL_CLOSE_CODES: ReadonlySet<number> = new Set([
   CloseCode.BAD_TOKEN,
   CloseCode.PROTOCOL_MISMATCH,

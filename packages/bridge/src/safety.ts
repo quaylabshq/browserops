@@ -29,7 +29,7 @@ export interface ConfirmationChannel {
 }
 
 /**
- * Bridge-side safety layer. See plans/06-autonomy-safety.md.
+ * Bridge-side safety layer.
  *
  * Coarse heuristic in v1:
  * - `browser_execute_js` → always risky.

@@ -329,7 +329,7 @@ export async function search(
         const parsed = YAML.parse(yamlText) as unknown;
         const stepTokens = extractStepTokens(parsed);
         const stepOverlap = overlapCount(queryTokens, stepTokens);
-        // Add 0.5 × overlap / normDenom (per plan §8)
+        // Add 0.5 × overlap / normDenom (
         score = Math.min(1, score + (0.5 * stepOverlap) / normDenom);
       } catch {
         // If loading fails (e.g. file deleted between index and search),

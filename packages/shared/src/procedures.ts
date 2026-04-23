@@ -314,7 +314,7 @@ export const PROCEDURE_SCHEMA: JSONSchemaObject = {
 
 /**
  * Fixed English stop-word list for the procedure search tokenizer.
- * Exact tokens from plan §8 step 4.
+ * Exact tokens from step 4.
  */
 export const STOP_WORDS: ReadonlySet<string> = new Set([
   "a",
@@ -398,7 +398,7 @@ export const STOP_WORDS: ReadonlySet<string> = new Set([
 /**
  * Tokenize a string for procedure search indexing and query matching.
  *
- * Algorithm (plan §8):
+ * Algorithm:
  *   1. Lowercase.
  *   2. Split on /[^a-z0-9]+/ (any non-alphanumeric run is a delimiter).
  *   3. Drop empty tokens and tokens of length ≤1.
