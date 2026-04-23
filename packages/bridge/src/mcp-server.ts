@@ -130,28 +130,29 @@ interface ToolCallResult {
 
 /**
  * Surfaced to the calling agent via MCP `initialize.result.instructions`.
- * Intended audience: a general-purpose agent (e.g. Claude) that has a
- * sub-agent / Task tool of its own. The goal is to nudge it toward
- * delegating interaction loops and anchoring on the user's pinned tab,
- * rather than running every read/click/retry in the parent context.
+ * Written for any MCP-compatible client (Claude Code, Cursor, Zed, Continue,
+ * Windsurf, custom SDK agents, …). The goal is to nudge the agent toward
+ * anchoring on the user's pinned tab and consulting procedure runtime before
+ * re-planning a flow from scratch. Delegation guidance is conditional on
+ * whether the host client exposes a sub-agent / task primitive — clients
+ * without one can ignore that section.
  */
 const SERVER_INSTRUCTIONS = [
   "browserops controls a real Chrome profile via a companion extension.",
   "",
   "Orchestration:",
   "- For flows with ≤8 steps and no retry/branching logic, execute browser.*",
-  "  tool calls directly from the main agent. Do NOT spawn a sub-agent — the",
-  "  spawn overhead costs more tokens than the steps themselves.",
-  "- Only delegate to a sub-agent when the flow has >8 steps OR requires",
-  "  retry loops (REF_STALE, timing, occluded clicks). The sub-agent owns the",
-  "  read → click → wait → verify loop; the parent only sees the final result.",
-  "- Sub-agent brief must be minimal: procedure name + inputs + tab_id only.",
-  "  Never copy procedure steps into the brief — the sub-agent calls",
-  "  procedures.get itself. Example brief:",
+  "  tool calls directly. Keep the loop short; don't add steps that don't",
+  "  advance the task.",
+  "- For flows with >8 steps, or that need retry loops (REF_STALE, timing,",
+  "  occluded clicks), if your host client supports delegating to a",
+  "  sub-agent / background task, hand off the read → click → wait → verify",
+  "  loop so the parent only sees the final result. If it does not, run the",
+  "  loop inline — the steps are the same.",
+  "- Delegation brief (when applicable) must be minimal: procedure name +",
+  "  inputs + tab_id. Never inline procedure steps into the brief — the",
+  "  delegate calls procedures.get itself. Example:",
   '  "Run gmail.send_email on tab t_3 with to=x subject=y body=z. Report success."',
-  "- Two useful sub-agent roles:",
-  "  • navigator — browser.list_tabs / current_tab / pinned_tab / read / screenshot.",
-  "  • operator  — browser.click / click_by_text / type / find_and_replace / press / wait_for (with retry).",
   "",
   "Tab selection:",
   "- If the user is working on a specific tab they already have open, call",
@@ -222,8 +223,9 @@ export class McpBridgeServer {
       tools: TOOL_DEFS.map((d) => ({
         name: d.name,
         description: d.description,
-        // Anthropic's tool API rejects top-level oneOf/allOf/anyOf. Strip them
-        // for the wire; ajv still enforces the full schema at dispatch time.
+        // Some tool-use APIs (Anthropic's among them) reject top-level
+        // oneOf/allOf/anyOf. Strip them on the wire for broad client
+        // compatibility; ajv still enforces the full schema at dispatch time.
         inputSchema: stripTopLevelUnions(d.inputSchema),
         outputSchema: d.outputSchema,
       })),
