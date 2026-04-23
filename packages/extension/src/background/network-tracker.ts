@@ -13,35 +13,77 @@
  *     permissive about those.
  */
 
+interface PerTabState {
+  inFlight: Set<string>;
+  totalStarted: number;
+  totalCompleted: number;
+}
+
+export interface NetworkSnapshot {
+  totalStarted: number;
+  totalCompleted: number;
+  inFlight: number;
+}
+
 export class NetworkTracker {
-  private readonly perTab = new Map<number, Set<string>>();
+  private readonly perTab = new Map<number, PerTabState>();
 
   constructor() {
     const filter: chrome.webRequest.RequestFilter = { urls: ["<all_urls>"] };
 
     chrome.webRequest.onBeforeRequest.addListener((d) => {
-      if (d.tabId < 0) return;
-      let set = this.perTab.get(d.tabId);
-      if (set === undefined) {
-        set = new Set();
-        this.perTab.set(d.tabId, set);
-      }
-      set.add(d.requestId);
+      this._onBeforeRequest(d);
     }, filter);
 
     const drop = (d: { tabId: number; requestId: string }): void => {
-      if (d.tabId < 0) return;
-      const set = this.perTab.get(d.tabId);
-      if (set === undefined) return;
-      set.delete(d.requestId);
-      if (set.size === 0) this.perTab.delete(d.tabId);
+      this._onCompleted(d);
     };
     chrome.webRequest.onCompleted.addListener(drop, filter);
     chrome.webRequest.onErrorOccurred.addListener(drop, filter);
+
+    chrome.tabs.onRemoved.addListener((tabId) => {
+      this.perTab.delete(tabId);
+    });
+  }
+
+  /** @internal exposed for testing */
+  _onBeforeRequest(d: { tabId: number; requestId: string }): void {
+    if (d.tabId < 0) return;
+    let state = this.perTab.get(d.tabId);
+    if (state === undefined) {
+      state = { inFlight: new Set(), totalStarted: 0, totalCompleted: 0 };
+      this.perTab.set(d.tabId, state);
+    }
+    state.inFlight.add(d.requestId);
+    state.totalStarted++;
+  }
+
+  /** @internal exposed for testing */
+  _onCompleted(d: { tabId: number; requestId: string }): void {
+    if (d.tabId < 0) return;
+    const state = this.perTab.get(d.tabId);
+    if (state === undefined) return;
+    state.inFlight.delete(d.requestId);
+    state.totalCompleted++;
+    if (state.inFlight.size === 0 && state.totalStarted === state.totalCompleted) {
+      // Keep the state so counters survive even when idle — only forgetTab / tab close clears it.
+    }
   }
 
   inFlight(chromeTabId: number): number {
-    return this.perTab.get(chromeTabId)?.size ?? 0;
+    return this.perTab.get(chromeTabId)?.inFlight.size ?? 0;
+  }
+
+  snapshot(chromeTabId: number): NetworkSnapshot {
+    const state = this.perTab.get(chromeTabId);
+    if (state === undefined) {
+      return { totalStarted: 0, totalCompleted: 0, inFlight: 0 };
+    }
+    return {
+      totalStarted: state.totalStarted,
+      totalCompleted: state.totalCompleted,
+      inFlight: state.inFlight.size,
+    };
   }
 
   forgetTab(chromeTabId: number): void {
