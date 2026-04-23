@@ -1,4 +1,5 @@
-import { createServer, type Server as HttpServer, type IncomingMessage } from "node:http";
+import { createServer, type Server as HttpServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { randomInt } from "node:crypto";
 import type { Duplex } from "node:stream";
 import { WebSocketServer, WebSocket, type RawData } from "ws";
 import {
@@ -64,6 +65,9 @@ export class WSBridge {
   private lastNotifiedConnected = false;
   private readonly pending = new Map<string, Pending>();
 
+  private readonly pairCodeValue: string;
+  private pairConsumed = false;
+
   readonly confirmation: ConfirmationChannel;
 
   constructor(opts: WSBridgeOptions) {
@@ -77,6 +81,12 @@ export class WSBridge {
     this.logger = opts.logger;
     this.onEvent = opts.onEvent;
     this.onConnectionChange = opts.onConnectionChange;
+
+    // 6-digit pair code, formatted "XXX-XXX" for readability. Regenerated on
+    // every bridge startup — if the first /pair response is lost, the user
+    // restarts the bridge to mint a fresh code.
+    const n = randomInt(0, 1_000_000).toString().padStart(6, "0");
+    this.pairCodeValue = `${n.slice(0, 3)}-${n.slice(3)}`;
 
     this.confirmation = {
       awaitConfirmation: async (input) => {
@@ -102,6 +112,14 @@ export class WSBridge {
     return this.activeSocket !== undefined && this.activeSocket.readyState === WebSocket.OPEN;
   }
 
+  get pairCode(): string {
+    return this.pairCodeValue;
+  }
+
+  get pairCodeConsumed(): boolean {
+    return this.pairConsumed;
+  }
+
   async start(): Promise<void> {
     if (this.host !== "127.0.0.1" && this.host !== "localhost" && this.host !== "::1") {
       throw new Error(`refusing to bind non-loopback host: ${this.host}`);
@@ -112,6 +130,7 @@ export class WSBridge {
       maxPayload: MAX_FRAME_BYTES,
       perMessageDeflate: false,
     });
+    this.http.on("request", (req, res) => this.handleHttpRequest(req, res));
     this.http.on("upgrade", (req, socket, head) => this.handleUpgrade(req, socket, head));
     this.wss.on("connection", (ws, req) => this.handleConnection(ws, req));
     this.wss.on("error", (err) =>
@@ -226,6 +245,73 @@ export class WSBridge {
       void this.logger.write({ dir: "system", event: "send_error", error: String(err) });
       return false;
     }
+  }
+
+  /**
+   * Handle plain HTTP requests on the bridge port. Currently serves only the
+   * one-shot /pair endpoint used by the extension's onboarding page to
+   * retrieve the token without copy-paste. Origin is restricted to
+   * chrome-extension:// to keep random webpages from scraping the token.
+   */
+  private handleHttpRequest(req: IncomingMessage, res: ServerResponse): void {
+    const urlPath = (req.url ?? "/").split("?", 1)[0] ?? "/";
+    const origin = req.headers.origin ?? "";
+
+    if (urlPath !== "/pair") {
+      res.statusCode = 404;
+      res.setHeader("content-type", "text/plain");
+      res.end("not found");
+      return;
+    }
+
+    // CORS preflight from the extension.
+    if (req.method === "OPTIONS") {
+      this.writeCorsHeaders(res, origin);
+      res.statusCode = 204;
+      res.end();
+      return;
+    }
+
+    if (req.method !== "GET") {
+      res.statusCode = 405;
+      res.setHeader("allow", "GET, OPTIONS");
+      res.end("method not allowed");
+      return;
+    }
+
+    if (!this.isOriginAllowed(origin)) {
+      void this.logger.write({ dir: "system", event: "pair_origin_rejected", origin });
+      res.statusCode = 403;
+      res.setHeader("content-type", "text/plain");
+      res.end("origin not allowed");
+      return;
+    }
+
+    if (this.pairConsumed) {
+      this.writeCorsHeaders(res, origin);
+      res.statusCode = 410;
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ error: "already_paired" }));
+      return;
+    }
+
+    this.pairConsumed = true;
+    void this.logger.write({ dir: "system", event: "pair_issued", origin });
+    this.writeCorsHeaders(res, origin);
+    res.statusCode = 200;
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify({
+      code: this.pairCodeValue,
+      token: this.token,
+      bridge_version: this.bridgeVersion,
+    }));
+  }
+
+  private writeCorsHeaders(res: ServerResponse, origin: string): void {
+    res.setHeader("access-control-allow-origin", origin);
+    res.setHeader("access-control-allow-methods", "GET, OPTIONS");
+    res.setHeader("access-control-allow-headers", "content-type");
+    res.setHeader("vary", "origin");
   }
 
   private handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
