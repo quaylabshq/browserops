@@ -156,6 +156,7 @@ interface TypeParams {
 interface PressParams {
   tab_id: string;
   keys: readonly string[];
+  observe_effects?: boolean;
 }
 
 interface ScrollParams {
@@ -1686,7 +1687,10 @@ function parsePress(raw: Record<string, unknown>): PressParams {
       throw codedError("INVALID_PARAMS", "each key must be a non-empty string");
     }
   }
-  return { tab_id, keys: keys as string[] };
+  const result: PressParams = { tab_id, keys: keys as string[] };
+  // observe_effects defaults to true; only false explicitly disables observation.
+  if (raw["observe_effects"] === false) result.observe_effects = false;
+  return result;
 }
 
 function parseScroll(raw: Record<string, unknown>): ScrollParams {
@@ -2552,9 +2556,12 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
     dispatch: "synthetic" | "trusted";
     editor?: string;
     site?: string;
+    page_effect?: PageEffect;
   }> => {
     const params = parsePress(raw);
     const chromeId = resolveChromeId(tabIdMap, params.tab_id);
+    // observe_effects defaults to true; callers pass false to opt out.
+    const observeEffects = params.observe_effects !== false;
     // Partition into leading modifiers + trailing key. If the array is
     // entirely modifiers, fire the last one as the key (matches "hold Ctrl"
     // semantics for chord primitives). Accepts Primary as a modifier and
@@ -2611,50 +2618,66 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       };
       const keyMeta = CDP_KEY_META[terminal] ?? {};
 
-      await cdp.withAttach(chromeId, async () => {
-        // Fire modifier keyDowns first.
-        for (const mod of mods) {
+      const dispatchTrustedPress = async (): Promise<{
+        pressed: true;
+        dispatch: "trusted";
+        editor?: string;
+        site?: string;
+      }> => {
+        await cdp.withAttach(chromeId, async () => {
+          // Fire modifier keyDowns first.
+          for (const mod of mods) {
+            await cdp.send(chromeId, "Input.dispatchKeyEvent", {
+              type: "keyDown",
+              key: mod,
+              modifiers: modBitmask,
+            });
+          }
+          // Key down.
           await cdp.send(chromeId, "Input.dispatchKeyEvent", {
             type: "keyDown",
-            key: mod,
+            key: terminal,
             modifiers: modBitmask,
+            ...keyMeta,
           });
-        }
-        // Key down.
-        await cdp.send(chromeId, "Input.dispatchKeyEvent", {
-          type: "keyDown",
-          key: terminal,
-          modifiers: modBitmask,
-          ...keyMeta,
-        });
-        // Key up.
-        await cdp.send(chromeId, "Input.dispatchKeyEvent", {
-          type: "keyUp",
-          key: terminal,
-          modifiers: modBitmask,
-        });
-        // Modifier keyUps (reverse order).
-        for (const mod of [...mods].reverse()) {
+          // Key up.
           await cdp.send(chromeId, "Input.dispatchKeyEvent", {
             type: "keyUp",
-            key: mod,
+            key: terminal,
             modifiers: modBitmask,
           });
+          // Modifier keyUps (reverse order).
+          for (const mod of [...mods].reverse()) {
+            await cdp.send(chromeId, "Input.dispatchKeyEvent", {
+              type: "keyUp",
+              key: mod,
+              modifiers: modBitmask,
+            });
+          }
+        });
+        // Surface dispatch mode, editor framework, and site hint in response.
+        const r: { pressed: true; dispatch: "trusted"; editor?: string; site?: string } = {
+          pressed: true,
+          dispatch: "trusted",
+        };
+        if (probe.editor !== null) r.editor = probe.editor;
+        if (siteHint !== null) {
+          try {
+            const tab = await chrome.tabs.get(chromeId);
+            if (tab.url) r.site = new URL(tab.url).hostname;
+          } catch { /* ignore */ }
         }
-      });
-      // Surface dispatch mode, editor framework, and site hint in response.
-      const pressResult: { pressed: true; dispatch: "trusted"; editor?: string; site?: string } = {
-        pressed: true,
-        dispatch: "trusted",
+        return r;
       };
-      if (probe.editor !== null) pressResult.editor = probe.editor;
-      if (siteHint !== null) {
-        try {
-          const tab = await chrome.tabs.get(chromeId);
-          if (tab.url) pressResult.site = new URL(tab.url).hostname;
-        } catch { /* ignore */ }
+
+      if (observeEffects) {
+        const { result, effect } = await withEffectObservation(
+          { chromeTabId: chromeId, windowMs: 300, networkTracker: network },
+          dispatchTrustedPress,
+        );
+        return { ...result, page_effect: effect };
       }
-      return pressResult;
+      return dispatchTrustedPress();
     }
 
     // Synthetic path: dispatch KeyboardEvent to the drilled editor root (if
@@ -2662,24 +2685,40 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
     // the activeElement is the outer role="textbox" wrapper, but Quill's
     // keydown listener lives on the inner .ql-editor. For non-editor elements
     // probe.rootSelector is null and behaviour is unchanged.
-    await execInTab(
-      chromeId,
-      injectedPress,
-      [terminal, modifierFlags(mods), probe.rootSelector] as const,
-    );
-    // Surface dispatch mode, editor framework, and site hint in response.
-    const pressResult: { pressed: true; dispatch: "synthetic"; editor?: string; site?: string } = {
-      pressed: true,
-      dispatch: "synthetic",
+    const dispatchSyntheticPress = async (): Promise<{
+      pressed: true;
+      dispatch: "synthetic";
+      editor?: string;
+      site?: string;
+    }> => {
+      await execInTab(
+        chromeId,
+        injectedPress,
+        [terminal, modifierFlags(mods), probe.rootSelector] as const,
+      );
+      // Surface dispatch mode, editor framework, and site hint in response.
+      const r: { pressed: true; dispatch: "synthetic"; editor?: string; site?: string } = {
+        pressed: true,
+        dispatch: "synthetic",
+      };
+      if (probe.editor !== null) r.editor = probe.editor;
+      if (siteHint !== null) {
+        try {
+          const tab = await chrome.tabs.get(chromeId);
+          if (tab.url) r.site = new URL(tab.url).hostname;
+        } catch { /* ignore */ }
+      }
+      return r;
     };
-    if (probe.editor !== null) pressResult.editor = probe.editor;
-    if (siteHint !== null) {
-      try {
-        const tab = await chrome.tabs.get(chromeId);
-        if (tab.url) pressResult.site = new URL(tab.url).hostname;
-      } catch { /* ignore */ }
+
+    if (observeEffects) {
+      const { result, effect } = await withEffectObservation(
+        { chromeTabId: chromeId, windowMs: 300, networkTracker: network },
+        dispatchSyntheticPress,
+      );
+      return { ...result, page_effect: effect };
     }
-    return pressResult;
+    return dispatchSyntheticPress();
   });
 
   router.register("browser_scroll", async (raw): Promise<{ scrolled: true }> => {
