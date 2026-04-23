@@ -1,0 +1,76 @@
+schema_version: 1
+
+name: gmail.send_email
+description: Compose and send a Gmail email via the web UI
+kind: leaf
+domain: gmail
+
+triggers:
+  - send an email to
+  - email someone about
+  - compose a message to
+  - write an email to
+
+tags: [email, outreach]
+
+inputs:
+  to:
+    type: string
+    required: true
+    description: "Recipient email address"
+  subject:
+    type: string
+    required: true
+    description: "Email subject line"
+  body:
+    type: string
+    required: true
+    description: "Plain-text email body"
+
+preconditions:
+  - url_matches: "^https://mail\\.google\\.com/"
+    fallback:
+      action: browser.navigate
+      with:
+        url: "https://mail.google.com/mail/u/0/"
+
+steps:
+  - id: open_compose
+    action: browser.click_by_text
+    with:
+      tab_id: "{{tab_id}}"
+      text: "Compose"
+    wait_for:
+      selector: "[data-testid='compose-dialog'], .AD, .dw"
+
+  - id: fill_recipient
+    action: browser.type
+    with:
+      tab_id: "{{tab_id}}"
+      selector: "[name='to'], .agP input"
+      text: "{{input.to}}"
+
+  - id: fill_subject
+    action: browser.type
+    with:
+      tab_id: "{{tab_id}}"
+      selector: "[name='subjectbox'], .aoT"
+      text: "{{input.subject}}"
+
+  - id: fill_body
+    action: browser.type
+    with:
+      tab_id: "{{tab_id}}"
+      selector: "[role='textbox'][aria-label*='Message'], .Am"
+      text: "{{input.body}}"
+
+  - id: send
+    action: browser.click_by_text
+    with:
+      tab_id: "{{tab_id}}"
+      text: "Send"
+    wait_for:
+      text: "Message sent"
+
+success_criteria:
+  - toast_text: "Message sent"

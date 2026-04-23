@@ -93,6 +93,20 @@ See `plans/04-tools.md` for full schemas.
 - `browser.screenshot` with `full_page: true` returns `INTERNAL` — viewport-only in v1.
 - Risky actions (`execute_js` always, click/type on financial domains) currently deny after the 30 s confirmation timeout because the extension popup doesn't yet render the confirmation UI. Set `BROWSEROPS_AUTOCONFIRM=1` to bypass during testing.
 
+## Procedure runtime
+
+Procedures are named, parameterised, reusable action graphs that the agent can discover and replay without re-planning from a screenshot every time. They live in `~/browserops/procedures/` (user-visible, not hidden) and are surfaced through six MCP tools: `procedures.list`, `procedures.search`, `procedures.get`, `procedures.save`, `procedures.promote`, `procedures.delete`.
+
+To get started, copy an example from `examples/procedures/` into `~/browserops/procedures/shared/`:
+
+```bash
+mkdir -p ~/browserops/procedures/shared/gmail.send_email
+cp examples/procedures/gmail.send_email/procedure.yaml \
+   ~/browserops/procedures/shared/gmail.send_email/procedure.yaml
+```
+
+See `examples/procedures/` for annotated seed procedures and `plans/impl-06-procedures.md` for the full design (schema, search ranking, MCP tool specs, and disk layout).
+
 ## Safety defaults
 
 - **Rate limit:** 16 actions/minute per tab, 60/minute globally. Exceeded → `RATE_LIMITED` with `retry_after_ms`.
