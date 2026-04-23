@@ -732,6 +732,115 @@ function injectedDescribe(selector: string): {
   return { found: true, ...out };
 }
 
+/**
+ * Injected: query elements by CSS selector and return the same shape as
+ * injectedDescribe (minus `ref`) for each match. Read-only — no ref
+ * assignment, no walker mutation. `all=true` returns up to `maxResults`
+ * matches with a `total` count for caller-side truncation detection.
+ */
+interface QuerySelectorState {
+  role: string;
+  name: string;
+  tag: string;
+  visible: boolean;
+  disabled: boolean;
+  focused: boolean;
+  checked: boolean;
+  value?: string;
+  attrs: Record<string, string>;
+  aria: Record<string, string>;
+  rect: { x: number; y: number; width: number; height: number };
+}
+
+function injectedQuerySelector(
+  selector: string,
+  all: boolean,
+  maxResults: number,
+): {
+  found: boolean;
+  matches: QuerySelectorState[];
+  total: number;
+  invalidSelector?: string;
+} {
+  // Duplicated from injectedDescribe — see that function for invariants.
+  const describeOne = (el: HTMLElement): QuerySelectorState => {
+    const tag = el.tagName.toLowerCase();
+    const role = el.getAttribute("role") ?? "";
+    const aria: Record<string, string> = {};
+    for (const a of el.getAttributeNames()) {
+      if (a.startsWith("aria-")) {
+        const v = el.getAttribute(a);
+        if (v !== null) aria[a] = v;
+      }
+    }
+    const attrs: Record<string, string> = {};
+    for (const a of ["id", "class", "name", "type", "href", "placeholder", "data-testid"]) {
+      const v = el.getAttribute(a);
+      if (v !== null) attrs[a] = v;
+    }
+    const rect = el.getBoundingClientRect();
+    const style = window.getComputedStyle(el);
+    const visible =
+      rect.width > 0 &&
+      rect.height > 0 &&
+      style.visibility !== "hidden" &&
+      style.display !== "none" &&
+      style.opacity !== "0";
+    const disabled =
+      (el as HTMLButtonElement).disabled === true ||
+      el.getAttribute("aria-disabled") === "true";
+    const focused = document.activeElement === el;
+    const checked =
+      (el as HTMLInputElement).checked === true ||
+      el.getAttribute("aria-checked") === "true";
+    const valueField = (el as HTMLInputElement).value;
+    const value = typeof valueField === "string" ? valueField.slice(0, 1024) : undefined;
+    let name = el.getAttribute("aria-label") ?? "";
+    if (name === "") {
+      const text = (el.textContent ?? "").trim();
+      if (text.length > 0) name = text;
+    }
+    return {
+      role,
+      name: name.slice(0, 200),
+      tag,
+      visible,
+      disabled,
+      focused,
+      checked,
+      ...(value !== undefined ? { value } : {}),
+      attrs,
+      aria,
+      rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+    };
+  };
+  if (!all) {
+    let el: Element | null;
+    try {
+      el = document.querySelector(selector);
+    } catch (e) {
+      return { found: false, matches: [], total: 0, invalidSelector: String((e as Error)?.message ?? e) };
+    }
+    if (el === null) return { found: false, matches: [], total: 0 };
+    return { found: true, matches: [describeOne(el as HTMLElement)], total: 1 };
+  }
+  let list: NodeListOf<Element>;
+  try {
+    list = document.querySelectorAll(selector);
+  } catch (e) {
+    return { found: false, matches: [], total: 0, invalidSelector: String((e as Error)?.message ?? e) };
+  }
+  const total = list.length;
+  const out: QuerySelectorState[] = [];
+  const cap = Math.min(total, Math.max(1, maxResults));
+  for (let i = 0; i < cap; i++) {
+    const el = list.item(i);
+    if (el === null) continue;
+    out.push(describeOne(el as HTMLElement));
+  }
+  return { found: total > 0, matches: out, total };
+}
+
 export function registerReadHandler(
   router: Router,
   opts: { tabIdMap: Map<string, number>; refCache: RefCache },
@@ -887,5 +996,49 @@ export function registerReadHandler(
       ...(res.aria !== undefined ? { aria: res.aria } : {}),
       ...(res.rect !== undefined ? { rect: res.rect } : {}),
     };
+  });
+
+  router.register("browser.query_selector", async (rawParams) => {
+    const MAX_MATCHES = 50;
+    const tab_id = rawParams["tab_id"];
+    const selector = rawParams["selector"];
+    const allRaw = rawParams["all"];
+    if (typeof tab_id !== "string") {
+      throw codedError("INVALID_PARAMS", "tab_id must be a string");
+    }
+    if (typeof selector !== "string" || selector.length === 0 || selector.length > 2048) {
+      throw codedError(
+        "INVALID_PARAMS",
+        "selector must be a non-empty string up to 2048 chars",
+      );
+    }
+    const all = allRaw === true;
+    const chromeTabId = opts.tabIdMap.get(tab_id);
+    if (chromeTabId === undefined) {
+      throw codedError("TAB_NOT_FOUND", `unknown tab_id: ${tab_id}`);
+    }
+    const results = (await chrome.scripting.executeScript({
+      target: { tabId: chromeTabId },
+      world: "MAIN",
+      func: injectedQuerySelector,
+      args: [selector, all, MAX_MATCHES],
+    })) as chrome.scripting.InjectionResult[];
+    const res = results[0]?.result as
+      | ReturnType<typeof injectedQuerySelector>
+      | undefined;
+    if (res === undefined) {
+      throw codedError("INTERNAL", "executeScript returned no result");
+    }
+    if (res.invalidSelector !== undefined) {
+      throw codedError("INVALID_PARAMS", `invalid CSS selector: ${res.invalidSelector}`);
+    }
+    if (all) {
+      return {
+        matches: res.matches,
+        total: res.total,
+        truncated: res.total > res.matches.length,
+      };
+    }
+    return { match: res.matches.length > 0 ? res.matches[0] : null };
   });
 }
