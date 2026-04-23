@@ -20,6 +20,7 @@ export interface PageEffect {
     requests_completed: number;
     in_flight_at_end: number;
   };
+  console_errors: number;   // count of console.error() calls during the window
   window_ms: number;
   truncated?: boolean;
 }

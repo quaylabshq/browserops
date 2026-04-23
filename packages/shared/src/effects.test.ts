@@ -8,6 +8,7 @@ describe("PageEffect", () => {
       url: { changed: true, before: "https://example.com/a", after: "https://example.com/b" },
       focus: { changed: true, before_selector: "#search", after_selector: "#results" },
       network: { requests_started: 4, requests_completed: 3, in_flight_at_end: 1 },
+      console_errors: 0,
       window_ms: 500,
       truncated: false,
     };
@@ -21,6 +22,7 @@ describe("PageEffect", () => {
       url: { changed: false },
       focus: { changed: false },
       network: { requests_started: 0, requests_completed: 0, in_flight_at_end: 0 },
+      console_errors: 0,
       window_ms: 100,
     };
     void effect;
@@ -32,6 +34,7 @@ describe("PageEffect", () => {
       url: { changed: false },
       focus: { changed: true, before_selector: null, after_selector: null },
       network: { requests_started: 1, requests_completed: 1, in_flight_at_end: 0 },
+      console_errors: 0,
       window_ms: 250,
     };
     void effect;
@@ -43,6 +46,7 @@ describe("PageEffect", () => {
       url: { changed: false },
       focus: { changed: false, before_selector: null, after_selector: null },
       network: { requests_started: 0, requests_completed: 0, in_flight_at_end: 0 },
+      console_errors: 0,
       window_ms: 50,
     };
     void effect;
