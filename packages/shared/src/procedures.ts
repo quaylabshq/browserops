@@ -66,6 +66,13 @@ export interface ProcedureMetaDef {
   last_verified?: string;
   success_count?: number;
   failure_count?: number;
+  /**
+   * draft  = saved but never verified against the live UI; excluded from
+   *          procedures_search by default.
+   * trusted = verified at least once (success_count >= 1) via procedures_save
+   *           with bump_success: true.
+   */
+  status?: "draft" | "trusted";
 }
 
 /**
@@ -137,6 +144,7 @@ const metaSchema: JSONSchemaObject = {
     last_verified: { type: "string" },
     success_count: { type: "number", minimum: 0 },
     failure_count: { type: "number", minimum: 0 },
+    status: { enum: ["draft", "trusted"] as const },
   },
 };
 
