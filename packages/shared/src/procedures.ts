@@ -28,6 +28,33 @@ export interface PreconditionDef {
   };
 }
 
+/**
+ * Loose assertion shape emitted by procedures_compile (Phase 4) and
+ * verified by procedures_execute (Phase 5 Step 2) during replay.
+ *
+ * All sub-fields are optional — a step declares only what it cares about.
+ */
+export interface ExpectedEffect {
+  dom?: {
+    any?: boolean;
+    added_min?: number;
+    removed_min?: number;
+    attr_changes_min?: number;
+    text_changes_min?: number;
+  };
+  url?: {
+    changed?: boolean;
+  };
+  focus?: {
+    changed?: boolean;
+  };
+  network?: {
+    requests_started_min?: number;
+    requests_completed_min?: number;
+  };
+  console_errors_max?: number;
+}
+
 /** A concrete single-action step (non-for-each). */
 export interface ActionStepDef {
   id: string;
@@ -39,6 +66,7 @@ export interface ActionStepDef {
   };
   bind?: string;
   on_fail?: Array<{ action: string; with?: Record<string, unknown> }>;
+  expected_effect?: ExpectedEffect;
 }
 
 /** A for-each iteration step. */
@@ -159,6 +187,54 @@ const doActionSchema: JSONSchemaObject = {
   },
 };
 
+/**
+ * Inline schema for an expected_effect object on a step.
+ *
+ * All fields are optional — a step declares only the assertions it cares
+ * about. Sub-objects use additionalProperties:false so typos inside are
+ * caught at validation time.
+ */
+const expectedEffectSchema: JSONSchemaObject = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    dom: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        any: { type: "boolean" },
+        added_min: { type: "number", minimum: 0 },
+        removed_min: { type: "number", minimum: 0 },
+        attr_changes_min: { type: "number", minimum: 0 },
+        text_changes_min: { type: "number", minimum: 0 },
+      },
+    },
+    url: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        changed: { type: "boolean" },
+      },
+    },
+    focus: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        changed: { type: "boolean" },
+      },
+    },
+    network: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        requests_started_min: { type: "number", minimum: 0 },
+        requests_completed_min: { type: "number", minimum: 0 },
+      },
+    },
+    console_errors_max: { type: "number", minimum: 0 },
+  },
+};
+
 /** Inline schema for a single step (action or for-each). */
 const stepSchema: JSONSchemaObject = {
   type: "object",
@@ -189,6 +265,12 @@ const stepSchema: JSONSchemaObject = {
       items: doActionSchema,
       minItems: 1,
       maxItems: 40,
+    },
+    expected_effect: {
+      ...expectedEffectSchema,
+      description:
+        "Loose assertions about the page-level effect of this step. " +
+        "Emitted by procedures_compile; verified by procedures_execute during replay.",
     },
   },
 };
