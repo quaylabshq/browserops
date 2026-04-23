@@ -633,6 +633,56 @@ All modes truncate at `max_length` (default 128 KiB) and set `truncated: true` i
 
 ---
 
+#### 4.3.13a `browser.find_and_replace`
+
+**Description.** Replace a substring inside an already-editable element without clearing the whole field. Complements `browser.type(mode:"trusted", clear_first:true)`, which owns the full-field-clear case. Works on `<input>`, `<textarea>`, and contenteditable.
+
+**`params`**
+```json
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["tab_id", "find", "replace"],
+  "properties": {
+    "tab_id":         { "type": "string", "pattern": "^t_[0-9a-z]+$" },
+    "ref":            { "type": "integer", "minimum": 1 },
+    "find":           { "type": "string", "minLength": 1, "maxLength": 4096 },
+    "replace":        { "type": "string", "maxLength": 32768 },
+    "occurrence":     { "enum": ["first", "all"], "default": "first" },
+    "mode":           { "enum": ["synthetic", "trusted"] },
+    "case_sensitive": { "type": "boolean", "default": true }
+  }
+}
+```
+
+`ref` is optional; when omitted, the target is `document.activeElement` (useful after a prior `browser.click` on the field). `mode: "synthetic"` (default) dispatches `beforeinput`+`input(insertReplacementText)` and either splices the native-input value via the prototype setter or issues `document.execCommand("insertText")` with a Range-manipulation fallback on contenteditable. `mode: "trusted"` sets the DOM selection to the match and issues CDP `Input.insertText` under a debugger attach — required on rich editors (Gmail, Notion, Slate, ProseMirror, Lexical) that gate on `isTrusted`. `occurrence: "all"` replaces every match with a loop cap of 1024; the search cursor advances past each inserted replacement so `replace` containing `find` cannot loop.
+
+**`result`**
+```json
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["replaced"],
+  "properties": {
+    "replaced":      { "type": "integer", "minimum": 0 },
+    "mode":          { "enum": ["synthetic", "trusted"] },
+    "used_fallback": { "type": "boolean" }
+  }
+}
+```
+
+`used_fallback: true` indicates the synthetic contenteditable path had to drop from `execCommand("insertText")` to the Range-manipulation fallback — a signal that the site's editor is intercepting `beforeinput`, in which case the caller should retry with `mode: "trusted"`.
+
+**Error codes.** `TAB_NOT_FOUND`, `REF_STALE`, `REF_NOT_FOUND` (when `ref` is provided), `INVALID_PARAMS` (no target when `ref` omitted and `document.activeElement` is not editable), `TEXT_NOT_FOUND`, `CDP_ATTACH_FAILED` (trusted mode only), `RISKY_ACTION_DENIED`, `RATE_LIMITED`.
+
+**`action_weight`** `1`.
+
+**`risky`** conditional — treated as risky only when the active tab is on a sensitive domain (mirrors `browser.type`).
+
+**Implementation note.** Caret lands at the end of the (last) replacement in both modes. Cross-text-node matches in contenteditable are supported via a flat-map `TreeWalker(SHOW_TEXT)` that translates logical-string offsets into DOM `Range` endpoints; replacements collapse to a single text node under the common ancestor, which means inline formatting inside the find substring is lost by design.
+
+---
+
 #### 4.3.14 `browser.press`
 
 **Description.** Send a keyboard-only chord to the tab without targeting a specific ref.
