@@ -30,6 +30,39 @@ export class CodedError extends Error {
 }
 
 // ---------------------------------------------------------------------------
+// atomicWriteFile
+// ---------------------------------------------------------------------------
+
+/**
+ * Atomically writes `text` to `absPath` (tmp + rename pattern).
+ *
+ * Creates parent directories as needed. Shared by YAML writers and
+ * index-builder so all on-disk writes are consistent.
+ */
+export async function atomicWriteFile(
+  absPath: string,
+  text: string,
+): Promise<void> {
+  const dir = path.dirname(absPath);
+  const tmpPath = `${absPath}.tmp-${process.pid}-${Date.now()}`;
+
+  await fs.mkdir(dir, { recursive: true });
+
+  try {
+    await fs.writeFile(tmpPath, text, "utf8");
+    await fs.rename(tmpPath, absPath);
+  } catch (err) {
+    await fs.unlink(tmpPath).catch(() => undefined);
+    const nodeErr = err as NodeJS.ErrnoException;
+    throw new CodedError(
+      "INTERNAL",
+      `failed to write file: ${absPath}: ${nodeErr.message}`,
+      { path: absPath, cause: nodeErr.code },
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
 // readProcedureYaml
 // ---------------------------------------------------------------------------
 
