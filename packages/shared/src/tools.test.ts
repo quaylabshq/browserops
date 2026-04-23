@@ -3,14 +3,15 @@ import { TOOL_DEFS, TOOL_DEF_MAP } from "./tools.js";
 import { ERROR_CODES } from "./errors.js";
 
 describe("TOOL_DEFS catalogue", () => {
-  it("contains 25 v1 tools", () => {
-    expect(TOOL_DEFS).toHaveLength(25);
+  it("contains 31 tools (25 browser + 6 procedures)", () => {
+    expect(TOOL_DEFS).toHaveLength(31);
   });
 
-  it("every tool name is prefixed browser. and unique", () => {
+  it("every tool name is prefixed browser. or procedures. and unique", () => {
     const names = TOOL_DEFS.map((t) => t.name);
     expect(new Set(names).size).toBe(names.length);
-    for (const n of names) expect(n.startsWith("browser.")).toBe(true);
+    for (const n of names)
+      expect(n.startsWith("browser.") || n.startsWith("procedures.")).toBe(true);
   });
 
   it("TOOL_DEF_MAP matches the array", () => {
@@ -202,5 +203,167 @@ describe("browser.screenshot schema", () => {
   it("max_dimension is bounded to [1, 8192]", () => {
     expect(props?.max_dimension?.minimum).toBe(1);
     expect(props?.max_dimension?.maximum).toBe(8192);
+  });
+});
+
+describe("procedures.list", () => {
+  const tool = TOOL_DEF_MAP["procedures.list"];
+
+  it("is registered", () => {
+    expect(tool).toBeDefined();
+  });
+
+  it("is observation-weight and never risky", () => {
+    expect(tool?.action_weight).toBe(0);
+    expect(tool?.risky).toBe("never");
+  });
+
+  it("errorCodes contains PROC_NOT_FOUND", () => {
+    expect(tool?.errorCodes).toContain("PROC_NOT_FOUND");
+  });
+
+  it("has no required inputs", () => {
+    expect(tool?.inputSchema.required).toBeUndefined();
+  });
+});
+
+describe("procedures.search", () => {
+  const tool = TOOL_DEF_MAP["procedures.search"];
+  const props = tool?.inputSchema.properties as
+    | Record<string, Record<string, unknown>>
+    | undefined;
+
+  it("is registered", () => {
+    expect(tool).toBeDefined();
+  });
+
+  it("is observation-weight and never risky", () => {
+    expect(tool?.action_weight).toBe(0);
+    expect(tool?.risky).toBe("never");
+  });
+
+  it("errorCodes contains PROC_NOT_FOUND", () => {
+    expect(tool?.errorCodes).toContain("PROC_NOT_FOUND");
+  });
+
+  it("requires query", () => {
+    expect(tool?.inputSchema.required).toContain("query");
+  });
+
+  it("limit defaults to 10 bounded [1, 25]", () => {
+    expect(props?.limit?.default).toBe(10);
+    expect(props?.limit?.minimum).toBe(1);
+    expect(props?.limit?.maximum).toBe(25);
+  });
+
+  it("min_score defaults to 0.2 bounded [0, 1]", () => {
+    expect(props?.min_score?.default).toBe(0.2);
+    expect(props?.min_score?.minimum).toBe(0);
+    expect(props?.min_score?.maximum).toBe(1);
+  });
+});
+
+describe("procedures.get", () => {
+  const tool = TOOL_DEF_MAP["procedures.get"];
+
+  it("is registered", () => {
+    expect(tool).toBeDefined();
+  });
+
+  it("is observation-weight and never risky", () => {
+    expect(tool?.action_weight).toBe(0);
+    expect(tool?.risky).toBe("never");
+  });
+
+  it("errorCodes contains PROC_NOT_FOUND", () => {
+    expect(tool?.errorCodes).toContain("PROC_NOT_FOUND");
+  });
+
+  it("requires name", () => {
+    expect(tool?.inputSchema.required).toContain("name");
+  });
+});
+
+describe("procedures.save", () => {
+  const tool = TOOL_DEF_MAP["procedures.save"];
+  const props = tool?.inputSchema.properties as
+    | Record<string, Record<string, unknown>>
+    | undefined;
+
+  it("is registered", () => {
+    expect(tool).toBeDefined();
+  });
+
+  it("is action_weight 0.5 and never risky", () => {
+    expect(tool?.action_weight).toBe(0.5);
+    expect(tool?.risky).toBe("never");
+  });
+
+  it("errorCodes contains PROC_NOT_FOUND", () => {
+    expect(tool?.errorCodes).toContain("PROC_NOT_FOUND");
+  });
+
+  it("requires name and yaml", () => {
+    expect(tool?.inputSchema.required).toContain("name");
+    expect(tool?.inputSchema.required).toContain("yaml");
+  });
+
+  it("yaml is bounded to 64KB", () => {
+    expect(props?.yaml?.maxLength).toBe(65536);
+    expect(props?.yaml?.minLength).toBe(1);
+  });
+
+  it("overwrite defaults to false", () => {
+    expect(props?.overwrite?.default).toBe(false);
+  });
+});
+
+describe("procedures.promote", () => {
+  const tool = TOOL_DEF_MAP["procedures.promote"];
+
+  it("is registered", () => {
+    expect(tool).toBeDefined();
+  });
+
+  it("is action_weight 0.5 and never risky", () => {
+    expect(tool?.action_weight).toBe(0.5);
+    expect(tool?.risky).toBe("never");
+  });
+
+  it("errorCodes contains PROC_NOT_FOUND", () => {
+    expect(tool?.errorCodes).toContain("PROC_NOT_FOUND");
+  });
+
+  it("requires name and from_owner", () => {
+    expect(tool?.inputSchema.required).toContain("name");
+    expect(tool?.inputSchema.required).toContain("from_owner");
+  });
+});
+
+describe("procedures.delete", () => {
+  const tool = TOOL_DEF_MAP["procedures.delete"];
+  const props = tool?.inputSchema.properties as
+    | Record<string, Record<string, unknown>>
+    | undefined;
+
+  it("is registered", () => {
+    expect(tool).toBeDefined();
+  });
+
+  it("is action_weight 0.5 and never risky", () => {
+    expect(tool?.action_weight).toBe(0.5);
+    expect(tool?.risky).toBe("never");
+  });
+
+  it("errorCodes contains PROC_NOT_FOUND", () => {
+    expect(tool?.errorCodes).toContain("PROC_NOT_FOUND");
+  });
+
+  it("requires name", () => {
+    expect(tool?.inputSchema.required).toContain("name");
+  });
+
+  it("force defaults to false", () => {
+    expect(props?.force?.default).toBe(false);
   });
 });

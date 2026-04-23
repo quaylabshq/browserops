@@ -103,6 +103,14 @@ const REF_CODES = [
 ] as const satisfies readonly ErrorCode[];
 const MUTATING_CODES = ["RATE_LIMITED"] as const satisfies readonly ErrorCode[];
 const RISKY_CODES = ["RISKY_ACTION_DENIED"] as const satisfies readonly ErrorCode[];
+const PROC_CODES = [
+  "PROC_NOT_FOUND",
+  "PROC_ALREADY_EXISTS",
+  "PROC_SCHEMA_INVALID",
+  "PROC_IN_USE",
+  "PROC_OWNER_INVALID",
+  "PROC_DOMAIN_INVALID",
+] as const satisfies readonly ErrorCode[];
 
 // ---------------------------------------------------------------------------
 // Tool definitions (plan 04 §4.3)
@@ -1092,6 +1100,247 @@ const executeJs: ToolDef = {
 } as const;
 
 // ---------------------------------------------------------------------------
+// Procedure-memory tools (plan 06 §7)
+// ---------------------------------------------------------------------------
+
+const procedureNamePattern = "^[a-z][a-z0-9._-]{0,79}$";
+const scopePattern = "^(all|shared|composite:[a-z][a-z0-9._-]{0,79})$";
+const domainPattern = "^[a-z][a-z0-9_-]*$";
+
+/** Shared metadata-only entry shape returned by list/search (no YAML body). */
+const entrySchema: JSONSchemaObject = {
+  type: "object",
+  properties: {
+    name: { type: "string" },
+    kind: { type: "string" },
+    domain: { type: "string" },
+    description: { type: "string" },
+    inputs: { type: "array", items: { type: "string" } },
+    triggers: { type: "array", items: { type: "string" } },
+    tags: { type: "array", items: { type: "string" } },
+    usedBy: { type: "array", items: { type: "string" } },
+  },
+} as const;
+
+const proceduresList: ToolDef = {
+  name: "procedures.list",
+  description:
+    "List all stored procedures as metadata-only entries (no YAML bodies). " +
+    "Scope to a specific domain or composite procedure. " +
+    "Use procedures.get to retrieve a full YAML body.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      scope: {
+        type: "string",
+        pattern: scopePattern,
+        default: "all",
+      },
+      domain: {
+        type: "string",
+        pattern: domainPattern,
+      },
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["tree"] as const,
+    properties: {
+      tree: {
+        type: "object",
+        additionalProperties: false,
+        required: ["shared", "composites"] as const,
+        properties: {
+          shared: { type: "array", items: entrySchema },
+          composites: {
+            type: "object",
+            additionalProperties: {
+              type: "object",
+              properties: {
+                composite: entrySchema,
+                subs: { type: "array", items: entrySchema },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+  action_weight: 0,
+  risky: "never",
+  errorCodes: [...BASE_CODES, ...PROC_CODES] as const,
+} as const;
+
+const proceduresSearch: ToolDef = {
+  name: "procedures.search",
+  description:
+    "Full-text search over the procedure catalogue using pre-tokenized index fields. " +
+    "Returns ranked metadata-only matches; retrieve the YAML body with procedures.get.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["query"] as const,
+    properties: {
+      query: { type: "string", minLength: 1, maxLength: 200 },
+      limit: { type: "integer", minimum: 1, maximum: 25, default: 10 },
+      min_score: { type: "number", minimum: 0, maximum: 1, default: 0.2 },
+      domain: { type: "string", pattern: domainPattern },
+      scope: { type: "string", pattern: scopePattern, default: "all" },
+      deep: {
+        type: "boolean",
+        default: false,
+        description: "When true, also scores tokens from step bodies (slower).",
+      },
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["matches", "total", "truncated"] as const,
+    properties: {
+      matches: { type: "array", items: { type: "object" } },
+      total: { type: "integer" },
+      truncated: { type: "boolean" },
+    },
+  },
+  action_weight: 0,
+  risky: "never",
+  errorCodes: [...BASE_CODES, ...PROC_CODES] as const,
+} as const;
+
+const proceduresGet: ToolDef = {
+  name: "procedures.get",
+  description:
+    "Retrieve the full raw YAML body and metadata for a single procedure by name. " +
+    "Errors with PROC_NOT_FOUND if the name does not exist in the index.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["name"] as const,
+    properties: {
+      name: { type: "string", pattern: procedureNamePattern },
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["yaml", "path", "meta"] as const,
+    properties: {
+      yaml: { type: "string" },
+      path: { type: "string" },
+      meta: {
+        type: "object",
+        additionalProperties: false,
+        required: ["version", "created", "last_verified", "success_count", "failure_count"] as const,
+        properties: {
+          version: { type: "integer" },
+          created: { type: "string" },
+          last_verified: { type: "string" },
+          success_count: { type: "integer" },
+          failure_count: { type: "integer" },
+        },
+      },
+    },
+  },
+  action_weight: 0,
+  risky: "never",
+  errorCodes: [...BASE_CODES, ...PROC_CODES] as const,
+} as const;
+
+const proceduresSave: ToolDef = {
+  name: "procedures.save",
+  description:
+    "Validate and persist a procedure YAML. Parses, schema-validates, resolves uses: references, " +
+    "then atomically writes to disk and rebuilds the search index. " +
+    "Set overwrite: true to update an existing procedure.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["name", "yaml"] as const,
+    properties: {
+      name: { type: "string", pattern: procedureNamePattern },
+      yaml: { type: "string", minLength: 1, maxLength: 65536 },
+      owner: { type: "string", pattern: procedureNamePattern },
+      overwrite: { type: "boolean", default: false },
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["saved", "path", "version"] as const,
+    properties: {
+      saved: { const: true },
+      path: { type: "string" },
+      version: { type: "integer" },
+    },
+  },
+  action_weight: 0.5,
+  risky: "never",
+  errorCodes: [...BASE_CODES, ...PROC_CODES] as const,
+} as const;
+
+const proceduresPromote: ToolDef = {
+  name: "procedures.promote",
+  description:
+    "Move a sub-procedure from a composite's subs/ folder into the top-level shared/ folder, " +
+    "making it independently reusable. Rebuilds the index and rewrites any affected uses: references.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["name", "from_owner"] as const,
+    properties: {
+      name: { type: "string", pattern: procedureNamePattern },
+      from_owner: { type: "string", pattern: procedureNamePattern },
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["promoted", "old_path", "new_path", "rewrote"] as const,
+    properties: {
+      promoted: { const: true },
+      old_path: { type: "string" },
+      new_path: { type: "string" },
+      rewrote: { type: "array", items: { type: "string" } },
+    },
+  },
+  action_weight: 0.5,
+  risky: "never",
+  errorCodes: [...BASE_CODES, ...PROC_CODES] as const,
+} as const;
+
+const proceduresDelete: ToolDef = {
+  name: "procedures.delete",
+  description:
+    "Delete a procedure by name, cascading to sub-procedures for composites. " +
+    "Refuses if the procedure is referenced by others unless force: true is set. " +
+    "Rebuilds the search index after deletion.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["name"] as const,
+    properties: {
+      name: { type: "string", pattern: procedureNamePattern },
+      force: { type: "boolean", default: false },
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["deleted", "path"] as const,
+    properties: {
+      deleted: { const: true },
+      path: { type: "string" },
+    },
+  },
+  action_weight: 0.5,
+  risky: "never",
+  errorCodes: [...BASE_CODES, ...PROC_CODES] as const,
+} as const;
+
+// ---------------------------------------------------------------------------
 // Public catalogue
 // ---------------------------------------------------------------------------
 
@@ -1121,6 +1370,12 @@ export const TOOL_DEFS: readonly ToolDef[] = [
   describeRef,
   querySelector,
   executeJs,
+  proceduresList,
+  proceduresSearch,
+  proceduresGet,
+  proceduresSave,
+  proceduresPromote,
+  proceduresDelete,
 ] as const;
 
 export const TOOL_DEF_MAP: Record<string, ToolDef> = Object.freeze(
