@@ -814,7 +814,7 @@ function injectedFindAndReplaceSynthetic(
   occurrence: "first" | "all",
   caseSensitive: boolean,
 ): FindReplaceSyntheticResult {
-  void occurrence;
+  const MAX_ITERATIONS = 1024;
   const root: Element | null =
     selectorOrNull !== null
       ? document.querySelector(selectorOrNull)
@@ -826,14 +826,34 @@ function injectedFindAndReplaceSynthetic(
   if (tag === "input" || tag === "textarea") {
     const field = root as HTMLInputElement | HTMLTextAreaElement;
     const haystack = typeof field.value === "string" ? field.value : "";
-    const needle = find;
-    const idx = caseSensitive
-      ? haystack.indexOf(needle)
-      : haystack.toLowerCase().indexOf(needle.toLowerCase());
-    if (idx < 0) return { status: "not_found" };
+    // Compute the next value by walking occurrences and splicing, advancing
+    // the cursor past each inserted replacement so `replace` containing
+    // `find` never loops.
+    const nCmp = caseSensitive ? haystack : haystack.toLowerCase();
+    const needle = caseSensitive ? find : find.toLowerCase();
+    let pos = 0;
+    let replaced = 0;
+    let rebuilt = "";
+    let firstHit = -1;
+    while (replaced < MAX_ITERATIONS) {
+      const idx = nCmp.indexOf(needle, pos);
+      if (idx < 0) {
+        rebuilt += haystack.slice(pos);
+        break;
+      }
+      if (replaced === 0) firstHit = idx;
+      rebuilt += haystack.slice(pos, idx) + replace;
+      pos = idx + needle.length;
+      replaced += 1;
+      if (occurrence === "first") {
+        rebuilt += haystack.slice(pos);
+        break;
+      }
+    }
+    if (replaced === 0) return { status: "not_found" };
     field.focus();
-    field.selectionStart = idx;
-    field.selectionEnd = idx + needle.length;
+    field.selectionStart = firstHit;
+    field.selectionEnd = firstHit + find.length;
     try {
       const evt = new InputEvent("beforeinput", {
         inputType: "insertReplacementText",
@@ -848,13 +868,20 @@ function injectedFindAndReplaceSynthetic(
     }
     const proto = tag === "input" ? HTMLInputElement.prototype : HTMLTextAreaElement.prototype;
     const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
-    const nextValue = haystack.slice(0, idx) + replace + haystack.slice(idx + needle.length);
     if (setter !== undefined) {
-      setter.call(field, nextValue);
+      setter.call(field, rebuilt);
     } else {
-      field.value = nextValue;
+      field.value = rebuilt;
     }
-    const caret = idx + replace.length;
+    // Caret lands at end of the last replacement. For "first", that is
+    // firstHit + replace.length; for "all" we know pos advanced past the
+    // final needle (or break exited earlier), so the replacement ends at
+    // rebuilt.length - (tail after last replacement).length. Simplest: place
+    // caret at end of last inserted token. Track it during the loop.
+    // Re-compute by scanning rebuilt for the last replace occurrence isn't
+    // reliable when replace is empty; use the invariant that the last
+    // replacement ends at rebuilt.length - (haystack.length - pos).
+    const caret = rebuilt.length - (haystack.length - pos);
     field.selectionStart = caret;
     field.selectionEnd = caret;
     try {
@@ -867,94 +894,102 @@ function injectedFindAndReplaceSynthetic(
     } catch {
       field.dispatchEvent(new Event("input", { bubbles: true }));
     }
-    return { status: "ok", replaced: 1, used_fallback: false, kind: tag };
+    return { status: "ok", replaced, used_fallback: false, kind: tag };
   }
   if ((root as HTMLElement).isContentEditable === true) {
     const host = root as HTMLElement;
-    // Build a flat text-node map: one contiguous string plus the per-segment
-    // (node, startOffsetInNode) so we can translate a logical match back to
-    // a DOM Range that spans across text-node boundaries.
-    interface Seg { node: Text; start: number; end: number }
-    const segs: Seg[] = [];
-    const walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT);
-    let running = 0;
-    let logical = "";
-    let cur: Node | null = walker.nextNode();
-    while (cur !== null) {
-      const t = cur as Text;
-      const data = t.data;
-      segs.push({ node: t, start: running, end: running + data.length });
-      running += data.length;
-      logical += data;
-      cur = walker.nextNode();
-    }
-    const haystack = caseSensitive ? logical : logical.toLowerCase();
-    const needle = caseSensitive ? find : find.toLowerCase();
-    const hit = haystack.indexOf(needle);
-    if (hit < 0) return { status: "not_found" };
-    const hitEnd = hit + find.length;
-    // Resolve start and end (node, offset) by binary-walking segs.
-    const locate = (pos: number): { node: Text; offset: number } | null => {
-      for (const seg of segs) {
-        if (pos >= seg.start && pos <= seg.end) {
-          return { node: seg.node, offset: pos - seg.start };
-        }
-      }
-      return null;
-    };
-    const startPt = locate(hit);
-    const endPt = locate(hitEnd);
-    if (startPt === null || endPt === null) return { status: "not_found" };
-    const range = document.createRange();
-    range.setStart(startPt.node, startPt.offset);
-    range.setEnd(endPt.node, endPt.offset);
+    // Do one replacement per iteration, re-walking the subtree each time
+    // since the prior replacement mutated the text-node layout. Advancing
+    // past the inserted replacement avoids re-matching when replace
+    // contains find.
     host.focus();
-    const sel = window.getSelection();
-    if (sel !== null) {
-      sel.removeAllRanges();
-      sel.addRange(range);
-    }
-    try {
-      const evt = new InputEvent("beforeinput", {
-        inputType: "insertReplacementText",
-        data: replace,
-        cancelable: true,
-        bubbles: true,
-      });
-      host.dispatchEvent(evt);
-    } catch {
-      // ignore constructor quirks
-    }
+    let replaced = 0;
     let usedFallback = false;
-    let ok = false;
-    try {
-      ok = document.execCommand("insertText", false, replace);
-    } catch {
-      ok = false;
-    }
-    if (!ok) {
-      usedFallback = true;
-      range.deleteContents();
-      const tn = document.createTextNode(replace);
-      range.insertNode(tn);
-      range.setStart(tn, replace.length);
-      range.setEnd(tn, replace.length);
+    let searchFromLogical = 0;
+    while (replaced < MAX_ITERATIONS) {
+      interface Seg { node: Text; start: number; end: number }
+      const segs: Seg[] = [];
+      const walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT);
+      let running = 0;
+      let logical = "";
+      let cur: Node | null = walker.nextNode();
+      while (cur !== null) {
+        const t = cur as Text;
+        const data = t.data;
+        segs.push({ node: t, start: running, end: running + data.length });
+        running += data.length;
+        logical += data;
+        cur = walker.nextNode();
+      }
+      const haystack = caseSensitive ? logical : logical.toLowerCase();
+      const needle = caseSensitive ? find : find.toLowerCase();
+      const hit = haystack.indexOf(needle, searchFromLogical);
+      if (hit < 0) break;
+      const hitEnd = hit + find.length;
+      const locate = (pos: number): { node: Text; offset: number } | null => {
+        for (const seg of segs) {
+          if (pos >= seg.start && pos <= seg.end) {
+            return { node: seg.node, offset: pos - seg.start };
+          }
+        }
+        return null;
+      };
+      const startPt = locate(hit);
+      const endPt = locate(hitEnd);
+      if (startPt === null || endPt === null) break;
+      const range = document.createRange();
+      range.setStart(startPt.node, startPt.offset);
+      range.setEnd(endPt.node, endPt.offset);
+      const sel = window.getSelection();
       if (sel !== null) {
         sel.removeAllRanges();
         sel.addRange(range);
       }
       try {
-        const evt = new InputEvent("input", {
+        const evt = new InputEvent("beforeinput", {
           inputType: "insertReplacementText",
           data: replace,
+          cancelable: true,
           bubbles: true,
         });
         host.dispatchEvent(evt);
       } catch {
-        host.dispatchEvent(new Event("input", { bubbles: true }));
+        // ignore constructor quirks
       }
+      let ok = false;
+      try {
+        ok = document.execCommand("insertText", false, replace);
+      } catch {
+        ok = false;
+      }
+      if (!ok) {
+        usedFallback = true;
+        range.deleteContents();
+        const tn = document.createTextNode(replace);
+        range.insertNode(tn);
+        range.setStart(tn, replace.length);
+        range.setEnd(tn, replace.length);
+        if (sel !== null) {
+          sel.removeAllRanges();
+          sel.addRange(range);
+        }
+        try {
+          const evt = new InputEvent("input", {
+            inputType: "insertReplacementText",
+            data: replace,
+            bubbles: true,
+          });
+          host.dispatchEvent(evt);
+        } catch {
+          host.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+      }
+      replaced += 1;
+      if (occurrence === "first") break;
+      searchFromLogical = hit + replace.length;
     }
-    return { status: "ok", replaced: 1, used_fallback: usedFallback, kind: "contenteditable" };
+    if (replaced === 0) return { status: "not_found" };
+    return { status: "ok", replaced, used_fallback: usedFallback, kind: "contenteditable" };
   }
   return { status: "unsupported_kind", tag };
 }
