@@ -25,7 +25,7 @@ import type { Safety, TabInfo } from "./safety.js";
 import type { TabRegistry } from "./tab-registry.js";
 import type { Logger } from "./logger.js";
 import type { TraceWriter } from "./trace-writer.js";
-import type { ObservedFactsStore } from "./observed-facts.js";
+import type { ObservedFactsStore, ObservedFact } from "./observed-facts.js";
 import { buildProcedureHandlers } from "./procedures/handlers.js";
 
 /**
@@ -410,6 +410,7 @@ export class McpBridgeServer {
       );
       const result = await this.reply(id, name, toolOk(extResult));
       this.emitTrace(id, name, params, startMs, result);
+      this.recordObservation(name, params, extResult);
       return result;
     } catch (err) {
       const code = extractErrorCode(err);
@@ -463,6 +464,130 @@ export class McpBridgeServer {
       result: traceResult,
     };
     tw.append(event);
+  }
+
+  /**
+   * Record an observation to the observed-facts store after a successful
+   * browser_click / browser_type / browser_press result.
+   *
+   * Skipped when:
+   * - `observedFacts` is not enabled on deps
+   * - tool is not one of the three mutating primitives
+   * - `page_effect` is absent from the result (observe_effects:false or
+   *   observation failure) — no signal to record
+   *
+   * Errors are caught and swallowed; failure to record must never break the
+   * tool call that already succeeded.
+   */
+  private recordObservation(
+    toolName: string,
+    input: Record<string, unknown>,
+    extResult: unknown,
+  ): void {
+    const store = this.deps.observedFacts;
+    if (!store) return;
+
+    try {
+      // Map tool name → action_class.
+      let action_class: ObservedFact["action_class"];
+      if (toolName === "browser_click") {
+        action_class = "click";
+      } else if (toolName === "browser_type") {
+        action_class = "type";
+      } else if (toolName === "browser_press") {
+        action_class = "press";
+      } else {
+        // Not a tool we observe.
+        return;
+      }
+
+      if (!extResult || typeof extResult !== "object") return;
+      const res = extResult as Record<string, unknown>;
+
+      // page_effect must be present to record — if absent, skip.
+      const pageEffect = res["page_effect"];
+      if (!pageEffect || typeof pageEffect !== "object") return;
+      const pe = pageEffect as Record<string, unknown>;
+
+      // Derive had_effect from the page_effect fields.
+      const dom = pe["dom"] && typeof pe["dom"] === "object"
+        ? pe["dom"] as Record<string, unknown>
+        : null;
+      const domDelta = dom
+        ? ((dom["added"] as number | undefined) ?? 0) +
+          ((dom["removed"] as number | undefined) ?? 0) +
+          ((dom["attr_changes"] as number | undefined) ?? 0) +
+          ((dom["text_changes"] as number | undefined) ?? 0)
+        : 0;
+
+      const url = pe["url"] && typeof pe["url"] === "object"
+        ? pe["url"] as Record<string, unknown>
+        : null;
+      const urlChanged = url ? Boolean(url["changed"]) : false;
+
+      const focus = pe["focus"] && typeof pe["focus"] === "object"
+        ? pe["focus"] as Record<string, unknown>
+        : null;
+      const focusChanged = focus ? Boolean(focus["changed"]) : false;
+
+      const network = pe["network"] && typeof pe["network"] === "object"
+        ? pe["network"] as Record<string, unknown>
+        : null;
+      const networkStarted = network
+        ? ((network["requests_started"] as number | undefined) ?? 0)
+        : 0;
+
+      const had_effect =
+        domDelta > 0 || urlChanged || focusChanged || networkStarted > 0;
+
+      // Extract hostname from result.site (preferred) or input.url (fallback).
+      let hostname: string | undefined;
+      if (typeof res["site"] === "string" && res["site"]) {
+        hostname = res["site"];
+      } else if (typeof input["url"] === "string" && input["url"]) {
+        try {
+          hostname = new URL(input["url"]).hostname;
+        } catch {
+          /* invalid URL — skip */
+        }
+      }
+      if (!hostname) return;
+
+      // Extract dispatch_mode.
+      let dispatch_mode: ObservedFact["dispatch_mode"];
+      if (action_class === "click") {
+        // browser_click: result.mode_used is "synthetic" | "trusted"
+        const modeUsed = res["mode_used"];
+        if (modeUsed === "trusted") {
+          dispatch_mode = "trusted";
+        } else {
+          dispatch_mode = "synthetic";
+        }
+      } else if (action_class === "type") {
+        // browser_type: result.mode_used is "keystroke" | "paste" | "trusted" | "insertText"
+        const modeUsed = res["mode_used"];
+        if (modeUsed === "trusted") {
+          dispatch_mode = "trusted";
+        } else if (modeUsed === "insertText") {
+          dispatch_mode = "insertText";
+        } else {
+          // "keystroke" | "paste" → synthetic
+          dispatch_mode = "synthetic";
+        }
+      } else {
+        // browser_press: result.dispatch is "synthetic" | "trusted"
+        const dispatchField = res["dispatch"];
+        if (dispatchField === "trusted") {
+          dispatch_mode = "trusted";
+        } else {
+          dispatch_mode = "synthetic";
+        }
+      }
+
+      store.recordObservation({ hostname, action_class, dispatch_mode, had_effect });
+    } catch {
+      // Recording must never break the call.
+    }
   }
 
   private timeoutFor(def: ToolDef, params: Record<string, unknown>): number {
