@@ -77,6 +77,35 @@ Run example.qa_signup. Report the temp email used and the API key string.
 ### Known procedure bugs fixed
 - `gmail.send_email` v2: `mode: trusted` removed from `fill_body` — caused doubled characters in Gmail's rich-text editor.
 
+## Keyboard chords
+
+`browser_press` sends a keyboard chord to the focused element in a tab. The last entry of `keys` is the key; everything before it is a modifier.
+
+**Use `Primary`, not `Meta` or `Control`.** `Primary` is a logical alias that the extension resolves at dispatch time to `Meta` on macOS and `Control` on Windows/Linux. Procedures authored once work on every contributor's machine.
+
+Common chord recipes:
+
+| Intent | `keys:` |
+|---|---|
+| Select all | `["Primary", "KeyA"]` |
+| Copy | `["Primary", "KeyC"]` |
+| Paste | `["Primary", "KeyV"]` |
+| Cut | `["Primary", "KeyX"]` |
+| Undo | `["Primary", "KeyZ"]` |
+| Redo | `["Primary", "Shift", "KeyZ"]` |
+| Submit a form | `["Enter"]` |
+| Dismiss a modal | `["Escape"]` |
+| Move focus forward | `["Tab"]` |
+| Delete one char | `["Backspace"]` |
+| Delete forward | `["Delete"]` |
+| Clear a field (keyboard) | `["Primary", "KeyA"]` then `["Delete"]` |
+
+**Clearing fields.** For the common case ("overwrite this bad text with new text"), use `browser_type` with `clear_mode: "auto"` (or `clear_first: true`) rather than a two-step chord — `auto` picks the fastest safe strategy per element type, verifies emptiness, and falls back to keyboard Delete if execCommand was ignored by a rich editor.
+
+For clearing as an independent step (no typing follow-up), use the bundled `meta.clear_field` procedure.
+
+**Destructive chords are refused by the extension.** `Primary+W`, `Primary+Q`, `Primary+Shift+W`, `Alt+F4`, `Primary+T`, `Primary+N`, `Primary+Shift+N` would close tabs / quit the browser / open new contexts the user didn't ask for. Don't try to route around the deny-list — if you need something destructive, ask first.
+
 ## Procedure authoring rules
 
 ### Never save an untested procedure
