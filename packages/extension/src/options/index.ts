@@ -22,8 +22,8 @@ async function loadValues(): Promise<void> {
 
 function renderStatus(connected: boolean): void {
   statusPill.textContent = connected ? "connected" : "disconnected";
-  statusPill.classList.toggle("on", connected);
-  statusPill.classList.toggle("off", !connected);
+  statusPill.classList.toggle("pill--on", connected);
+  statusPill.classList.toggle("pill--off", !connected);
 }
 
 async function pollStatus(): Promise<void> {

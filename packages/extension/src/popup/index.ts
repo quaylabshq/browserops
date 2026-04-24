@@ -34,11 +34,24 @@ interface PendingSafetyPrompt {
   ts: number;
 }
 
+let connectedState = false;
+
 function renderStatus(connected: boolean): void {
+  connectedState = connected;
   statusPill.textContent = connected ? "connected" : "disconnected";
-  statusPill.classList.toggle("on", connected);
-  statusPill.classList.toggle("off", !connected);
-  killBtn.disabled = !connected;
+  statusPill.classList.toggle("pill--on", connected);
+  statusPill.classList.toggle("pill--off", !connected);
+  // The kill button doubles as the reconnect affordance when disconnected —
+  // going to the options page to flip a kill-switch is bad UX. Label +
+  // variant swap here, wiring in the click handler below.
+  if (connected) {
+    killBtn.textContent = "Disconnect";
+    killBtn.classList.add("btn--danger");
+  } else {
+    killBtn.textContent = "Connect";
+    killBtn.classList.remove("btn--danger");
+  }
+  killBtn.disabled = false;
 }
 
 function renderSetup(hasToken: boolean): void {
@@ -191,8 +204,20 @@ safetyAllow.addEventListener("click", () => sendDecision(true));
 safetyDeny.addEventListener("click", () => sendDecision(false));
 
 killBtn.addEventListener("click", () => {
-  chrome.runtime.sendMessage({ type: "kill_switch" }).catch(() => {});
-  renderStatus(false);
+  if (connectedState) {
+    chrome.runtime.sendMessage({ type: "kill_switch" }).catch(() => {});
+    renderStatus(false);
+  } else {
+    killBtn.disabled = true;
+    chrome.runtime
+      .sendMessage({ type: "reconnect" })
+      .catch(() => {})
+      .finally(() => {
+        // The background will flip storage.connected once the socket
+        // reaches ready; the poll in refresh() will repaint the button.
+        void refresh();
+      });
+  }
 });
 
 optionsLink.addEventListener("click", (e) => {

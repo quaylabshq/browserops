@@ -85,6 +85,9 @@ code, .mono {
 /* ------------------------------------------------------------------ card */
 
 .card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   background: var(--surface);
   border: 1px solid var(--ink-06);
   border-radius: var(--r-lg);
@@ -98,7 +101,7 @@ code, .mono {
   color: var(--ink-45);
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  margin: 0 0 8px;
+  margin: 0;
 }
 
 .card--danger {
@@ -172,6 +175,11 @@ code, .mono {
 .btn--lg { height: 32px; padding: 0 14px; font-size: var(--fs-12); }
 .btn--sm { height: 24px; padding: 0 8px; font-size: var(--fs-11); }
 .btn--block { width: 100%; }
+
+/* The HTML `hidden` attribute is display:none in the UA stylesheet, which
+   loses to .btn/.card/.input's explicit display values above. Re-assert it
+   so hidden={true} actually hides. */
+[hidden] { display: none !important; }
 
 /* ------------------------------------------------------------------ input */
 
