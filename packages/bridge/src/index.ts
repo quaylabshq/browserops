@@ -131,6 +131,12 @@ async function main(): Promise<void> {
       : `browserops: secondary — forwarding through ${sockPath}\n`,
   );
 
+  if (role === "primary" && wsBridge) {
+    process.stderr.write(
+      `browserops: pair code ${wsBridge.pairCode} — enter this in the extension onboarding page\n`,
+    );
+  }
+
   await mcp.start();
 
   const shutdown = (reason: string): void => {
