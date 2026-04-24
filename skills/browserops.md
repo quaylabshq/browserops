@@ -50,8 +50,16 @@ You cannot know from inside the agent how any given site will react to a synthet
    - Only surface the "click 'Use this tab' in the popup" suggestion to the user if *every* fallback above has failed (no current tab, new-tab creation denied, etc.) — not as the first move.
    - For cross-tab work, `browser_list_tabs` and pick explicitly by title/url.
 3. **Decompose → list → delegate (default).** Before calling any tool, break the user's request into a flat list of concrete subtasks and record it with your task-tracking primitive (e.g. `TaskCreate`). Then run each subtask in its own sub-agent. The main context stays an orchestrator; it does not accumulate page dumps, screenshots, or intermediate tool results, and it cannot lose sight of the overall goal because the list is the source of truth.
+
+   **Write delegation into the list text.** Every non-trivial list item must be phrased as an instruction to *spawn a sub-agent*, not just a task description. This is a forcing function — agents that write "Send DM to Kartik" frequently forget to delegate and do it inline; agents that write "Spawn sub-agent to send DM to Kartik" don't. Good vs. bad:
+   - ❌ `2. Search for Kartik in Slack sidebar`
+   - ✅ `2. Spawn sub-agent (haiku) — search for Kartik in Slack sidebar, return matching DM tab_id or "not found"`
+
    - **Trivial single primitive** (one `browser_navigate`, one `browser_read`, one quick factual read): run directly, no list needed.
    - **Anything else** — multi-step flows, anything likely to need retries (`REF_STALE`, occluded clicks, `wait_for` loops), any composite procedure: one sub-agent per subtask. Brief = procedure name + inputs + tab_id (or, for ad-hoc work, the specific primitive sequence for *that subtask only*). **Never inline procedure steps** — the sub-agent calls `procedures_get` itself. **Never batch two subtasks into one brief** — that defeats the isolation and recreates main-context bloat inside the subagent.
+
+   **Recursive decomposition.** A subtask can itself be complex enough to warrant its own decomposition. When the sub-agent receives a brief it considers compound, it applies this same rule inside its own context: decompose into a child list, spawn child sub-agents, and roll results back up. Only the final ≤ 5-line summary returns to the parent. Depth is not capped; use judgement — most flows bottom out at depth 2 (root → subtask-list → per-subtask sub-agent), some at depth 3 when a subtask is itself a multi-site workflow.
+
    - After each sub-agent returns, update the list (mark the subtask done, adjust the next one based on what was observed), then dispatch the next. The sub-agent should report in ≤ 5 lines: what it did, pass/fail gate (`page_effect`-based where applicable), tool result summary. Nothing else.
    - Pick the model per subtask: haiku for mechanical single-tool-call or fill-and-submit steps; sonnet when the subtask needs multi-step retry logic or non-trivial decisions.
 4. **Thread the tab_id** through every subsequent call. Don't re-resolve it per step.
