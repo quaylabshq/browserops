@@ -117,6 +117,28 @@ export interface SiteHint {
   framework: string;             // one of the Framework union values
   semanticKeyMode?: "trusted";
   clickMode?: "trusted";
+  typeMode?: "trusted";
+}
+
+/**
+ * Observed hints injected by the bridge when evidence shows synthetic has been
+ * ineffective on this hostname. Precedence: observed_hints > SITE_REGISTRY.
+ */
+interface ObservedHints {
+  clickMode?: "trusted";
+  semanticKeyMode?: "trusted";
+  typeMode?: "trusted";
+}
+
+function parseObservedHints(raw: unknown): ObservedHints | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  const hints: ObservedHints = {};
+  if (r["clickMode"] === "trusted") hints.clickMode = "trusted";
+  if (r["semanticKeyMode"] === "trusted") hints.semanticKeyMode = "trusted";
+  if (r["typeMode"] === "trusted") hints.typeMode = "trusted";
+  if (Object.keys(hints).length === 0) return null;
+  return hints;
 }
 
 function toSiteHint(
@@ -133,8 +155,16 @@ function toSiteHint(
  * Resolve a tab's URL hostname into a SiteHint (or null if unknown).
  * Uses chrome.tabs.get to fetch the tab URL, then looks up the shared
  * SITE_REGISTRY via resolveSite().
+ *
+ * If observedHints is provided, its fields are merged over the SITE_REGISTRY
+ * result (observed evidence takes precedence over static registry defaults).
+ * When the registry returns null, a minimal SiteHint with framework="unknown"
+ * is synthesised so the hints can still be propagated.
  */
-async function getSiteHintForTab(chromeTabId: number): Promise<SiteHint | null> {
+async function getSiteHintForTab(
+  chromeTabId: number,
+  observedHints?: ObservedHints | null,
+): Promise<SiteHint | null> {
   let url: string | undefined;
   try {
     const tab = await chrome.tabs.get(chromeTabId);
@@ -149,7 +179,38 @@ async function getSiteHintForTab(chromeTabId: number): Promise<SiteHint | null> 
   } catch {
     return null;
   }
-  return toSiteHint(resolveSite(hostname));
+  const registryHint = toSiteHint(resolveSite(hostname));
+
+  if (!observedHints) return registryHint;
+
+  // Merge observed hints over registry defaults. If no registry entry,
+  // synthesise a minimal hint so the fields can be forwarded.
+  const base: SiteHint = registryHint ?? { framework: "unknown" };
+  let overrode = false;
+
+  if (observedHints.clickMode === "trusted" && base.clickMode !== "trusted") {
+    base.clickMode = "trusted";
+    overrode = true;
+  }
+  if (observedHints.semanticKeyMode === "trusted" && base.semanticKeyMode !== "trusted") {
+    base.semanticKeyMode = "trusted";
+    overrode = true;
+  }
+  // typeMode is carried on SiteHint for completeness but not currently used by
+  // the typed dispatch path (it checks framework directly). Log and store.
+  if (observedHints.typeMode === "trusted") {
+    (base as SiteHint & { typeMode?: "trusted" }).typeMode = "trusted";
+    overrode = true;
+  }
+
+  if (overrode) {
+    console.log(
+      `[browserops] observed_hints applied for ${hostname}: ` +
+      JSON.stringify(observedHints),
+    );
+  }
+
+  return base;
 }
 
 interface TypeParams {
@@ -2145,11 +2206,14 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       // Auto-escalate to trusted mode on Tier 1 canvas apps when the caller
       // did not explicitly specify a mode. Sites like Figma, Google Docs,
       // Canva, Miro, Whimsical, and Figjam gate on isTrusted for click events.
+      // observed_hints from the bridge (learned from past observations) are
+      // merged over SITE_REGISTRY defaults with higher precedence.
       let mode: ClickMode = params.mode ?? "synthetic";
       let siteHostname: string | undefined;
       if (params.mode === undefined) {
         // Caller's explicit mode beats site hint auto-escalation.
-        const siteHint = await getSiteHintForTab(chromeId);
+        const observedHints = parseObservedHints(raw["observed_hints"]);
+        const siteHint = await getSiteHintForTab(chromeId, observedHints);
         if (siteHint?.clickMode === "trusted") {
           mode = "trusted";
           // Retrieve the hostname for the site field in the response.
@@ -2406,7 +2470,6 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       warnings?: string[];
     }> => {
       const params = parseType(raw);
-      const mode = resolveTypeMode(params.text, params.mode);
       const chromeId = resolveChromeId(tabIdMap, params.tab_id);
       const selector = resolveSelector(refCache, params.tab_id, params.ref);
       const submit = params.submit ?? false;
@@ -2415,6 +2478,22 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       const observeEffects = params.observe_effects !== false;
       const expectEffect = params.expect_effect;
       let cleared: boolean | undefined;
+
+      // Apply observed_hints: if the bridge observed that synthetic typing is
+      // ineffective on this hostname, escalate to trusted (when the caller
+      // didn't explicitly specify a mode).
+      const typeObservedHints = parseObservedHints(raw["observed_hints"]);
+      const escalateType =
+        params.mode === undefined &&
+        typeObservedHints?.typeMode === "trusted";
+      const mode: TypeMode = escalateType
+        ? "trusted"
+        : resolveTypeMode(params.text, params.mode);
+      if (escalateType) {
+        console.log(
+          `[browserops] observed_hints:typeMode=trusted overriding synthetic for tab ${params.tab_id}`,
+        );
+      }
 
       if (mode === "trusted") {
         // Focus the element first (via executeScript), then let CDP do the
@@ -2647,7 +2726,9 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
     // whether to use CDP trusted dispatch. We do this even for non-semantic keys
     // so Part A (wrapper drilling) can redirect the synthetic dispatch to the
     // real editor root instead of the outer role="textbox" wrapper.
-    const siteHint = await getSiteHintForTab(chromeId);
+    // observed_hints from the bridge (if present) are merged over SITE_REGISTRY.
+    const pressObservedHints = parseObservedHints(raw["observed_hints"]);
+    const siteHint = await getSiteHintForTab(chromeId, pressObservedHints);
     const probe = await execInTab(
       chromeId,
       injectedProbeActiveEditor,

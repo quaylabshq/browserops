@@ -7,13 +7,23 @@
  * to traceWriter.append.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { McpBridgeServer, type McpBridgeDeps, type WSBridgeLike } from "./mcp-server.js";
+import {
+  McpBridgeServer,
+  TabHostnameCache,
+  computeObservedHints,
+  ESCALATE_MIN_SYNTHETIC_SAMPLES,
+  ESCALATE_MAX_SYNTHETIC_EFFECT_RATE,
+  ESCALATE_MIN_TRUSTED_EFFECT_RATE,
+  type McpBridgeDeps,
+  type WSBridgeLike,
+  type ObservedHints,
+} from "./mcp-server.js";
 import { RateLimiter } from "./rate-limiter.js";
 import { TabRegistry } from "./tab-registry.js";
 import type { Safety } from "./safety.js";
 import type { Logger } from "./logger.js";
 import type { TraceWriter } from "./trace-writer.js";
-import type { ObservedFactsStore } from "./observed-facts.js";
+import type { ObservedFactsStore, ObservedFact } from "./observed-facts.js";
 import type { TraceEvent } from "@browserops/shared";
 
 // ---------------------------------------------------------------------------
@@ -710,5 +720,353 @@ describe("McpBridgeServer — ObservedFacts recording", () => {
     expect(store.recordObservation).toHaveBeenCalledWith(
       expect.objectContaining({ had_effect: true }),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TabHostnameCache
+// ---------------------------------------------------------------------------
+
+describe("TabHostnameCache", () => {
+  it("set and get returns the stored hostname", () => {
+    const cache = new TabHostnameCache();
+    cache.set("t_1", "example.com");
+    expect(cache.get("t_1")).toBe("example.com");
+  });
+
+  it("get returns undefined for unknown tab", () => {
+    const cache = new TabHostnameCache();
+    expect(cache.get("t_unknown")).toBeUndefined();
+  });
+
+  it("set overwrites an existing entry", () => {
+    const cache = new TabHostnameCache();
+    cache.set("t_1", "old.com");
+    cache.set("t_1", "new.com");
+    expect(cache.get("t_1")).toBe("new.com");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// computeObservedHints
+// ---------------------------------------------------------------------------
+
+function makeFact(overrides: Partial<ObservedFact>): ObservedFact {
+  return {
+    hostname: "example.com",
+    action_class: "click",
+    dispatch_mode: "synthetic",
+    samples: 1,
+    effect_count: 0,
+    updated_at: new Date().toISOString(),
+    ...overrides,
+  };
+}
+
+describe("computeObservedHints", () => {
+  // -------------------------------------------------------------------------
+  // Threshold satisfied → escalate
+  // -------------------------------------------------------------------------
+
+  it("returns {clickMode:'trusted'} when synthetic failed and trusted succeeded (click)", () => {
+    const facts: ObservedFact[] = [
+      makeFact({
+        action_class: "click",
+        dispatch_mode: "synthetic",
+        samples: ESCALATE_MIN_SYNTHETIC_SAMPLES,
+        effect_count: 0, // 0% effect rate
+      }),
+      makeFact({
+        action_class: "click",
+        dispatch_mode: "trusted",
+        samples: 2,
+        effect_count: 2, // 100% effect rate
+      }),
+    ];
+    const hints = computeObservedHints(facts, "click");
+    expect(hints).toEqual({ clickMode: "trusted" });
+  });
+
+  it("returns {semanticKeyMode:'trusted'} for press action class", () => {
+    const facts: ObservedFact[] = [
+      makeFact({
+        action_class: "press",
+        dispatch_mode: "synthetic",
+        samples: ESCALATE_MIN_SYNTHETIC_SAMPLES,
+        effect_count: 0,
+      }),
+      makeFact({
+        action_class: "press",
+        dispatch_mode: "trusted",
+        samples: 2,
+        effect_count: 2,
+      }),
+    ];
+    const hints = computeObservedHints(facts, "press");
+    expect(hints).toEqual({ semanticKeyMode: "trusted" });
+  });
+
+  it("returns {typeMode:'trusted'} for type action class", () => {
+    const facts: ObservedFact[] = [
+      makeFact({
+        action_class: "type",
+        dispatch_mode: "synthetic",
+        samples: ESCALATE_MIN_SYNTHETIC_SAMPLES,
+        effect_count: 0,
+      }),
+      makeFact({
+        action_class: "type",
+        dispatch_mode: "trusted",
+        samples: 4,
+        effect_count: 3, // 75% — above threshold
+      }),
+    ];
+    const hints = computeObservedHints(facts, "type");
+    expect(hints).toEqual({ typeMode: "trusted" });
+  });
+
+  // -------------------------------------------------------------------------
+  // Below threshold → null
+  // -------------------------------------------------------------------------
+
+  it("returns null when synthetic samples < minimum", () => {
+    const facts: ObservedFact[] = [
+      makeFact({
+        action_class: "click",
+        dispatch_mode: "synthetic",
+        samples: ESCALATE_MIN_SYNTHETIC_SAMPLES - 1, // one short
+        effect_count: 0,
+      }),
+      makeFact({
+        action_class: "click",
+        dispatch_mode: "trusted",
+        samples: 2,
+        effect_count: 2,
+      }),
+    ];
+    expect(computeObservedHints(facts, "click")).toBeNull();
+  });
+
+  it("returns null when synthetic effect rate >= threshold (synthetic is working)", () => {
+    const facts: ObservedFact[] = [
+      makeFact({
+        action_class: "click",
+        dispatch_mode: "synthetic",
+        samples: ESCALATE_MIN_SYNTHETIC_SAMPLES,
+        // effect_count = samples * 0.5 — above the 0.2 max
+        effect_count: Math.ceil(ESCALATE_MIN_SYNTHETIC_SAMPLES * 0.5),
+      }),
+      makeFact({
+        action_class: "click",
+        dispatch_mode: "trusted",
+        samples: 2,
+        effect_count: 2,
+      }),
+    ];
+    expect(computeObservedHints(facts, "click")).toBeNull();
+  });
+
+  it("returns null when trusted effect rate < minimum (trusted not reliable)", () => {
+    const facts: ObservedFact[] = [
+      makeFact({
+        action_class: "click",
+        dispatch_mode: "synthetic",
+        samples: ESCALATE_MIN_SYNTHETIC_SAMPLES,
+        effect_count: 0,
+      }),
+      makeFact({
+        action_class: "click",
+        dispatch_mode: "trusted",
+        samples: 4,
+        effect_count: 1, // 25% — below ESCALATE_MIN_TRUSTED_EFFECT_RATE (0.5)
+      }),
+    ];
+    expect(computeObservedHints(facts, "click")).toBeNull();
+  });
+
+  it("returns null when there is no trusted observation at all", () => {
+    const facts: ObservedFact[] = [
+      makeFact({
+        action_class: "click",
+        dispatch_mode: "synthetic",
+        samples: ESCALATE_MIN_SYNTHETIC_SAMPLES,
+        effect_count: 0,
+      }),
+    ];
+    expect(computeObservedHints(facts, "click")).toBeNull();
+  });
+
+  it("returns null when facts array is empty", () => {
+    expect(computeObservedHints([], "click")).toBeNull();
+  });
+
+  it("filters facts by action_class — ignores facts from other action classes", () => {
+    // Only 'type' facts exist; querying 'click' should return null.
+    const facts: ObservedFact[] = [
+      makeFact({
+        action_class: "type",
+        dispatch_mode: "synthetic",
+        samples: ESCALATE_MIN_SYNTHETIC_SAMPLES,
+        effect_count: 0,
+      }),
+      makeFact({
+        action_class: "type",
+        dispatch_mode: "trusted",
+        samples: 2,
+        effect_count: 2,
+      }),
+    ];
+    expect(computeObservedHints(facts, "click")).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// observed_hints injection in dispatch pipeline
+// ---------------------------------------------------------------------------
+
+describe("McpBridgeServer — observed_hints injection", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function makeObservedFactsWithData(facts: ObservedFact[]): ObservedFactsStore {
+    return {
+      getFacts: vi.fn((hostname: string) => facts.filter((f) => f.hostname === hostname)),
+      recordObservation: vi.fn(),
+      snapshot: vi.fn().mockReturnValue(facts),
+      save: vi.fn().mockResolvedValue(undefined),
+      close: vi.fn().mockResolvedValue(undefined),
+    };
+  }
+
+  function makeTabCacheWithEntry(tabId: string, hostname: string): TabHostnameCache {
+    const cache = new TabHostnameCache();
+    cache.set(tabId, hostname);
+    return cache;
+  }
+
+  function makeEscalationFacts(hostname: string, actionClass: ObservedFact["action_class"]): ObservedFact[] {
+    return [
+      makeFact({
+        hostname,
+        action_class: actionClass,
+        dispatch_mode: "synthetic",
+        samples: ESCALATE_MIN_SYNTHETIC_SAMPLES,
+        effect_count: 0, // synthetic never works
+      }),
+      makeFact({
+        hostname,
+        action_class: actionClass,
+        dispatch_mode: "trusted",
+        samples: 2,
+        effect_count: 2, // trusted always works
+      }),
+    ];
+  }
+
+  it("injects observed_hints into forwarded params for browser_click when hostname is cached and threshold is met", async () => {
+    const hostname = "slack.com";
+    const facts = makeEscalationFacts(hostname, "click");
+    const store = makeObservedFactsWithData(facts);
+    const cache = makeTabCacheWithEntry("t_1", hostname);
+
+    const bridge = makeConnectedBridge({ clicked: true, mode_used: "synthetic", site: hostname, page_effect: makePageEffect() });
+    const deps = makeDeps({
+      wsBridge: bridge,
+      observedFacts: store,
+      tabHostnameCache: cache,
+    });
+
+    await callTool(deps, "browser_click", { tab_id: "t_1", ref: 42 }, "req-inject-1");
+
+    // The bridge's callExtension was called with observed_hints injected.
+    expect(bridge.callExtension).toHaveBeenCalledWith(
+      "browser_click",
+      expect.objectContaining({ observed_hints: { clickMode: "trusted" } }),
+      expect.any(Number),
+      undefined,
+    );
+  });
+
+  it("does NOT inject observed_hints when tab has no cached hostname", async () => {
+    const hostname = "slack.com";
+    const facts = makeEscalationFacts(hostname, "click");
+    const store = makeObservedFactsWithData(facts);
+    const cache = new TabHostnameCache(); // empty — no entry for t_unknown
+
+    const bridge = makeConnectedBridge({ clicked: true, mode_used: "synthetic", site: hostname, page_effect: makePageEffect() });
+    const deps = makeDeps({
+      wsBridge: bridge,
+      observedFacts: store,
+      tabHostnameCache: cache,
+    });
+
+    await callTool(deps, "browser_click", { tab_id: "t_unknown", ref: 42 }, "req-no-inject");
+
+    // callExtension was called WITHOUT observed_hints.
+    const callArgs = (bridge.callExtension as ReturnType<typeof vi.fn>).mock.calls[0];
+    const forwardedParams = callArgs?.[1] as Record<string, unknown>;
+    expect(forwardedParams?.["observed_hints"]).toBeUndefined();
+  });
+
+  it("does NOT inject observed_hints when threshold is not met (few synthetic samples)", async () => {
+    const hostname = "example.com";
+    const facts: ObservedFact[] = [
+      makeFact({
+        hostname,
+        action_class: "click",
+        dispatch_mode: "synthetic",
+        samples: 1, // below ESCALATE_MIN_SYNTHETIC_SAMPLES
+        effect_count: 0,
+      }),
+      makeFact({
+        hostname,
+        action_class: "click",
+        dispatch_mode: "trusted",
+        samples: 1,
+        effect_count: 1,
+      }),
+    ];
+    const store = makeObservedFactsWithData(facts);
+    const cache = makeTabCacheWithEntry("t_1", hostname);
+
+    const bridge = makeConnectedBridge({ clicked: true, mode_used: "synthetic", site: hostname, page_effect: makePageEffect() });
+    const deps = makeDeps({
+      wsBridge: bridge,
+      observedFacts: store,
+      tabHostnameCache: cache,
+    });
+
+    await callTool(deps, "browser_click", { tab_id: "t_1", ref: 42 }, "req-below-threshold");
+
+    const callArgs = (bridge.callExtension as ReturnType<typeof vi.fn>).mock.calls[0];
+    const forwardedParams = callArgs?.[1] as Record<string, unknown>;
+    expect(forwardedParams?.["observed_hints"]).toBeUndefined();
+  });
+
+  it("populates hostname cache from browser_navigate final_url", async () => {
+    const cache = new TabHostnameCache();
+    const bridge = makeConnectedBridge({ final_url: "https://notion.so/page", tab_id: "t_2" });
+    const deps = makeDeps({ wsBridge: bridge, tabHostnameCache: cache });
+
+    await callTool(deps, "browser_navigate", { tab_id: "t_2", url: "https://notion.so" }, "req-nav");
+
+    expect(cache.get("t_2")).toBe("notion.so");
+  });
+
+  it("does NOT inject observed_hints for browser_navigate (not an input tool)", async () => {
+    const hostname = "notion.so";
+    const facts = makeEscalationFacts(hostname, "click");
+    const store = makeObservedFactsWithData(facts);
+    const cache = makeTabCacheWithEntry("t_2", hostname);
+
+    const bridge = makeConnectedBridge({ final_url: "https://notion.so", tab_id: "t_2" });
+    const deps = makeDeps({ wsBridge: bridge, observedFacts: store, tabHostnameCache: cache });
+
+    await callTool(deps, "browser_navigate", { tab_id: "t_2", url: "https://notion.so" }, "req-nav-nohints");
+
+    const callArgs = (bridge.callExtension as ReturnType<typeof vi.fn>).mock.calls[0];
+    const forwardedParams = callArgs?.[1] as Record<string, unknown>;
+    expect(forwardedParams?.["observed_hints"]).toBeUndefined();
   });
 });
