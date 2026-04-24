@@ -43,6 +43,26 @@ You cannot know from inside the agent how any given site will react to a synthet
 
 ## 2. Pre-flight — do these first, in order
 
+**Rule zero — autonomous-by-default. Don't ask the user to disambiguate the ask; interpret and attempt.**
+
+The whole point of browserops is that the observation runtime (Section 3) catches wrong interpretations within one call: bad reading → zero `page_effect` → retry or surface. That loop is almost always faster than a round-trip clarifying question. An agent that opens with "did you mean A or B or C?" for a short, interpretable ask ("use amazon india to test a mouse click on delivery info") has already failed — the user's main reason to use browserops is autonomy.
+
+**Never ask more than one clarifying question in a single turn, and only ask at all when ONE of these is true:**
+- The task literally cannot be attempted without a specific value you don't have (login credentials, a transfer amount, a recipient the user has to name).
+- Two interpretations are both plausible AND have meaningfully different side effects you can't undo (email to person A vs. person B — *not* "open A's page vs. B's page").
+- The task is irreversible and your best guess might not match user intent (money transfer, destructive delete, public post to the wrong account).
+
+Everything else — "use amazon india", "try a mouse click", "check my inbox", "send delivery info task" — is **interpretable**. Pick the most likely reading, state it in ≤ 1 line so the user can redirect ("Interpreting as: open amazon.in in pinned tab, attempt to update delivery address via ref-based click; escalating to coordinate click if needed."), and proceed. If you're wrong, `page_effect` will tell you faster than a clarification round-trip would have.
+
+Three-part clarification dumps like:
+> 1. Did you mean to test that mouse click works…?
+> 2. Can you clarify "delivery info task"…?
+> 3. Do you mean amazon.in, amazon.com/in, …?
+
+…are a specific anti-pattern. They signal "I refuse to try." Don't.
+
+---
+
 1. **Search procedures.** Call `procedures_search` with tokens from the user's ask. If score ≥ 0.5, use that procedure; don't re-plan steps already encoded.
 2. **Find the tab. Stay autonomous — don't stop to ask if you can recover yourself.**
    - `browser_pinned_tab` first. That is the user's explicit "work here" tab.
@@ -351,3 +371,4 @@ If you're editing browserops itself (not just using it):
 11. Never "fix" `WRITE_AMPLIFIED` by retrying with the same params. It's a registry bug; report it.
 12. Never treat `browser_click_at` `clicked:true` as success on its own. Always verify with `page_effect` — coordinate clicks silently land on wrong elements (parent container, sibling overlay, flex gap) far more often than ref-based clicks do. Zero effect = failure, regardless of what the return field says.
 13. Never dive into a complex task (multi-site, branching, high-stakes, unfamiliar tools, ambiguous goal) without first spawning a planner sub-agent (§2 step 3) to produce the plan. The discipline that keeps simple tasks on-rails is the same discipline that collapses on complex ones when it all has to live in the main context at once — externalize the planning.
+14. Never ask the user more than one clarifying question in a single turn, and never for a task that can be interpreted and attempted. "Use amazon india to check delivery info" is interpretable. "Transfer $X to Y" where X or Y is missing is not. Default to interpret + attempt + verify via `page_effect`; escalate to the user only when the task literally cannot be tried or is irreversible with ambiguous target.
