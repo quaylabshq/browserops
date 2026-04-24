@@ -112,6 +112,27 @@ describe("validateBindings", () => {
     expect(result.errors?.[0]?.message).toContain("ghost");
   });
 
+  it("falls back to step.id when bind: is not declared", () => {
+    // Long-standing convention: the step id doubles as the implicit bind
+    // name, so {{wait_for_magic_link.magic_url}} works even when the step
+    // doesn't say `bind: wait_for_magic_link` explicitly.
+    const result = validateBindings(
+      proc([
+        {
+          id: "wait_for_magic_link",
+          action: "tempmail.wait_for_magic_link",
+          with: { tab_id: "{{tab_id}}" },
+        },
+        {
+          id: "go",
+          action: "browser_navigate",
+          with: { tab_id: "{{tab_id}}", url: "{{wait_for_magic_link.magic_url}}" },
+        },
+      ]),
+    );
+    expect(result.valid).toBe(true);
+  });
+
   it("rejects a reference that points forward to a later step", () => {
     const result = validateBindings(
       proc([

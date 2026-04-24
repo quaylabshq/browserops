@@ -175,9 +175,15 @@ export function validateBindings(
         });
       }
       // Register this step's bind AFTER its own with/ checks — a step cannot
-      // reference its own bound name.
-      if (typeof step.bind === "string" && step.bind.length > 0) {
-        binds.set(step.bind, step.action);
+      // reference its own bound name. Falls back to step.id when `bind:` is
+      // not explicitly declared, matching the long-standing convention that
+      // a step's id doubles as its implicit bind name.
+      const bindName =
+        typeof step.bind === "string" && step.bind.length > 0
+          ? step.bind
+          : step.id;
+      if (typeof bindName === "string" && bindName.length > 0) {
+        binds.set(bindName, step.action);
       }
       return;
     }
