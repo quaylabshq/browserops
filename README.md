@@ -59,6 +59,19 @@ Open your MCP client (already configured with the snippet from Step 1) and try:
 
 > Take a screenshot of this tab.
 
+## Approval mode
+
+browserops runs in **auto-approve mode by default**: risky actions (`browser_execute_js`, click/type on sensitive domains, procedures marked `risky: true`) proceed without prompting.
+
+To require manual approval instead, use any of these:
+- `pnpm start --approval=gate`
+- `BROWSEROPS_APPROVAL=gate pnpm start`
+- Check **Require approval for risky actions** in the extension popup.
+
+Destructive keyboard chords (`Primary+W`, `Primary+Q`, `Primary+T`, `Primary+N`, `Primary+Shift+N`, `Alt+F4`) and navigations to `javascript:`, `file://`, or `chrome://` URLs are refused regardless of mode.
+
+Audit trail: every auto-approved action is written to the trace file when `BROWSEROPS_TRACE=1` is set.
+
 ## Connecting your MCP client
 
 `pnpm setup` prints a snippet per client (re-run `node packages/bridge/dist/index.js init` any time you want them reprinted). The reference snippets below are kept for clarity if you'd rather configure by hand. The bridge is a plain stdio MCP server — any client that can spawn one can use it.
@@ -214,7 +227,6 @@ Full JSON schemas for each tool are declared in `packages/shared/src/tools.ts`.
 **v1 limitations:**
 - Click / type fire synthetic DOM events (`isTrusted: false`). Sites that hard-check trusted events (reCAPTCHA, some banks) will refuse them. A CDP-based trusted-events path is planned for v2.
 - `browser_screenshot` with `full_page: true` returns `INTERNAL` — viewport-only in v1.
-- Risky actions (`execute_js` always, click/type on financial domains) currently deny after the 30 s confirmation timeout because the extension popup doesn't yet render the confirmation UI. Set `BROWSEROPS_AUTOCONFIRM=1` to bypass during testing.
 
 ## Procedure memory
 
@@ -242,7 +254,7 @@ Authoring checklist:
 
 - **Rate limit:** 16 actions/minute per tab, 60/minute globally. Exceeded → `RATE_LIMITED` with `retry_after_ms`.
 - **Kill switch:** click the extension toolbar icon → **Disconnect**. Reconnect only from the options page (deliberate friction).
-- **Risky actions** (execute_js always; click and type on financial / credential-manager domains): the bridge sends a `safety_prompt` to the extension; the popup UI for it is stubbed in v1, so these currently deny after the 30 s timeout. For unattended testing, set `BROWSEROPS_AUTOCONFIRM=1`.
+- **Approval mode:** auto-approve is the default. To require manual approval for risky actions, see [Approval mode](#approval-mode) above.
 - **Sensitive domain list:** `~/.browserops/risky-domains.json` (extends the built-in defaults in `packages/bridge/src/risky-domains.ts`).
 
 ## Develop locally
@@ -281,7 +293,8 @@ Currently ~220 unit tests total across shared (envelope guards, tool catalogue i
 | `BROWSEROPS_EXTENSION_ID` | empty = any | Origin allowlist; pin this to your extension id in production |
 | `BROWSEROPS_GLOBAL_CAP` | `60` | Global rate-limit cap per minute |
 | `BROWSEROPS_LOG_LEVEL` | `normal` | `normal` truncates strings > 200 chars; `audit` logs full payloads |
-| `BROWSEROPS_AUTOCONFIRM` | unset | `=1` auto-approves risky prompts (testing only; warns on stderr) |
+| `BROWSEROPS_APPROVAL` | `auto` | `auto` (default) or `gate`; controls approval mode for risky actions |
+| `BROWSEROPS_TRACE` | unset | `=1` writes trace events including auto-approvals to `~/.browserops/trace.jsonl` |
 
 ## Troubleshooting
 
