@@ -1,4 +1,5 @@
 import type { ErrorCode } from "@browserops/shared";
+import { isDestructiveChord } from "@browserops/shared";
 import type { Router } from "../router.js";
 import type { RefCache } from "../ref-cache.js";
 import type { CdpManager } from "../cdp.js";
@@ -1996,6 +1997,13 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       }
     }
     const mods = resolvePrimary(modsIn);
+    // Deny-listed chords (close tab, quit browser, new tab/window, etc.)
+    // are refused outright — agents have browser_close_tab / browser_new_tab
+    // for those intents.
+    const denyReason = isDestructiveChord(terminal, mods);
+    if (denyReason !== null) {
+      throw codedError("RISKY_ACTION_DENIED", `refused destructive chord: ${denyReason}`);
+    }
     await execInTab(chromeId, injectedPress, [terminal, modifierFlags(mods)] as const);
     return { pressed: true };
   });
