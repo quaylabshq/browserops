@@ -385,6 +385,44 @@ describe("deep: false does not load any YAML files", () => {
 });
 
 // ---------------------------------------------------------------------------
+// include_drafts filter
+// ---------------------------------------------------------------------------
+
+describe("include_drafts filter", () => {
+  const manifest = makeManifest({
+    "trusted_one": makeEntry("trusted_one", {
+      description: "verified procedure for sending an email",
+      status: "trusted",
+      success_count: 3,
+    }),
+    "draft_one": makeEntry("draft_one", {
+      description: "untested procedure for sending an email",
+      status: "draft",
+      success_count: 0,
+    }),
+  });
+
+  it("excludes drafts by default", async () => {
+    const result = await search(PHANTOM_ROOT, manifest, "send email", {
+      min_score: 0,
+    });
+    const names = result.matches.map((m) => m.name);
+    expect(names).toContain("trusted_one");
+    expect(names).not.toContain("draft_one");
+  });
+
+  it("includes drafts when include_drafts: true", async () => {
+    const result = await search(PHANTOM_ROOT, manifest, "send email", {
+      min_score: 0,
+      include_drafts: true,
+    });
+    const names = result.matches.map((m) => m.name);
+    expect(names).toContain("trusted_one");
+    expect(names).toContain("draft_one");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // deep: true — finds step-body matches
 // ---------------------------------------------------------------------------
 
