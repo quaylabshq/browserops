@@ -13,6 +13,7 @@ import { TabRegistry } from "./tab-registry.js";
 import type { Safety } from "./safety.js";
 import type { Logger } from "./logger.js";
 import type { TraceWriter } from "./trace-writer.js";
+import type { ObservedFactsStore } from "./observed-facts.js";
 import type { TraceEvent } from "@browserops/shared";
 
 // ---------------------------------------------------------------------------
@@ -68,6 +69,45 @@ function makeDisabledTraceWriter(): TraceWriter {
     append: vi.fn(),
     flush: vi.fn().mockResolvedValue(undefined),
     close: vi.fn().mockResolvedValue(undefined),
+  };
+}
+
+function makeObservedFacts(): ObservedFactsStore {
+  return {
+    getFacts: vi.fn().mockReturnValue([]),
+    recordObservation: vi.fn(),
+    snapshot: vi.fn().mockReturnValue([]),
+    save: vi.fn().mockResolvedValue(undefined),
+    close: vi.fn().mockResolvedValue(undefined),
+  };
+}
+
+/** Minimal PageEffect-shaped object with controllable "activity". */
+function makePageEffect(opts: {
+  domAdded?: number;
+  domRemoved?: number;
+  attrChanges?: number;
+  textChanges?: number;
+  urlChanged?: boolean;
+  focusChanged?: boolean;
+  networkStarted?: number;
+} = {}) {
+  return {
+    dom: {
+      added: opts.domAdded ?? 0,
+      removed: opts.domRemoved ?? 0,
+      attr_changes: opts.attrChanges ?? 0,
+      text_changes: opts.textChanges ?? 0,
+    },
+    url: { changed: opts.urlChanged ?? false },
+    focus: { changed: opts.focusChanged ?? false },
+    network: {
+      requests_started: opts.networkStarted ?? 0,
+      requests_completed: 0,
+      in_flight_at_end: 0,
+    },
+    console_errors: 0,
+    window_ms: 100,
   };
 }
 
@@ -281,5 +321,394 @@ describe("McpBridgeServer — TraceEvent emission", () => {
     await callTool(deps, "browser_navigate", inputParams, "req-input");
 
     expect(calls[0]?.input).toEqual(inputParams);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ObservedFacts recording
+// ---------------------------------------------------------------------------
+
+describe("McpBridgeServer — ObservedFacts recording", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // -------------------------------------------------------------------------
+  // browser_click — had_effect derivation
+  // -------------------------------------------------------------------------
+
+  it("records observation with had_effect:true for browser_click with DOM changes", async () => {
+    const store = makeObservedFacts();
+    const extResult = {
+      clicked: true,
+      mode: "synthetic",
+      mode_used: "synthetic",
+      site: "example.com",
+      page_effect: makePageEffect({ domAdded: 3 }),
+    };
+    const deps = makeDeps({
+      wsBridge: makeConnectedBridge(extResult),
+      observedFacts: store,
+    });
+
+    await callTool(deps, "browser_click", { tab_id: "t_1", ref: 42 }, "req-obs-1");
+
+    expect(store.recordObservation).toHaveBeenCalledOnce();
+    expect(store.recordObservation).toHaveBeenCalledWith({
+      hostname: "example.com",
+      action_class: "click",
+      dispatch_mode: "synthetic",
+      had_effect: true,
+    });
+  });
+
+  it("records observation with had_effect:false for browser_click with zero-effect page_effect", async () => {
+    const store = makeObservedFacts();
+    const extResult = {
+      clicked: true,
+      mode: "synthetic",
+      mode_used: "synthetic",
+      site: "example.com",
+      page_effect: makePageEffect(),
+    };
+    const deps = makeDeps({
+      wsBridge: makeConnectedBridge(extResult),
+      observedFacts: store,
+    });
+
+    await callTool(deps, "browser_click", { tab_id: "t_1", ref: 42 }, "req-obs-2");
+
+    expect(store.recordObservation).toHaveBeenCalledOnce();
+    expect(store.recordObservation).toHaveBeenCalledWith({
+      hostname: "example.com",
+      action_class: "click",
+      dispatch_mode: "synthetic",
+      had_effect: false,
+    });
+  });
+
+  it("does not record when page_effect is absent from browser_click result", async () => {
+    const store = makeObservedFacts();
+    const extResult = {
+      clicked: true,
+      mode: "synthetic",
+      mode_used: "synthetic",
+      site: "example.com",
+      // No page_effect field — observe_effects:false or observation failure.
+    };
+    const deps = makeDeps({
+      wsBridge: makeConnectedBridge(extResult),
+      observedFacts: store,
+    });
+
+    await callTool(deps, "browser_click", { tab_id: "t_1", ref: 42 }, "req-obs-3");
+
+    expect(store.recordObservation).not.toHaveBeenCalled();
+  });
+
+  // -------------------------------------------------------------------------
+  // Failed tool call → no recording
+  // -------------------------------------------------------------------------
+
+  it("does not record observation when the extension call fails", async () => {
+    const store = makeObservedFacts();
+    const err = Object.assign(new Error("element not found"), { code: "REF_NOT_FOUND" });
+    const deps = makeDeps({
+      wsBridge: makeFailingBridge(err),
+      observedFacts: store,
+    });
+
+    await callTool(deps, "browser_click", { tab_id: "t_1", ref: 42 }, "req-obs-fail");
+
+    expect(store.recordObservation).not.toHaveBeenCalled();
+  });
+
+  // -------------------------------------------------------------------------
+  // browser_navigate — excluded from this phase
+  // -------------------------------------------------------------------------
+
+  it("does not record observation for browser_navigate", async () => {
+    const store = makeObservedFacts();
+    const extResult = {
+      navigated: true,
+      final_url: "https://example.com",
+      site: "example.com",
+      page_effect: makePageEffect({ urlChanged: true }),
+    };
+    const deps = makeDeps({
+      wsBridge: makeConnectedBridge(extResult),
+      observedFacts: store,
+    });
+
+    await callTool(deps, "browser_navigate", { tab_id: "t_1", url: "https://example.com" }, "req-obs-nav");
+
+    expect(store.recordObservation).not.toHaveBeenCalled();
+  });
+
+  // -------------------------------------------------------------------------
+  // observedFacts disabled (absent) → no recording
+  // -------------------------------------------------------------------------
+
+  it("does not record observation when observedFacts is absent from deps", async () => {
+    const extResult = {
+      clicked: true,
+      mode: "synthetic",
+      mode_used: "synthetic",
+      site: "example.com",
+      page_effect: makePageEffect({ domAdded: 1 }),
+    };
+    // makeDeps does not include observedFacts by default.
+    const deps = makeDeps({ wsBridge: makeConnectedBridge(extResult) });
+
+    // Should resolve without error.
+    await expect(
+      callTool(deps, "browser_click", { tab_id: "t_1", ref: 42 }, "req-obs-absent"),
+    ).resolves.not.toThrow();
+  });
+
+  // -------------------------------------------------------------------------
+  // Dispatch mode mapping — browser_click
+  // -------------------------------------------------------------------------
+
+  it("maps mode_used:trusted → dispatch_mode:trusted for browser_click", async () => {
+    const store = makeObservedFacts();
+    const extResult = {
+      clicked: true,
+      mode: "trusted",
+      mode_used: "trusted",
+      site: "github.com",
+      page_effect: makePageEffect({ focusChanged: true }),
+    };
+    const deps = makeDeps({
+      wsBridge: makeConnectedBridge(extResult),
+      observedFacts: store,
+    });
+
+    await callTool(deps, "browser_click", { tab_id: "t_1", ref: 7 }, "req-obs-click-trusted");
+
+    expect(store.recordObservation).toHaveBeenCalledWith(
+      expect.objectContaining({ dispatch_mode: "trusted", had_effect: true }),
+    );
+  });
+
+  // -------------------------------------------------------------------------
+  // Dispatch mode mapping — browser_type
+  // -------------------------------------------------------------------------
+
+  it("maps mode_used:insertText → dispatch_mode:insertText for browser_type", async () => {
+    const store = makeObservedFacts();
+    const extResult = {
+      typed: true,
+      mode: "paste",
+      mode_used: "insertText",
+      site: "notion.so",
+      page_effect: makePageEffect({ textChanges: 5 }),
+    };
+    const deps = makeDeps({
+      wsBridge: makeConnectedBridge(extResult),
+      observedFacts: store,
+    });
+
+    await callTool(deps, "browser_type", { tab_id: "t_1", ref: 3, text: "hello" }, "req-obs-type-insert");
+
+    expect(store.recordObservation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action_class: "type",
+        dispatch_mode: "insertText",
+        had_effect: true,
+      }),
+    );
+  });
+
+  it("maps mode_used:keystroke → dispatch_mode:synthetic for browser_type", async () => {
+    const store = makeObservedFacts();
+    const extResult = {
+      typed: true,
+      mode: "keystroke",
+      mode_used: "keystroke",
+      site: "app.example.com",
+      page_effect: makePageEffect({ textChanges: 2 }),
+    };
+    const deps = makeDeps({
+      wsBridge: makeConnectedBridge(extResult),
+      observedFacts: store,
+    });
+
+    await callTool(deps, "browser_type", { tab_id: "t_1", ref: 3, text: "hi" }, "req-obs-type-keystroke");
+
+    expect(store.recordObservation).toHaveBeenCalledWith(
+      expect.objectContaining({ action_class: "type", dispatch_mode: "synthetic" }),
+    );
+  });
+
+  it("maps mode_used:paste → dispatch_mode:synthetic for browser_type", async () => {
+    const store = makeObservedFacts();
+    const extResult = {
+      typed: true,
+      mode: "paste",
+      mode_used: "paste",
+      site: "app.example.com",
+      page_effect: makePageEffect({ textChanges: 1 }),
+    };
+    const deps = makeDeps({
+      wsBridge: makeConnectedBridge(extResult),
+      observedFacts: store,
+    });
+
+    await callTool(deps, "browser_type", { tab_id: "t_1", ref: 3, text: "pasted" }, "req-obs-type-paste");
+
+    expect(store.recordObservation).toHaveBeenCalledWith(
+      expect.objectContaining({ action_class: "type", dispatch_mode: "synthetic" }),
+    );
+  });
+
+  it("maps mode_used:trusted → dispatch_mode:trusted for browser_type", async () => {
+    const store = makeObservedFacts();
+    const extResult = {
+      typed: true,
+      mode: "trusted",
+      mode_used: "trusted",
+      site: "gmail.com",
+      page_effect: makePageEffect({ textChanges: 3 }),
+    };
+    const deps = makeDeps({
+      wsBridge: makeConnectedBridge(extResult),
+      observedFacts: store,
+    });
+
+    await callTool(deps, "browser_type", { tab_id: "t_1", ref: 3, text: "body text" }, "req-obs-type-trusted");
+
+    expect(store.recordObservation).toHaveBeenCalledWith(
+      expect.objectContaining({ action_class: "type", dispatch_mode: "trusted" }),
+    );
+  });
+
+  // -------------------------------------------------------------------------
+  // Dispatch mode mapping — browser_press
+  // -------------------------------------------------------------------------
+
+  it("maps dispatch:trusted → dispatch_mode:trusted for browser_press", async () => {
+    const store = makeObservedFacts();
+    const extResult = {
+      pressed: true,
+      dispatch: "trusted",
+      site: "notion.so",
+      page_effect: makePageEffect({ networkStarted: 1 }),
+    };
+    const deps = makeDeps({
+      wsBridge: makeConnectedBridge(extResult),
+      observedFacts: store,
+    });
+
+    await callTool(
+      deps,
+      "browser_press",
+      { tab_id: "t_1", keys: ["Enter"] },
+      "req-obs-press-trusted",
+    );
+
+    expect(store.recordObservation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action_class: "press",
+        dispatch_mode: "trusted",
+        had_effect: true,
+      }),
+    );
+  });
+
+  it("maps dispatch:synthetic → dispatch_mode:synthetic for browser_press", async () => {
+    const store = makeObservedFacts();
+    const extResult = {
+      pressed: true,
+      dispatch: "synthetic",
+      site: "example.com",
+      page_effect: makePageEffect(),
+    };
+    const deps = makeDeps({
+      wsBridge: makeConnectedBridge(extResult),
+      observedFacts: store,
+    });
+
+    await callTool(
+      deps,
+      "browser_press",
+      { tab_id: "t_1", keys: ["Escape"] },
+      "req-obs-press-synthetic",
+    );
+
+    expect(store.recordObservation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action_class: "press",
+        dispatch_mode: "synthetic",
+        had_effect: false,
+      }),
+    );
+  });
+
+  // -------------------------------------------------------------------------
+  // had_effect derivation — individual signals
+  // -------------------------------------------------------------------------
+
+  it("had_effect:true when url.changed is true", async () => {
+    const store = makeObservedFacts();
+    const extResult = {
+      clicked: true,
+      mode: "synthetic",
+      mode_used: "synthetic",
+      site: "example.com",
+      page_effect: makePageEffect({ urlChanged: true }),
+    };
+    const deps = makeDeps({
+      wsBridge: makeConnectedBridge(extResult),
+      observedFacts: store,
+    });
+
+    await callTool(deps, "browser_click", { tab_id: "t_1", ref: 1 }, "req-obs-url");
+
+    expect(store.recordObservation).toHaveBeenCalledWith(
+      expect.objectContaining({ had_effect: true }),
+    );
+  });
+
+  it("had_effect:true when focus.changed is true", async () => {
+    const store = makeObservedFacts();
+    const extResult = {
+      clicked: true,
+      mode: "synthetic",
+      mode_used: "synthetic",
+      site: "example.com",
+      page_effect: makePageEffect({ focusChanged: true }),
+    };
+    const deps = makeDeps({
+      wsBridge: makeConnectedBridge(extResult),
+      observedFacts: store,
+    });
+
+    await callTool(deps, "browser_click", { tab_id: "t_1", ref: 1 }, "req-obs-focus");
+
+    expect(store.recordObservation).toHaveBeenCalledWith(
+      expect.objectContaining({ had_effect: true }),
+    );
+  });
+
+  it("had_effect:true when network.requests_started > 0", async () => {
+    const store = makeObservedFacts();
+    const extResult = {
+      clicked: true,
+      mode: "synthetic",
+      mode_used: "synthetic",
+      site: "api.example.com",
+      page_effect: makePageEffect({ networkStarted: 2 }),
+    };
+    const deps = makeDeps({
+      wsBridge: makeConnectedBridge(extResult),
+      observedFacts: store,
+    });
+
+    await callTool(deps, "browser_click", { tab_id: "t_1", ref: 1 }, "req-obs-network");
+
+    expect(store.recordObservation).toHaveBeenCalledWith(
+      expect.objectContaining({ had_effect: true }),
+    );
   });
 });
