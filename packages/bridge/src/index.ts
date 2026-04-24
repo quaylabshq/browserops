@@ -7,6 +7,7 @@ import {
   RATE_LIMIT_PER_TAB_PER_MIN,
 } from "@browserops/shared";
 import { createTraceWriter } from "./trace-writer.js";
+import { createObservedFactsStore } from "./observed-facts.js";
 import { ControlClient } from "./control-client.js";
 import { ControlServer } from "./control-server.js";
 import { Logger, type LogLevel } from "./logger.js";
@@ -46,6 +47,17 @@ async function main(): Promise<void> {
   const traceWriter = createTraceWriter({
     enabled: traceEnv === "1" || traceEnv === "true",
     dir: process.env[ENV.TRACE_DIR] ?? undefined,
+  });
+
+  // Observed-facts store. Enabled by default; opt-out via BROWSEROPS_OBSERVED_FACTS=0.
+  const observedFactsEnv = process.env[ENV.OBSERVED_FACTS];
+  const observedFactsEnabled = observedFactsEnv !== "0" && observedFactsEnv !== "false";
+  const observedFactsDir = process.env[ENV.OBSERVED_DIR] ?? undefined;
+  const observedFacts = createObservedFactsStore({
+    enabled: observedFactsEnabled,
+    path: observedFactsDir
+      ? `${observedFactsDir}/facts.json`
+      : undefined,
   });
 
   const logLevel = parseLogLevel(process.env[ENV.LOG_LEVEL]);
@@ -133,6 +145,7 @@ async function main(): Promise<void> {
     logger,
     version: VERSION,
     traceWriter,
+    observedFacts,
   });
 
   process.stderr.write(
@@ -164,6 +177,7 @@ async function main(): Promise<void> {
       }
       await logger.close();
       try { await traceWriter.close(); } catch { /* ignore */ }
+      try { await observedFacts.close(); } catch { /* ignore */ }
       process.exit(0);
     })();
   };
@@ -171,7 +185,10 @@ async function main(): Promise<void> {
   process.on("SIGINT", () => shutdown("SIGINT"));
   process.on("SIGTERM", () => shutdown("SIGTERM"));
   process.stdin.on("end", () => shutdown("stdin_closed"));
-  process.on("beforeExit", () => { void traceWriter.close(); });
+  process.on("beforeExit", () => {
+    void traceWriter.close();
+    void observedFacts.close();
+  });
 
   // -------------------------------------------------------------------------
   // Helpers
