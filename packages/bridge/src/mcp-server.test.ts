@@ -386,7 +386,11 @@ describe("McpBridgeServer — ObservedFacts recording", () => {
       observedFacts: store,
     });
 
-    await callTool(deps, "browser_click", { tab_id: "t_1", ref: 42 }, "req-obs-2");
+    // Pin mode:"synthetic" explicitly so the auto-retry-on-zero-effect
+    // path is suppressed — this test is specifically about the observation
+    // recording for a single synthetic attempt. Auto-retry behaviour has
+    // its own tests below.
+    await callTool(deps, "browser_click", { tab_id: "t_1", ref: 42, mode: "synthetic" }, "req-obs-2");
 
     expect(store.recordObservation).toHaveBeenCalledOnce();
     expect(store.recordObservation).toHaveBeenCalledWith({
@@ -1068,5 +1072,238 @@ describe("McpBridgeServer — observed_hints injection", () => {
     const callArgs = (bridge.callExtension as ReturnType<typeof vi.fn>).mock.calls[0];
     const forwardedParams = callArgs?.[1] as Record<string, unknown>;
     expect(forwardedParams?.["observed_hints"]).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// In-call auto-retry on zero-effect browser_click
+// ---------------------------------------------------------------------------
+
+describe("McpBridgeServer — browser_click auto-retry on zero-effect", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  /**
+   * A WSBridge that returns different results on 1st vs subsequent calls.
+   * Models the realistic case where synthetic fails silently but trusted
+   * succeeds with a measurable effect.
+   */
+  function makeSequencedBridge(first: unknown, second: unknown): WSBridgeLike & { calls: Array<{ params: Record<string, unknown> }> } {
+    const calls: Array<{ params: Record<string, unknown> }> = [];
+    const fn = vi.fn(async (_method: string, params: Record<string, unknown>) => {
+      calls.push({ params });
+      return calls.length === 1 ? first : second;
+    });
+    return {
+      isConnected: () => true,
+      callExtension: fn as unknown as WSBridgeLike["callExtension"],
+      calls,
+    };
+  }
+
+  it("retries browser_click with mode:trusted when synthetic returns zero page_effect", async () => {
+    const store = makeObservedFacts();
+    const first = {
+      clicked: true,
+      mode: "synthetic",
+      mode_used: "synthetic",
+      site: "web.whatsapp.com",
+      page_effect: makePageEffect(),
+    };
+    const second = {
+      clicked: true,
+      mode: "trusted",
+      mode_used: "trusted",
+      site: "web.whatsapp.com",
+      page_effect: makePageEffect({ domAdded: 12 }),
+    };
+    const bridge = makeSequencedBridge(first, second);
+    const deps = makeDeps({ wsBridge: bridge, observedFacts: store });
+
+    await callTool(deps, "browser_click", { tab_id: "t_1", ref: 5 });
+
+    // Two dispatches to the extension.
+    expect(bridge.calls.length).toBe(2);
+    // First used whatever the schema default was (synthetic); second was forced trusted.
+    expect(bridge.calls[1]?.params["mode"]).toBe("trusted");
+    // Both observations recorded: first synthetic/no-effect, second trusted/has-effect.
+    expect(store.recordObservation).toHaveBeenCalledTimes(2);
+    expect(store.recordObservation).toHaveBeenCalledWith({
+      hostname: "web.whatsapp.com",
+      action_class: "click",
+      dispatch_mode: "synthetic",
+      had_effect: false,
+    });
+    expect(store.recordObservation).toHaveBeenCalledWith({
+      hostname: "web.whatsapp.com",
+      action_class: "click",
+      dispatch_mode: "trusted",
+      had_effect: true,
+    });
+  });
+
+  it("includes auto_retry telemetry in the returned result when retry fires", async () => {
+    const first = { clicked: true, mode: "synthetic", mode_used: "synthetic", site: "web.whatsapp.com", page_effect: makePageEffect() };
+    const second = { clicked: true, mode: "trusted", mode_used: "trusted", site: "web.whatsapp.com", page_effect: makePageEffect({ domAdded: 1 }) };
+    const bridge = makeSequencedBridge(first, second);
+    const deps = makeDeps({ wsBridge: bridge });
+
+    const res = (await callTool(deps, "browser_click", { tab_id: "t_1", ref: 5 })) as {
+      structuredContent?: { auto_retry?: { attempted: boolean; first_mode: string; final_mode: string; first_effect_empty: boolean } };
+      content: Array<{ type: "text"; text: string }>;
+    };
+
+    // Result payload is in content[0].text as JSON.
+    const body = JSON.parse(res.content[0]?.text ?? "{}") as {
+      auto_retry?: { attempted: boolean; first_mode: string; final_mode: string; first_effect_empty: boolean };
+    };
+    expect(body.auto_retry).toBeDefined();
+    expect(body.auto_retry?.attempted).toBe(true);
+    expect(body.auto_retry?.first_mode).toBe("synthetic");
+    expect(body.auto_retry?.final_mode).toBe("trusted");
+    expect(body.auto_retry?.first_effect_empty).toBe(true);
+  });
+
+  it("does NOT retry when agent explicitly pinned mode:synthetic", async () => {
+    const first = { clicked: true, mode: "synthetic", mode_used: "synthetic", site: "web.whatsapp.com", page_effect: makePageEffect() };
+    const second = { clicked: true, mode: "trusted", mode_used: "trusted", site: "web.whatsapp.com", page_effect: makePageEffect({ domAdded: 1 }) };
+    const bridge = makeSequencedBridge(first, second);
+    const deps = makeDeps({ wsBridge: bridge });
+
+    await callTool(deps, "browser_click", { tab_id: "t_1", ref: 5, mode: "synthetic" });
+
+    expect(bridge.calls.length).toBe(1);
+  });
+
+  it("does NOT retry when first attempt used mode:trusted (nothing stronger to escalate to)", async () => {
+    const first = { clicked: true, mode: "trusted", mode_used: "trusted", site: "web.whatsapp.com", page_effect: makePageEffect() };
+    const second = { clicked: true, mode: "trusted", mode_used: "trusted", site: "web.whatsapp.com", page_effect: makePageEffect({ domAdded: 1 }) };
+    const bridge = makeSequencedBridge(first, second);
+    const deps = makeDeps({ wsBridge: bridge });
+
+    // First attempt already trusted (via SITE_REGISTRY or explicit). Retry would be pointless.
+    await callTool(deps, "browser_click", { tab_id: "t_1", ref: 5, mode: "trusted" });
+
+    expect(bridge.calls.length).toBe(1);
+  });
+
+  it("does NOT retry when expect_effect is 'none'", async () => {
+    const first = { clicked: true, mode: "synthetic", mode_used: "synthetic", site: "example.com", page_effect: makePageEffect() };
+    const second = { clicked: true, mode: "trusted", mode_used: "trusted", site: "example.com", page_effect: makePageEffect({ domAdded: 1 }) };
+    const bridge = makeSequencedBridge(first, second);
+    const deps = makeDeps({ wsBridge: bridge });
+
+    await callTool(deps, "browser_click", { tab_id: "t_1", ref: 5, expect_effect: "none" });
+
+    expect(bridge.calls.length).toBe(1);
+  });
+
+  it("does NOT retry when observe_effects is false (no effect data to decide from)", async () => {
+    // No page_effect field when observe_effects:false.
+    const first = { clicked: true, mode: "synthetic", mode_used: "synthetic", site: "example.com" };
+    const second = { clicked: true, mode: "trusted", mode_used: "trusted", site: "example.com", page_effect: makePageEffect({ domAdded: 1 }) };
+    const bridge = makeSequencedBridge(first, second);
+    const deps = makeDeps({ wsBridge: bridge });
+
+    await callTool(deps, "browser_click", { tab_id: "t_1", ref: 5, observe_effects: false });
+
+    expect(bridge.calls.length).toBe(1);
+  });
+
+  it("does NOT retry when first attempt returned clicked:false (addressing bug, not dispatch bug)", async () => {
+    const first = {
+      clicked: false,
+      occluded: true,
+      suggestion: "dismiss_overlay",
+      page_effect: makePageEffect(),
+    };
+    const second = { clicked: true, mode: "trusted", mode_used: "trusted", site: "example.com", page_effect: makePageEffect({ domAdded: 1 }) };
+    const bridge = makeSequencedBridge(first, second);
+    const deps = makeDeps({ wsBridge: bridge });
+
+    await callTool(deps, "browser_click", { tab_id: "t_1", ref: 5 });
+
+    expect(bridge.calls.length).toBe(1);
+  });
+
+  it("does NOT retry when first attempt had a measurable effect", async () => {
+    const first = {
+      clicked: true,
+      mode: "synthetic",
+      mode_used: "synthetic",
+      site: "example.com",
+      page_effect: makePageEffect({ domAdded: 3 }),
+    };
+    const second = { clicked: true, mode: "trusted", mode_used: "trusted", site: "example.com", page_effect: makePageEffect({ domAdded: 1 }) };
+    const bridge = makeSequencedBridge(first, second);
+    const deps = makeDeps({ wsBridge: bridge });
+
+    await callTool(deps, "browser_click", { tab_id: "t_1", ref: 5 });
+
+    expect(bridge.calls.length).toBe(1);
+  });
+
+  it("does NOT retry for non-click tools (browser_type, browser_press)", async () => {
+    // browser_type with synthetic + zero effect is intentionally NOT
+    // auto-retried — trusted-type has known WRITE_AMPLIFIED risk on
+    // Quill/ProseMirror/Slate.
+    const typeFirst = {
+      typed: 0,
+      mode: "keystroke",
+      mode_used: "keystroke",
+      site: "example.com",
+      page_effect: makePageEffect(),
+    };
+    const typeBridge = makeSequencedBridge(typeFirst, typeFirst);
+    const typeDeps = makeDeps({ wsBridge: typeBridge });
+    await callTool(typeDeps, "browser_type", { tab_id: "t_1", ref: 5, text: "hello" });
+    expect(typeBridge.calls.length).toBe(1);
+
+    const pressFirst = { pressed: true, dispatch: "synthetic", page_effect: makePageEffect() };
+    const pressBridge = makeSequencedBridge(pressFirst, pressFirst);
+    const pressDeps = makeDeps({ wsBridge: pressBridge });
+    await callTool(pressDeps, "browser_press", { tab_id: "t_1", keys: ["Enter"] });
+    expect(pressBridge.calls.length).toBe(1);
+  });
+
+  it("falls back to the original synthetic result when the retry itself errors", async () => {
+    const first = { clicked: true, mode: "synthetic", mode_used: "synthetic", site: "example.com", page_effect: makePageEffect() };
+    const callFn = vi.fn(async (_method: string, _params: Record<string, unknown>) => {
+      if (callFn.mock.calls.length === 1) return first;
+      throw new Error("retry network error");
+    });
+    const bridge: WSBridgeLike = {
+      isConnected: () => true,
+      callExtension: callFn as unknown as WSBridgeLike["callExtension"],
+    };
+    const deps = makeDeps({ wsBridge: bridge });
+
+    const res = (await callTool(deps, "browser_click", { tab_id: "t_1", ref: 5 })) as {
+      content: Array<{ type: "text"; text: string }>;
+      isError: boolean;
+    };
+
+    expect(res.isError).toBe(false);
+    const body = JSON.parse(res.content[0]?.text ?? "{}") as { clicked?: boolean; auto_retry?: unknown };
+    expect(body.clicked).toBe(true);
+    // Fall-back must not claim the retry worked.
+    expect(body.auto_retry).toBeUndefined();
+  });
+
+  it("does NOT double-charge the rate limiter on retry", async () => {
+    const first = { clicked: true, mode: "synthetic", mode_used: "synthetic", site: "example.com", page_effect: makePageEffect() };
+    const second = { clicked: true, mode: "trusted", mode_used: "trusted", site: "example.com", page_effect: makePageEffect({ domAdded: 1 }) };
+    const bridge = makeSequencedBridge(first, second);
+    const limiter = new RateLimiter(100, 100);
+    const spy = vi.spyOn(limiter, "tryConsume");
+    const deps = makeDeps({ wsBridge: bridge, rateLimiter: limiter });
+
+    await callTool(deps, "browser_click", { tab_id: "t_1", ref: 5 });
+
+    // Retry still reaches the extension a second time...
+    expect(bridge.calls.length).toBe(2);
+    // ...but the rate limiter was charged only once for the logical action.
+    expect(spy).toHaveBeenCalledTimes(1);
   });
 });
