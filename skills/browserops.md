@@ -49,7 +49,30 @@ You cannot know from inside the agent how any given site will react to a synthet
    - `NO_PINNED_TAB` → fall through silently: try `browser_current_tab`; if that also returns nothing usable, call `browser_new_tab` and proceed on the fresh tab.
    - Only surface the "click 'Use this tab' in the popup" suggestion to the user if *every* fallback above has failed (no current tab, new-tab creation denied, etc.) — not as the first move.
    - For cross-tab work, `browser_list_tabs` and pick explicitly by title/url.
-3. **Decompose → list → delegate (default).** Before calling any tool, break the user's request into a flat list of concrete subtasks and record it with your task-tracking primitive (e.g. `TaskCreate`). Then run each subtask in its own sub-agent. The main context stays an orchestrator; it does not accumulate page dumps, screenshots, or intermediate tool results, and it cannot lose sight of the overall goal because the list is the source of truth.
+3. **If the task is complex, plan before decomposing.** This step exists because agents reliably follow the full discipline (list → delegate → verify) on simple tasks, and reliably skip it on complex ones. The mechanism is cognitive load: on a complex task, the task state crowds out the skill rules in working memory. The fix is to externalize planning into its own sub-agent so the main context only ever sees the finished plan, not the deliberation.
+
+   **Classify per piece, not per task.** A single user request often mixes easy and tricky pieces (e.g. "open Slack and also fill out the Figma invoice form" — Slack = easy navigate, Figma form = tricky canvas interaction). Classify each *piece* independently. A piece is *tricky* (needs a planner) if **any** of these apply:
+   - Site is a canvas/SPA with known gotchas (Figma, Docs, Sheets, Instagram, TikTok)
+   - Uses a procedure or tool you haven't used yet in this session
+   - Has branching or recovery logic (login-or-signup, out-of-stock fallback, 2FA, CAPTCHA)
+   - High-stakes side effects (sends a message, spends money, modifies shared state, irreversible UI action)
+   - The user's intent for that piece is ambiguous ("handle my inbox", "buy this if it's cheaper than $X")
+   - You've already hit an unexpected failure on that piece and are recovering
+
+   Otherwise the piece is *easy* (single known site, low-stakes, known procedure) and you go straight to step 4 for it.
+
+   **Parallelize planning + easy execution.** If a request has both easy and tricky pieces, don't serialize: fire them in one turn.
+   - List item: `0a. Spawn planner sub-agent (sonnet) — plan the Figma invoice flow [details]. Return plan, ≤15 lines.`
+   - List item: `0b. Spawn sub-agent (haiku) — open Slack pinned tab, return current channel name.` *(runs in parallel with 0a)*
+   - Dispatch both sub-agents in a single turn (your host supports this — multiple Agent calls in one message). While the planner thinks, the easy piece finishes.
+   - Parallelism rule of thumb: **sub-agents may run in parallel iff they operate on different tabs**. Two sub-agents hitting the same tab race and corrupt page state. Same-tab subtasks must serialize.
+
+   **Planner brief shape:**
+   > `0. Spawn planner sub-agent (sonnet) — produce a plan covering: (a) goal restated, (b) tab strategy, (c) tools/procedures to use, (d) tools/procedures to AVOID and why, (e) expected page_effect signatures at each major step, (f) failure-mode recovery hooks. Return as a numbered list, ≤15 lines.`
+
+   Wait for the plan to return, then write the decomposed subtask list from it. The planner sub-agent does the exploration — `procedures_search`, reading existing procedures, checking the live UI with a single `browser_read`, etc. — and returns only the plan. None of that exploration pollutes the main context.
+
+4. **Decompose → list → delegate (default).** Break the task (or the plan, if you did step 3) into a flat list of concrete subtasks and record it with your task-tracking primitive (e.g. `TaskCreate`). Then run each subtask in its own sub-agent. The main context stays an orchestrator; it does not accumulate page dumps, screenshots, or intermediate tool results, and it cannot lose sight of the overall goal because the list is the source of truth.
 
    **Write delegation into the list text.** Every non-trivial list item must be phrased as an instruction to *spawn a sub-agent*, not just a task description. This is a forcing function — agents that write "Send DM to Kartik" frequently forget to delegate and do it inline; agents that write "Spawn sub-agent to send DM to Kartik" don't. Good vs. bad:
    - ❌ `2. Search for Kartik in Slack sidebar`
@@ -60,9 +83,15 @@ You cannot know from inside the agent how any given site will react to a synthet
 
    **Recursive decomposition.** A subtask can itself be complex enough to warrant its own decomposition. When the sub-agent receives a brief it considers compound, it applies this same rule inside its own context: decompose into a child list, spawn child sub-agents, and roll results back up. Only the final ≤ 5-line summary returns to the parent. Depth is not capped; use judgement — most flows bottom out at depth 2 (root → subtask-list → per-subtask sub-agent), some at depth 3 when a subtask is itself a multi-site workflow.
 
+   **Parallelize independent subtasks.** Scan the list before dispatching and fire every independent subtask in the same turn (your host supports multiple Agent calls in one message). Independence rule for browserops: **sub-agents may run in parallel iff they operate on different tabs.** Examples:
+   - `"Open Gmail and check Slack for new DMs"` → tab A navigate + tab B read, in parallel.
+   - `"Summarize the Figma file and send the summary to Kartik on Slack"` → read Figma first (serial), then send-to-Slack (serial; depends on read output).
+   - `"Cancel all three pending orders"` (same Amazon tab) → serial; same-tab sub-agents race.
+   Dispatch all parallelizable subtasks together, wait for all to return, then update the list and dispatch the next wave. Serial-only subtasks still go one at a time.
+
    - After each sub-agent returns, update the list (mark the subtask done, adjust the next one based on what was observed), then dispatch the next. The sub-agent should report in ≤ 5 lines: what it did, pass/fail gate (`page_effect`-based where applicable), tool result summary. Nothing else.
    - Pick the model per subtask: haiku for mechanical single-tool-call or fill-and-submit steps; sonnet when the subtask needs multi-step retry logic or non-trivial decisions.
-4. **Thread the tab_id** through every subsequent call. Don't re-resolve it per step.
+5. **Thread the tab_id** through every subsequent call. Don't re-resolve it per step.
 
 ---
 
@@ -321,3 +350,4 @@ If you're editing browserops itself (not just using it):
 10. Never route around a refused destructive chord. Ask instead.
 11. Never "fix" `WRITE_AMPLIFIED` by retrying with the same params. It's a registry bug; report it.
 12. Never treat `browser_click_at` `clicked:true` as success on its own. Always verify with `page_effect` — coordinate clicks silently land on wrong elements (parent container, sibling overlay, flex gap) far more often than ref-based clicks do. Zero effect = failure, regardless of what the return field says.
+13. Never dive into a complex task (multi-site, branching, high-stakes, unfamiliar tools, ambiguous goal) without first spawning a planner sub-agent (§2 step 3) to produce the plan. The discipline that keeps simple tasks on-rails is the same discipline that collapses on complex ones when it all has to live in the main context at once — externalize the planning.
