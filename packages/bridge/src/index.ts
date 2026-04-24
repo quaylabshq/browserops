@@ -21,12 +21,23 @@ import { WSBridge } from "./ws-server.js";
 import { ensureIndex } from "./procedures/index-builder.js";
 import { proceduresRoot } from "./procedures/paths.js";
 import { seedBundledProcedures } from "./procedures/seed.js";
+import { runInit } from "./cli-init.js";
 
 const VERSION = "0.1.0";
 
 async function main(): Promise<void> {
   installProcessErrorHandlers();
-  applyCliFlags(process.argv.slice(2));
+
+  const argv = process.argv.slice(2);
+
+  // Subcommand: `init` runs scaffolding and exits — never opens the WS port
+  // or attaches to the MCP stdio transport.
+  if (argv[0] === "init") {
+    await runInit();
+    process.exit(0);
+  }
+
+  applyCliFlags(argv);
 
   const logLevel = parseLogLevel(process.env[ENV.LOG_LEVEL]);
   const logger = new Logger(logLevel);
