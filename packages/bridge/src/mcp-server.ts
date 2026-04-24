@@ -527,7 +527,8 @@ export class McpBridgeServer {
           ? { risky: true as const, reason: `${name} is always risky` }
           : this.deps.safety.checkRisky({ tool: name, params, tab });
       const reason = verdict.reason ?? `${name} requires approval`;
-      const decision = await this.deps.safety.requireApproval({ tool: name, params, reason });
+      const tab_hostname = tab?.url ? (() => { try { return new URL(tab.url).hostname; } catch { return undefined; } })() : undefined;
+      const decision = await this.deps.safety.requireApproval({ tool: name, params, reason, tab_hostname });
       if (!decision.allow) {
         const result = await this.reply(
           id,
