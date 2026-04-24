@@ -105,11 +105,20 @@ Every mutating tool (`browser_click`, `browser_type`, `browser_press`, `browser_
 
 ### `browser_click`
 
-- Prefer ref-based (`browser_click` with the ref from `browser_read`) over coordinates.
-- If the target is a `div`-with-onclick that never surfaces in the a11y tree, use `browser_click_by_text` with the visible label.
-- `{clicked: false, occluded: true, suggestion: "dismiss_overlay"}` → retry with `dismiss_overlay: true`. Do **not** fall back to `browser_click_at` coordinates to paper over it.
+**Click escalation ladder** (try in order, stop at the first one whose `page_effect` shows the intended effect):
+
+1. **`browser_click` with a ref** from `browser_read`. Default; cheapest; most addressable.
+2. **`browser_click` with `dismiss_overlay: true`** if (1) returns `{clicked:false, occluded:true, suggestion:"dismiss_overlay"}`, or if (1) has `clicked:true` but zero `page_effect`.
+3. **`browser_click_by_text`** with the visible label, for `div`-with-onclick targets that never surface as a ref.
+4. **`browser_click_at` (coordinate click)** — the last resort, and genuinely useful on complex SPAs (Instagram, TikTok, some retail checkouts) where (1–3) all fail because the clickable surface is a gesture handler on a parent div, shadow DOM, or canvas. Pass viewport coordinates from `browser_read` or a visible-rect query. Do not guess pixels.
+
+**Coordinate clicks are underused but unreliable. The rule is: always verify with `page_effect` immediately.** A ref-based click that returns `clicked:true` is usually true; a coordinate click that returns `clicked:true` tells you only that a mouse event was dispatched at that point — it could have landed on the parent container, on a sibling overlay that just appeared, or on dead space within a flex gap. Zero `page_effect` after a `browser_click_at` means the click landed somewhere harmless; treat it as a failure even though the return said `clicked:true`. Retry with adjusted coordinates, or fall back to `click_by_text`.
+
+**Other rules**
+
 - `REF_STALE` → `browser_read` the container again, retry with the fresh ref. Do not `dismiss_overlay` for this error.
 - On Slack / Figma / Docs / Sheets / Canva / Miro / Whimsical the registry auto-forces trusted click mode. You don't need to do anything; just don't manually downgrade.
+- If you climb the ladder to step 4 for a given site, consider saving the recipe as a procedure (`procedures_save`) so the next agent doesn't repeat the escalation from scratch.
 
 ### `browser_type`
 
@@ -194,8 +203,9 @@ Keyed by the symptom you observe, not the root cause. Root causes differ; fixes 
 
 | Symptom | First retry | If still failing |
 |---|---|---|
-| `clicked:true` but no page change | `browser_read` + retry with fresh ref | Retry with `dismiss_overlay: true`; if still zero effect, try `browser_click_by_text` |
-| `{clicked:false, occluded:true}` | Retry with `dismiss_overlay: true` | `browser_read` to find the occluder; click it first, then re-try target |
+| `clicked:true` but no page change | `browser_read` + retry with fresh ref | Climb the ladder: `dismiss_overlay:true` → `browser_click_by_text` → `browser_click_at` with coordinates. Verify `page_effect` at each step. |
+| `{clicked:false, occluded:true}` | Retry with `dismiss_overlay: true` | `browser_read` to find the occluder, click it first; if the occluder isn't addressable, fall through to `browser_click_at` on the target's coords |
+| `browser_click_at` returned `clicked:true` but `page_effect` is all zeros | Treat as failure — the click landed on a parent/sibling, not the target | Adjust coordinates (try the visible-rect centre, not the edge); or fall back to `browser_click_by_text` |
 | `REF_STALE` | `browser_read`, retry with new ref | Investigate why the container re-rendered — usually a late-arriving skeleton |
 | `WRITE_NOT_REFLECTED` | `browser_wait_for` the editor is focusable, retry | Confirm the field isn't disabled; check for overlay |
 | `WRITE_AMPLIFIED` | Do NOT retry | Report the bug with host + framework. Registry needs fixing. |
@@ -310,3 +320,4 @@ If you're editing browserops itself (not just using it):
 9. Never use `Meta`/`Control` in chords — use `Primary`.
 10. Never route around a refused destructive chord. Ask instead.
 11. Never "fix" `WRITE_AMPLIFIED` by retrying with the same params. It's a registry bug; report it.
+12. Never treat `browser_click_at` `clicked:true` as success on its own. Always verify with `page_effect` — coordinate clicks silently land on wrong elements (parent container, sibling overlay, flex gap) far more often than ref-based clicks do. Zero effect = failure, regardless of what the return field says.
