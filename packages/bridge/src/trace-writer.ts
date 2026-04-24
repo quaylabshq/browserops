@@ -11,13 +11,13 @@ import { createWriteStream, mkdirSync, type WriteStream } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import type { TraceEvent } from "@browserops/shared";
+import type { TraceEvent, AutoApprovedEvent } from "@browserops/shared";
 
 export interface TraceWriter {
   /** Whether this writer is active. When false, all methods are no-ops. */
   enabled: boolean;
-  /** Serialize and append a TraceEvent as a JSONL line. Never throws. */
-  append(event: TraceEvent): void;
+  /** Serialize and append a TraceEvent or AutoApprovedEvent as a JSONL line. Never throws. */
+  append(event: TraceEvent | AutoApprovedEvent): void;
   /** Flush buffered writes to disk (best-effort). */
   flush(): Promise<void>;
   /** Flush and close the underlying file stream. */

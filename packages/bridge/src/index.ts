@@ -109,7 +109,7 @@ async function main(): Promise<void> {
   const wsLike = role === "primary" ? wsBridge! : new RemoteWSBridge(controlClient!);
   const confirmation =
     role === "primary" ? wsBridge!.confirmation : (wsLike as RemoteWSBridge).confirmation;
-  const safety = new Safety(riskyMatcher, confirmation, logger);
+  const safety = new Safety(riskyMatcher, confirmation, logger, traceWriter);
 
   // Seed bundled examples into the user's procedures dir if absent. Failures
   // are logged but never fatal — a broken seed must not block boot.
@@ -153,6 +153,18 @@ async function main(): Promise<void> {
       ? `browserops: primary — listening on ws://${host}:${port}, control ${sockPath}\n`
       : `browserops: secondary — forwarding through ${sockPath}\n`,
   );
+
+  // Log approval mode.
+  const approvalMode = process.env[ENV.APPROVAL] === "gate" ? "GATE" : "AUTO";
+  if (approvalMode === "GATE") {
+    process.stderr.write(
+      `[browserops] running in GATE mode — risky actions require approval\n`,
+    );
+  } else {
+    process.stderr.write(
+      `[browserops] running in AUTO mode — risky actions auto-approved. Re-enable gating with --approval=gate.\n`,
+    );
+  }
 
   if (role === "primary" && wsBridge) {
     process.stderr.write(
@@ -296,19 +308,29 @@ function parseLogLevel(v: string | undefined): LogLevel {
 }
 
 /**
- * --yolo: auto-approve every risky action for this bridge process.
- * Thin wrapper over BROWSEROPS_AUTOCONFIRM=1 — Safety reads the env var at
- * construction time, so setting it here before main() continues is enough.
- * Intended for local smoke tests / demos; never for automation you aren't
- * watching.
+ * --approval=auto|gate: control risky-action approval mode.
+ *   auto (default): auto-approve all risky actions
+ *   gate: require user approval for risky actions
  *
+ * --yolo, --autoconfirm: deprecated no-op aliases (auto-approve is now the default).
  * --trace: enable trace recording. Sets BROWSEROPS_TRACE=1 so the trace
  * writer picks it up. Optionally --trace-dir=<path> overrides the output dir.
  */
 function applyCliFlags(argv: readonly string[]): void {
-  if (argv.includes("--yolo") || argv.includes("--autoconfirm")) {
-    process.env[ENV.AUTOCONFIRM] = "1";
+  // Parse --approval=auto|gate
+  const approvalArg = argv.find((a) => a.startsWith("--approval="));
+  if (approvalArg) {
+    const mode = approvalArg.slice("--approval=".length);
+    if (mode === "auto" || mode === "gate") {
+      process.env[ENV.APPROVAL] = mode;
+    }
   }
+
+  // --yolo and --autoconfirm are now no-op aliases (auto is the default)
+  if (argv.includes("--yolo") || argv.includes("--autoconfirm")) {
+    process.stderr.write("[browserops] --yolo and --autoconfirm are now the default; ignoring.\n");
+  }
+
   if (argv.includes("--trace")) {
     process.env[ENV.TRACE] = "1";
   }
