@@ -9,5 +9,10 @@ export default defineConfig({
     emptyOutDir: true,
     sourcemap: true,
     target: "chrome120",
+    rollupOptions: {
+      input: {
+        onboard: "src/onboard/index.html",
+      },
+    },
   },
 });
