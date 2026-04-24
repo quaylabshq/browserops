@@ -32,6 +32,8 @@ import {
   moveProcedureDir,
 } from "./store.js";
 import { handleCompile } from "./compile.js";
+import { makeExecuteHandler } from "./execute.js";
+import type { WSBridgeLike } from "../mcp-server.js";
 import {
   ensureIndex,
   buildIndex,
@@ -716,6 +718,20 @@ export const PROCEDURE_HANDLERS: Record<string, HandlerFn> = {
   "procedures_delete": handleDelete,
   "procedures_compile": handleCompile,
 };
+
+/**
+ * Build and register the procedures_execute handler, which requires a
+ * wsBridge reference to dispatch tool calls to the extension.
+ *
+ * Called once during McpBridgeServer construction. Returns a new handler map
+ * that includes procedures_execute bound to the provided wsBridge.
+ */
+export function buildProcedureHandlers(wsBridge: WSBridgeLike): Record<string, HandlerFn> {
+  return {
+    ...PROCEDURE_HANDLERS,
+    "procedures_execute": makeExecuteHandler(wsBridge),
+  };
+}
 
 /**
  * Registers procedure handlers via a callback.

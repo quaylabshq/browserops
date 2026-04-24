@@ -1549,6 +1549,121 @@ const proceduresDelete: ToolDef = {
   errorCodes: [...BASE_CODES, ...PROC_CODES] as const,
 } as const;
 
+/** Shared step result shape used in procedures_execute output. */
+const stepResultSchema: JSONSchemaObject = {
+  type: "object",
+  additionalProperties: false,
+  required: ["id", "action", "matched"] as const,
+  properties: {
+    id: { type: "string" },
+    action: { type: "string" },
+    observed_effect: pageEffectSchema,
+    matched: { type: "boolean" },
+    warnings: { type: "array", items: { type: "string" } },
+  },
+} as const;
+
+const proceduresExecute: ToolDef = {
+  name: "procedures_execute",
+  description:
+    "Replay a saved procedure step by step with effect verification. " +
+    "Loads the procedure by name, substitutes {{var}} input placeholders, " +
+    "then dispatches each step's browser_* tool call through the extension. " +
+    "After each step the observed page_effect is compared to the step's " +
+    "expected_effect (loose assertions: dom.any, url.changed, focus.changed, " +
+    "network.requests_started_min, etc.). Divergence halts execution and " +
+    "returns a structured report naming the step and specific reason. " +
+    'REQUIRED ARGUMENTS: {"name": "<procedure name>"}.',
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["name"] as const,
+    properties: {
+      name: {
+        type: "string",
+        pattern: procedureNamePattern,
+        description: "Procedure name, e.g. 'slack.search_messages'.",
+      },
+      inputs: {
+        type: "object",
+        additionalProperties: true,
+        description: "Values for procedure input params ({{var}} substitution).",
+      },
+      continue_on_warning: {
+        type: "boolean",
+        default: false,
+        description:
+          "Reserved for Phase 6. When true, soft divergences do not halt execution. " +
+          "Phase 5 always halts on any mismatch regardless of this flag.",
+      },
+      max_steps: {
+        type: "integer",
+        minimum: 1,
+        description:
+          "Safety cap on the number of steps to execute. " +
+          "Defaults to the total step count of the procedure.",
+      },
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["completed", "steps_executed", "step_results"] as const,
+    properties: {
+      completed: {
+        type: "boolean",
+        description: "True when all steps executed without divergence.",
+      },
+      steps_executed: {
+        type: "integer",
+        minimum: 0,
+        description: "Number of steps attempted (including the diverging step if any).",
+      },
+      step_results: {
+        type: "array",
+        items: stepResultSchema,
+        description: "Per-step execution record in order.",
+      },
+      final_step: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          id: { type: "string" },
+          observed_effect: pageEffectSchema,
+          expected_effect: { type: "object", additionalProperties: true },
+          divergence: { type: "string" },
+        },
+        description: "Summary of the last executed step.",
+      },
+      divergence: {
+        type: "object",
+        additionalProperties: false,
+        required: ["step_id", "step_index", "reason"] as const,
+        properties: {
+          step_id: { type: "string" },
+          step_index: { type: "integer", minimum: 0 },
+          reason: { type: "string" },
+          observed: pageEffectSchema,
+          expected: { type: "object", additionalProperties: true },
+        },
+        description: "Present only when completed is false and a step diverged.",
+      },
+    },
+  },
+  action_weight: 1,
+  risky: "never",
+  errorCodes: [
+    ...BASE_CODES,
+    ...PROC_CODES,
+    "EXTENSION_DISCONNECTED",
+    "RATE_LIMITED",
+    "RISKY_ACTION_DENIED",
+    "TAB_NOT_FOUND",
+    "REF_STALE",
+    "REF_NOT_FOUND",
+  ] as const,
+} as const;
+
 // ---------------------------------------------------------------------------
 // Public catalogue
 // ---------------------------------------------------------------------------
@@ -1586,6 +1701,7 @@ export const TOOL_DEFS: readonly ToolDef[] = [
   proceduresPromote,
   proceduresDelete,
   proceduresCompile,
+  proceduresExecute,
 ] as const;
 
 export const TOOL_DEF_MAP: Record<string, ToolDef> = Object.freeze(
