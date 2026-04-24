@@ -10,6 +10,7 @@ const statusPill = $<HTMLSpanElement>("status");
 const killBtn = $<HTMLButtonElement>("kill");
 const optionsLink = $<HTMLAnchorElement>("options");
 const yoloBox = $<HTMLInputElement>("yolo");
+const yoloBanner = $<HTMLDivElement>("yolo-banner");
 const setupPane = $<HTMLDivElement>("setup");
 const runSetupBtn = $<HTMLButtonElement>("run-setup");
 const pinBtn = $<HTMLButtonElement>("pin");
@@ -162,9 +163,19 @@ unpinBtn.addEventListener("click", () => {
 
 async function refresh(): Promise<void> {
   const [local, session] = await Promise.all([
-    chrome.storage.local.get(["connected", "token", "disabled"]),
-    chrome.storage.session.get(["pendingSafetyPrompt", "autoApprove"]),
+    chrome.storage.local.get(["connected", "token", "disabled", "yoloFirstRunShown"]),
+    chrome.storage.session.get(["pendingSafetyPrompt", "requireApproval", "autoApprove"]),
   ]);
+
+  // Migration: if old autoApprove key exists, translate to new requireApproval key
+  if (session["autoApprove"] !== undefined && session["requireApproval"] === undefined) {
+    const requireApproval = !session["autoApprove"];
+    if (requireApproval) {
+      await chrome.storage.session.set({ requireApproval });
+    }
+    await chrome.storage.session.remove("autoApprove");
+  }
+
   const hasToken = typeof local["token"] === "string" && local["token"].length > 0;
   renderSetup(hasToken);
   renderStatus(local["connected"] === true, local["disabled"] === true);
@@ -174,17 +185,28 @@ async function refresh(): Promise<void> {
       ? (raw as PendingSafetyPrompt)
       : null;
   renderSafety(prompt);
-  yoloBox.checked = session["autoApprove"] === true;
+
+  // Handle first-run banner
+  const firstRunShown = local["yoloFirstRunShown"] === true;
+  if (!firstRunShown) {
+    yoloBanner.hidden = false;
+    await chrome.storage.local.set({ yoloFirstRunShown: true });
+  } else {
+    yoloBanner.hidden = true;
+  }
+
+  // New semantics: checked = requireApproval = true; unchecked = auto-approve (default)
+  yoloBox.checked = session["requireApproval"] === true;
   await renderPinned();
 }
 
 yoloBox.addEventListener("change", () => {
-  const next = yoloBox.checked;
+  const requireApproval = yoloBox.checked;
   // The background service worker listens on storage.onChanged to update the
   // badge and to let the safety handler short-circuit future prompts.
-  void (next
-    ? chrome.storage.session.set({ autoApprove: true })
-    : chrome.storage.session.remove("autoApprove"));
+  void (requireApproval
+    ? chrome.storage.session.set({ requireApproval: true })
+    : chrome.storage.session.remove("requireApproval"));
 });
 
 function sendDecision(allow: boolean): void {
