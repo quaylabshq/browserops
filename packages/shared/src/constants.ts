@@ -55,4 +55,8 @@ export const ENV = {
   TRACE: "BROWSEROPS_TRACE",
   /** Override the directory where trace .jsonl files are written. */
   TRACE_DIR: "BROWSEROPS_TRACE_DIR",
+  /** Set to "0" to disable the observed-facts store. Enabled by default. */
+  OBSERVED_FACTS: "BROWSEROPS_OBSERVED_FACTS",
+  /** Override the directory where observed/facts.json is written. */
+  OBSERVED_DIR: "BROWSEROPS_OBSERVED_DIR",
 } as const;

@@ -25,6 +25,7 @@ import type { Safety, TabInfo } from "./safety.js";
 import type { TabRegistry } from "./tab-registry.js";
 import type { Logger } from "./logger.js";
 import type { TraceWriter } from "./trace-writer.js";
+import type { ObservedFactsStore } from "./observed-facts.js";
 import { buildProcedureHandlers } from "./procedures/handlers.js";
 
 /**
@@ -118,6 +119,12 @@ export interface McpBridgeDeps {
   version: string;
   /** Optional trace writer. When provided, the router will emit a TraceEvent after each tool result. */
   traceWriter?: TraceWriter;
+  /**
+   * Optional observed-facts store. When provided, Phase 6 Step 2/3 will
+   * populate and query it from the dispatch pipeline. Attached here but not
+   * yet consumed — wiring happens in subsequent phases.
+   */
+  observedFacts?: ObservedFactsStore;
 }
 
 interface ToolErrorPayload {
