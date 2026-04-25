@@ -47,6 +47,9 @@ user's real Chrome tabs (with existing logins intact)
 Before any browser task, call `procedures_search` with tokens from the user's request.
 If score >= 0.5, use that procedure. Do not re-plan steps that are already encoded.
 
+### Prefer `browser_quick_read` over `browser_read`
+When you need to find a specific element (a button, input, link) by its label, use `browser_quick_read` instead of `browser_read`. It searches the a11y tree by accessible name and returns only matching refs — much cheaper than a full page read. Fall back to `browser_read` only when you need the full page structure or when `browser_quick_read` returns no matches.
+
 ### Sub-agent threshold
 - **≤ 8 steps, no retries needed**: run browser tool calls directly from the main agent. No sub-agent.
 - **> 8 steps OR retry/branching logic needed**: delegate to a sub-agent.
