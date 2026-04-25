@@ -297,6 +297,7 @@ chrome.tabs.onRemoved.addListener((chromeTabId) => {
     void unpinTab();
   }
   network.forgetTab(chromeTabId);
+  cdp.clearPersistent(chromeTabId);
   void persistTabMap();
 });
 

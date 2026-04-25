@@ -177,6 +177,57 @@ export async function execInTab<A extends readonly unknown[], R>(
 }
 
 // ---------------------------------------------------------------------------
+// CDP Input dispatch helpers (used when a tab has persistent CDP attachment)
+// ---------------------------------------------------------------------------
+
+function cdpModBits(mods: { ctrl: boolean; alt: boolean; shift: boolean; meta: boolean }): number {
+  return (mods.alt ? 1 : 0) | (mods.ctrl ? 2 : 0) | (mods.meta ? 4 : 0) | (mods.shift ? 8 : 0);
+}
+
+async function cdpClick(
+  cdp: CdpManager, chromeId: number,
+  x: number, y: number,
+  button: "left" | "middle" | "right",
+  mods: { ctrl: boolean; alt: boolean; shift: boolean; meta: boolean },
+): Promise<void> {
+  const m = cdpModBits(mods);
+  await cdp.send(chromeId, "Input.dispatchMouseEvent", {
+    type: "mousePressed", x, y, button, clickCount: 1, modifiers: m,
+  });
+  await cdp.send(chromeId, "Input.dispatchMouseEvent", {
+    type: "mouseReleased", x, y, button, clickCount: 1, modifiers: m,
+  });
+}
+
+async function cdpType(cdp: CdpManager, chromeId: number, text: string): Promise<void> {
+  await cdp.send(chromeId, "Input.insertText", { text });
+}
+
+async function cdpPress(
+  cdp: CdpManager, chromeId: number,
+  key: string,
+  mods: { ctrl: boolean; alt: boolean; shift: boolean; meta: boolean },
+): Promise<void> {
+  const m = cdpModBits(mods);
+  await cdp.send(chromeId, "Input.dispatchKeyEvent", {
+    type: "keyDown", key, modifiers: m,
+    ...(key.length === 1 ? { text: key } : {}),
+  });
+  await cdp.send(chromeId, "Input.dispatchKeyEvent", {
+    type: "keyUp", key, modifiers: m,
+  });
+}
+
+/** Scroll an element into view and return its viewport center. MAIN world. */
+function injectedElementCenter(selector: string): { x: number; y: number } | null {
+  const el = document.querySelector(selector) as HTMLElement | null;
+  if (el === null) return null;
+  try { el.scrollIntoView({ block: "center", inline: "center" }); } catch { /* ignore */ }
+  const r = el.getBoundingClientRect();
+  return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+}
+
+// ---------------------------------------------------------------------------
 // Injected functions. These execute in the page's MAIN world and cannot
 // close over module scope — every input arrives through `args`.
 // ---------------------------------------------------------------------------
@@ -1560,8 +1611,30 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       const modifiers = params.modifiers ?? [];
       const observeEffects = params.observe_effects !== false;
       const expectEffect = params.expect_effect;
-
       const mods = modifierFlags(modifiers);
+      const buttonName = params.button ?? "left";
+
+      // Persistent CDP path: trusted click via Input.dispatchMouseEvent.
+      if (cdp.isPersistent(chromeId)) {
+        const center = await execInTab(chromeId, injectedElementCenter, [selector] as const);
+        if (center === null) {
+          throw codedError("REF_STALE", `ref ${params.ref} no longer resolves in tab ${params.tab_id}`);
+        }
+        const dispatch = async () => {
+          await cdpClick(cdp, chromeId, center.x, center.y, buttonName, mods);
+          return { clicked: true as const };
+        };
+        if (observeEffects) {
+          const { result, effect } = await withEffectObservation(
+            { chromeTabId: chromeId, windowMs: 300, networkTracker: network }, dispatch,
+          );
+          const warning = checkEffectExpectation(effect, expectEffect);
+          return { ...result, page_effect: effect, ...(warning ? { warnings: [warning] } : {}) };
+        }
+        return dispatch();
+      }
+
+      // Synthetic path.
       const dismissOverlay = raw["dismiss_overlay"] === true;
       let res = await execInTab(chromeId, injectedClick, [selector, button, mods] as const);
       if (res.found === false) {
@@ -1637,8 +1710,13 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
     ): Promise<{ clicked: true; x: number; y: number }> => {
       const params = parseClickAt(raw);
       const chromeId = resolveChromeId(tabIdMap, params.tab_id);
-      const button = BUTTON_INDEX[params.button ?? "left"];
+      const buttonName = params.button ?? "left";
+      const button = BUTTON_INDEX[buttonName];
       const modifiers = params.modifiers ?? [];
+      if (cdp.isPersistent(chromeId)) {
+        await cdpClick(cdp, chromeId, params.x, params.y, buttonName, modifierFlags(modifiers));
+        return { clicked: true, x: params.x, y: params.y };
+      }
       await execInTab(
         chromeId,
         injectedClickAtPoint,
@@ -1737,6 +1815,42 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       let cleared: boolean | undefined;
       const mode: TypeMode = resolveTypeMode(params.text, params.mode);
 
+      // Persistent CDP path: trusted type via Input.insertText.
+      if (cdp.isPersistent(chromeId)) {
+        if (clearMode !== undefined) {
+          const selectAllMod = isMacPlatform()
+            ? { ctrl: false, alt: false, shift: false, meta: true }
+            : { ctrl: true, alt: false, shift: false, meta: false };
+          await cdpPress(cdp, chromeId, "a", selectAllMod);
+          await cdpPress(cdp, chromeId, "Backspace", { ctrl: false, alt: false, shift: false, meta: false });
+          cleared = true;
+        }
+        const dispatch = async () => {
+          // Click the element to focus it, then insert text.
+          const center = await execInTab(chromeId, injectedElementCenter, [selector] as const);
+          if (center === null) {
+            throw codedError("REF_STALE", `ref ${params.ref} no longer resolves in tab ${params.tab_id}`);
+          }
+          await cdpClick(cdp, chromeId, center.x, center.y, "left", { ctrl: false, alt: false, shift: false, meta: false });
+          await cdpType(cdp, chromeId, params.text);
+          if (submit) {
+            await cdpPress(cdp, chromeId, "Enter", { ctrl: false, alt: false, shift: false, meta: false });
+          }
+          const r: { typed: number; mode: TypeMode; cleared?: boolean } = { typed: params.text.length, mode };
+          if (cleared !== undefined) r.cleared = cleared;
+          return r;
+        };
+        if (observeEffects) {
+          const { result, effect } = await withEffectObservation(
+            { chromeTabId: chromeId, windowMs: 300, networkTracker: network }, dispatch,
+          );
+          const warning = checkEffectExpectation(effect, expectEffect);
+          return { ...result, page_effect: effect, ...(warning ? { warnings: [warning] } : {}) };
+        }
+        return dispatch();
+      }
+
+      // Synthetic path.
       if (clearMode !== undefined) {
         const clearRes = await execInTab(
           chromeId,
@@ -1840,6 +1954,23 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       throw codedError("RISKY_ACTION_DENIED", `refused destructive chord: ${denyReason}`);
     }
 
+    // Persistent CDP path: trusted key events.
+    if (cdp.isPersistent(chromeId)) {
+      const dispatch = async (): Promise<{ pressed: true }> => {
+        await cdpPress(cdp, chromeId, terminal, modifierFlags(mods));
+        return { pressed: true };
+      };
+      if (observeEffects) {
+        const { result, effect } = await withEffectObservation(
+          { chromeTabId: chromeId, windowMs: 300, networkTracker: network }, dispatch,
+        );
+        const warning = checkEffectExpectation(effect, expectEffect);
+        return { ...result, page_effect: effect, ...(warning ? { warnings: [warning] } : {}) };
+      }
+      return dispatch();
+    }
+
+    // Synthetic path.
     const dispatchPress = async (): Promise<{ pressed: true }> => {
       await execInTab(
         chromeId,
@@ -1956,5 +2087,15 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
     } catch (e) {
       return { thrown: true, value: null, error: String(e) };
     }
+  });
+
+  router.register("browser_set_cdp", async (raw): Promise<{ enabled: boolean }> => {
+    const tab_id = raw["tab_id"];
+    const enabled = raw["enabled"];
+    if (typeof tab_id !== "string") throw codedError("INVALID_PARAMS", "tab_id must be a string");
+    if (typeof enabled !== "boolean") throw codedError("INVALID_PARAMS", "enabled must be a boolean");
+    const chromeId = resolveChromeId(tabIdMap, tab_id);
+    await cdp.setPersistent(chromeId, enabled);
+    return { enabled };
   });
 }
