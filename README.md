@@ -42,7 +42,14 @@ Leave this running in a dedicated terminal. The bridge is what the Chrome extens
 
 Chrome's extension icon turns green within a second. If you missed the onboarding tab, open the popup and click **Run setup**. Prefer the old copy-paste flow? Open the extension's options page and paste `~/.browserops/token` there.
 
-### 4. Use it
+### 4. Load the agent instructions
+
+**This step is required.** The repo ships `AGENTS.md` with rules that tell your agent how to use browserops correctly. Without it your agent will re-plan steps that are already encoded in procedures, take unnecessary screenshots, and produce broken YAML.
+
+- **Claude Code** and **OpenAI Codex**: already done — they auto-discover `CLAUDE.md` / `AGENTS.md` in the repo root.
+- **Every other client**: see [Agent instructions](#agent-instructions) below for where to paste the file.
+
+### 5. Use it
 
 Open your MCP client (already configured with the snippet from Step 1) and try:
 
@@ -164,6 +171,31 @@ All clients support an `env` block next to `command` / `args`. For example, to b
 ```
 
 Then mirror the same port in the extension's options page.
+
+## Agent instructions
+
+**`AGENTS.md` is required every time you run browserops.** It contains the orchestration rules your agent must follow: procedure-first search before planning, when to use sub-agents, keyboard chord syntax, and procedure authoring rules. Without it, agents re-plan steps that are already encoded in procedures, take unnecessary screenshots, skip the `procedures_search` call, and produce invalid YAML. Load it once per client setup and it will be injected automatically on every session.
+
+Two clients auto-discover it with no setup:
+
+| Client | How |
+|---|---|
+| **Claude Code** | Reads `CLAUDE.md` (symlink → `AGENTS.md`) from the repo root automatically |
+| **OpenAI Codex CLI** | Reads `AGENTS.md` from the repo root automatically |
+
+All other clients need a one-time copy into their rules / system-prompt slot:
+
+| Client | Where to add |
+|---|---|
+| **Cursor** | Create `.cursor/rules/browserops.mdc`. Add frontmatter `---\nalwaysApply: true\n---` at the top, then paste `AGENTS.md` below it. |
+| **Windsurf / Codeium** | Append `AGENTS.md` to `.windsurfrules` in the repo root (create it if absent). |
+| **GitHub Copilot** | Append `AGENTS.md` to `.github/copilot-instructions.md` (create it if absent). |
+| **Continue** | Add the content to the `customInstructions` field in `.continue/config.json`. |
+| **Zed** | Open Settings → Assistant → System prompt and paste the content. |
+| **Amp** | Add a `.amp/instructions.md` file in the repo root with the content. |
+| **Custom SDK agent** | Pass the full content as the system prompt when constructing the agent. |
+
+The file is client-agnostic — the same text works in every slot listed above.
 
 ## Available tools (v1)
 
