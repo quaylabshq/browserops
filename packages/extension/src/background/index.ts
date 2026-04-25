@@ -108,7 +108,7 @@ registerTabHandlers(router, {
 registerNavigationHandlers(router, { tabIdMap: tabIdToChromeId, refCache, network });
 registerScreenshotHandler(router, { tabIdMap: tabIdToChromeId });
 registerReadHandler(router, { tabIdMap: tabIdToChromeId, refCache });
-registerInputHandlers(router, { tabIdMap: tabIdToChromeId, refCache, cdp });
+registerInputHandlers(router, { tabIdMap: tabIdToChromeId, refCache, cdp, network });
 registerSafetyHandler(router, { restoreBadge: () => setBadge(currentConnected) });
 
 router.register("assign_tab_id", async (params) => {
