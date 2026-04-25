@@ -22,20 +22,29 @@ pnpm setup
 
 `pnpm setup` runs install + build + `browserops-bridge init` in one shot. The init step generates `~/.browserops/token`, seeds the bundled procedure examples into `~/browserops/procedures/shared/`, and prints copy-paste MCP client config snippets for Claude Code, Cursor, Zed, and Continue. Pick the snippet for the client you use and add it to that client's MCP config.
 
-### 2. Load the extension in Chrome
+### 2. Start the bridge
+
+```bash
+pnpm start
+```
+
+Leave this running in a dedicated terminal. The bridge is what the Chrome extension connects to over WebSocket — without it running, the extension shows **disconnected** and the popup buttons have nothing to talk to. `pnpm start` rebuilds first and then launches the bridge in the foreground; use `pnpm start:fast` to skip the rebuild when you haven't changed code.
+
+(MCP clients like Claude Code and Cursor also spawn their own bridge instance over stdio when they call a `browser_*` tool. That coexists with the one you started here — the first process to bind `:8765` owns the WebSocket and later ones proxy through a local control socket.)
+
+### 3. Load the extension in Chrome
 
 1. Open `chrome://extensions`.
 2. Toggle **Developer mode** on (top right).
 3. Click **Load unpacked** and select `packages/extension/dist/` from this repo (produced by `pnpm setup`).
-4. An onboarding tab opens automatically.
+4. An onboarding tab opens automatically, showing a 6-digit **pair code**.
+5. Match it against the `pair code XXX-XXX` line the bridge printed to stderr, then click **Confirm & connect**.
 
-### 3. Use it
+Chrome's extension icon turns green within a second. If you missed the onboarding tab, open the popup and click **Run setup**. Prefer the old copy-paste flow? Open the extension's options page and paste `~/.browserops/token` there.
 
-Open your MCP client and send any prompt that uses a `browser_*` tool (e.g. "what tabs do I have open?"). The client spawns the bridge on first tool use — the extension's onboarding tab will then show a 6-digit **pair code** matching the one the bridge prints to stderr. Click **Confirm & connect** on the onboarding tab and Chrome's extension icon turns green within a second.
+### 4. Use it
 
-(If you missed the onboarding tab, open the popup and click **Run setup**. Prefer the old copy-paste flow? Open the extension's options page and paste `~/.browserops/token` there.)
-
-Then try:
+Open your MCP client (already configured with the snippet from Step 1) and try:
 
 > What tabs do I have open?
 
