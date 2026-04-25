@@ -139,7 +139,12 @@ function resolveChromeId(tabIdMap: Map<string, number>, tabId: unknown): number 
   return chromeId;
 }
 
-function resolveSelector(refCache: RefCache, tabId: string, ref: number): string {
+interface ResolvedRef {
+  selector: string;
+  role: string;
+}
+
+function resolveRef(refCache: RefCache, tabId: string, ref: number): ResolvedRef {
   const snap = refCache.get(tabId);
   if (snap === undefined) {
     throw codedError("REF_STALE", `no a11y snapshot for tab ${tabId}; call browser_read first`);
@@ -148,7 +153,11 @@ function resolveSelector(refCache: RefCache, tabId: string, ref: number): string
   if (entry === undefined) {
     throw codedError("REF_NOT_FOUND", `ref ${ref} not present in current snapshot for ${tabId}`);
   }
-  return entry.selector;
+  return { selector: entry.selector, role: entry.role };
+}
+
+function resolveSelector(refCache: RefCache, tabId: string, ref: number): string {
+  return resolveRef(refCache, tabId, ref).selector;
 }
 
 /**
@@ -1807,13 +1816,23 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
     }> => {
       const params = parseType(raw);
       const chromeId = resolveChromeId(tabIdMap, params.tab_id);
-      const selector = resolveSelector(refCache, params.tab_id, params.ref);
+      const ref = resolveRef(refCache, params.tab_id, params.ref);
+      const selector = ref.selector;
       const submit = params.submit ?? false;
       const clearMode = resolveClearMode(params);
       const observeEffects = params.observe_effects !== false;
       const expectEffect = params.expect_effect;
       let cleared: boolean | undefined;
-      const mode: TypeMode = resolveTypeMode(params.text, params.mode);
+
+      // Infer mode from the ref metadata when agent didn't specify one.
+      // Contenteditable / rich-editor targets (role=textbox with editor
+      // class selectors, or any contenteditable) use paste mode — one-shot
+      // execCommand("insertText") that avoids focus-stealing between chars.
+      const RICH_SELECTOR_HINTS = [".ql-editor", ".ProseMirror", "[data-slate-editor", ".public-DraftEditor", "contenteditable", ".cm-content"];
+      const looksRichEditor = ref.role === "textbox" && RICH_SELECTOR_HINTS.some(h => selector.includes(h));
+      const mode: TypeMode = params.mode !== undefined
+        ? resolveTypeMode(params.text, params.mode)
+        : looksRichEditor ? "paste" : resolveTypeMode(params.text, undefined);
 
       // Persistent CDP path: trusted type via Input.insertText.
       if (cdp.isPersistent(chromeId)) {
@@ -1871,28 +1890,19 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
         mode: TypeMode;
         cleared?: boolean;
       };
-      // When mode is auto-resolved to "keystroke", check whether the target is
-      // contenteditable. Rich editors (Quill, ProseMirror, Slate, Draft.js)
-      // steal focus between per-character async events, causing silent failures.
-      // Paste mode uses a single synchronous execCommand("insertText") which
-      // avoids the focus-stealing window entirely.
-      const effectiveMode: TypeMode =
-        params.mode !== undefined
-          ? mode  // agent explicitly chose a mode — respect it
-          : await execInTab(chromeId, (sel: string) => {
-              const el = document.querySelector(sel) as HTMLElement | null;
-              return el !== null && el.isContentEditable;
-            }, [selector] as const).then(isCE => isCE ? "paste" as const : mode).catch(() => mode);
 
       const dispatchSynthetic = async (): Promise<TypeResult> => {
         let res: { found: boolean; typed: number; reflected: number };
-        if (effectiveMode === "paste") {
+        if (mode === "paste") {
           res = await execInTab(
             chromeId,
             injectedTypePaste,
             [selector, params.text, submit] as const,
           );
         } else {
+          // keystroke mode. injectedTypeKeystroke already detects
+          // contenteditable and uses execCommand fallback per-char
+          // when beforeinput doesn't land.
           const delayMs = params.delay_ms ?? 0;
           res = await execInTab(
             chromeId,
@@ -1903,39 +1913,23 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
         if (res.found === false) {
           throw codedError("REF_STALE", `ref ${params.ref} no longer resolves in tab ${params.tab_id}`);
         }
-        // If the write didn't land (rich editors silently dropping synthetic
-        // events), auto-retry with execCommand("insertText") — the synchronous
-        // DOM-native path that works on Quill, ProseMirror, Slate, Draft.js,
-        // Lexical, Gmail, and most contenteditable editors.
+        // If the write didn't land, auto-retry with one-shot execCommand —
+        // the synchronous DOM-native path that works on rich editors where
+        // per-char events get intercepted by focus-stealers.
         if (params.text.length > 0 && res.reflected === 0) {
-          const retryRes = await execInTab(chromeId, (sel: string, txt: string, doSubmit: boolean) => {
-            const root = document.querySelector(sel) as HTMLElement | null;
-            if (!root) return { found: false, reflected: 0 };
-            // Drill into wrapper role="textbox" nodes.
-            const inner = root.isContentEditable
-              ? null
-              : root.querySelector<HTMLElement>(
-                  '[contenteditable="true"], [contenteditable=""], .ql-editor, [data-slate-editor="true"], .ProseMirror, .public-DraftEditor-content',
-                );
-            const el = (inner ?? root) as HTMLElement;
-            el.focus();
-            const before = (el.isContentEditable ? (el.textContent ?? "") : ((el as HTMLInputElement).value ?? "")).length;
-            document.execCommand("insertText", false, txt);
-            const after = (el.isContentEditable ? (el.textContent ?? "") : ((el as HTMLInputElement).value ?? "")).length;
-            if (doSubmit && (el as HTMLElement & { form?: HTMLFormElement }).form) {
-              (el as HTMLElement & { form?: HTMLFormElement }).form!.requestSubmit?.();
-            }
-            return { found: true, reflected: Math.max(0, after - before) };
-          }, [selector, params.text, submit] as const);
-
-          if (retryRes.found && retryRes.reflected > 0) {
-            const r: TypeResult = { typed: retryRes.reflected, mode: "paste" };
+          res = await execInTab(
+            chromeId,
+            injectedTypePaste,
+            [selector, params.text, submit] as const,
+          );
+          if (res.found && res.reflected > 0) {
+            const r: TypeResult = { typed: res.reflected, mode: "paste" };
             if (cleared !== undefined) r.cleared = cleared;
             return r;
           }
           throw codedError(
             "WRITE_NOT_REFLECTED",
-            `typed ${res.typed} characters but field content did not change (execCommand retry also failed)`,
+            `typed ${res.typed} characters but field content did not change`,
           );
         }
         if (params.text.length > 0 && res.reflected >= params.text.length * 2) {
@@ -1944,7 +1938,7 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
             `typed ${res.typed} characters but field reflected ${res.reflected} — likely double-insertion by a stacked beforeinput handler`,
           );
         }
-        const r: TypeResult = { typed: res.reflected, mode: effectiveMode };
+        const r: TypeResult = { typed: res.reflected, mode };
         if (cleared !== undefined) r.cleared = cleared;
         return r;
       };
