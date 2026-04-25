@@ -3,11 +3,13 @@ import { checkEffectExpectation } from "./effects.js";
 import type { Router } from "../router.js";
 import type { RefCache } from "../ref-cache.js";
 import type { NetworkTracker } from "../network-tracker.js";
+import type { CdpManager } from "../cdp.js";
 
 interface NavigationOpts {
   tabIdMap: Map<string, number>;
   refCache: RefCache;
   network: NetworkTracker;
+  cdp: CdpManager;
 }
 
 const WAIT_FOR_POLL_DEFAULT_MS = 250;
@@ -86,7 +88,7 @@ function injectedCheckWaitFor(
 }
 
 export function registerNavigationHandlers(router: Router, opts: NavigationOpts): void {
-  const { tabIdMap, refCache, network } = opts;
+  const { tabIdMap, refCache, network, cdp } = opts;
 
   router.register(
     "browser_navigate",
@@ -126,6 +128,9 @@ export function registerNavigationHandlers(router: Router, opts: NavigationOpts)
         await waitForLoadComplete(chromeId, NAVIGATE_TIMEOUT_MS);
       }
       const finalUrl = await readTabUrl(chromeId);
+
+      // Auto-enable/disable persistent CDP for canvas domains.
+      void cdp.autoAttachIfCanvas(chromeId, finalUrl);
 
       if (!observeEffects || netBefore === null) {
         if (expectEffect !== undefined) {
