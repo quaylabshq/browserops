@@ -2067,11 +2067,13 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
     async (
       raw,
     ): Promise<{
-      clicked: true;
+      clicked: boolean;
       mode: ClickMode;
+      dismissed_overlay?: boolean;
       occluded?: boolean;
       occluder?: { tag: string; text: string; role: string | null } | null;
       retargeted?: boolean;
+      suggestion?: string;
     }> => {
       const params = parseClick(raw);
       const chromeId = resolveChromeId(tabIdMap, params.tab_id);
@@ -2125,17 +2127,28 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
         }
       }
       const result: {
-        clicked: true;
+        clicked: boolean;
         mode: ClickMode;
         dismissed_overlay?: boolean;
         occluded?: boolean;
         occluder?: { tag: string; text: string; role: string | null } | null;
         retargeted?: boolean;
+        suggestion?: string;
       } = { clicked: true, mode };
       if (dismissedOverlay) result.dismissed_overlay = true;
       if (res.occluded === true) {
         result.occluded = true;
         result.occluder = res.occluder ?? null;
+        if (!dismissOverlay) {
+          // dismiss_overlay was not requested — click was absorbed by overlay.
+          result.clicked = false;
+          result.suggestion = "retry with dismiss_overlay: true";
+        } else {
+          // dismiss_overlay was attempted but the target is still occluded.
+          result.clicked = false;
+          result.suggestion =
+            "overlay could not be dismissed; target element may be permanently covered";
+        }
       }
       if (res.retargeted === true) result.retargeted = true;
       return result;
