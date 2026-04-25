@@ -105,21 +105,27 @@ For clearing as an independent step (no typing follow-up), use the bundled `meta
 
 ## Canvas apps (Figma, Google Docs, Sheets, Canva, Miro)
 
-Canvas apps render their UI to `<canvas>` elements — synthetic DOM events have no effect. After navigating to a canvas site, call `browser_set_cdp(tab_id, true)` to enable persistent CDP (Chrome DevTools Protocol) attachment. This routes all `browser_click`, `browser_click_at`, `browser_type`, and `browser_press` calls through trusted CDP `Input.*` methods (`isTrusted: true`).
+Canvas apps render their UI to `<canvas>` elements — synthetic DOM events have no effect. **CDP is auto-enabled** when `browser_navigate` lands on a known canvas domain (Google Docs, Sheets, Figma, Canva, Miro, Whimsical, Figjam). All `browser_click`, `browser_click_at`, `browser_type`, and `browser_press` calls on that tab automatically use trusted CDP `Input.*` methods. The debugger shows a "controlled by automation" banner while active — this is expected.
 
+For other canvas sites not in the auto-list, call `browser_set_cdp(tab_id, true)` manually after navigating.
+
+Do **not** enable CDP for standard websites — synthetic dispatch works fine and avoids the banner.
+
+## Rich-text editors (Slack, Gmail, Discord, Notion, Linear)
+
+Rich editors (Quill, ProseMirror, Slate, Draft.js, Lexical) work with synthetic dispatch — `browser_type` automatically uses one-shot `execCommand("insertText")` on contenteditable elements, which avoids the focus-stealing issues that per-character keystroke mode has on these editors.
+
+If `browser_type` still fails (returns `WRITE_NOT_REFLECTED`), **do not retry** — go straight to `browser_execute_js`:
+
+```js
+browser_execute_js(tab_id, `
+  const el = document.querySelector('[contenteditable="true"]');
+  el.focus();
+  document.execCommand('insertText', false, 'your text here');
+`)
 ```
-browser_navigate(tab_id, "https://docs.google.com/document/d/...")
-browser_set_cdp(tab_id, true)
-// All subsequent input on this tab uses CDP — clicks land on the canvas,
-// keyboard shortcuts work, text insertion goes through Input.insertText.
-browser_click_at(tab_id, 400, 300)
-browser_type(tab_id, ref, "Hello")
-browser_press(tab_id, ["Primary", "KeyZ"])   // undo
-```
 
-When done with the canvas site, call `browser_set_cdp(tab_id, false)` or just close the tab. The debugger shows a "controlled by automated software" banner while active — this is expected.
-
-Do **not** enable CDP for standard websites — synthetic dispatch works fine and avoids the banner. CDP is only needed when the site ignores untrusted events (canvas rendering, some chat apps).
+**Dialog overlays are the #1 blocker on chat apps.** Before attempting any interaction, check the `browser_read` a11y tree for modal dialogs, upsell banners, or cookie prompts. Dismiss them first (Escape key or click the close button) before interacting with the editor.
 
 ## Approval mode
 
