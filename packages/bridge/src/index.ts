@@ -6,6 +6,7 @@ import {
   RATE_LIMIT_GLOBAL_PER_MIN_DEFAULT,
   RATE_LIMIT_PER_TAB_PER_MIN,
 } from "@browserops/shared";
+import { createTraceWriter } from "./trace-writer.js";
 import { ControlClient } from "./control-client.js";
 import { ControlServer } from "./control-server.js";
 import { Logger, type LogLevel } from "./logger.js";
@@ -38,6 +39,14 @@ async function main(): Promise<void> {
   }
 
   applyCliFlags(argv);
+
+  // Opt-in trace writer. Must be created before any shutdown handlers so
+  // close() is available everywhere below.
+  const traceEnv = process.env[ENV.TRACE];
+  const traceWriter = createTraceWriter({
+    enabled: traceEnv === "1" || traceEnv === "true",
+    dir: process.env[ENV.TRACE_DIR] ?? undefined,
+  });
 
   const logLevel = parseLogLevel(process.env[ENV.LOG_LEVEL]);
   const logger = new Logger(logLevel);
@@ -123,6 +132,7 @@ async function main(): Promise<void> {
     tabs,
     logger,
     version: VERSION,
+    traceWriter,
   });
 
   process.stderr.write(
@@ -153,6 +163,7 @@ async function main(): Promise<void> {
         try { await wsBridge.stop(); } catch { /* ignore */ }
       }
       await logger.close();
+      try { await traceWriter.close(); } catch { /* ignore */ }
       process.exit(0);
     })();
   };
@@ -160,6 +171,7 @@ async function main(): Promise<void> {
   process.on("SIGINT", () => shutdown("SIGINT"));
   process.on("SIGTERM", () => shutdown("SIGTERM"));
   process.stdin.on("end", () => shutdown("stdin_closed"));
+  process.on("beforeExit", () => { void traceWriter.close(); });
 
   // -------------------------------------------------------------------------
   // Helpers
@@ -272,10 +284,20 @@ function parseLogLevel(v: string | undefined): LogLevel {
  * construction time, so setting it here before main() continues is enough.
  * Intended for local smoke tests / demos; never for automation you aren't
  * watching.
+ *
+ * --trace: enable trace recording. Sets BROWSEROPS_TRACE=1 so the trace
+ * writer picks it up. Optionally --trace-dir=<path> overrides the output dir.
  */
 function applyCliFlags(argv: readonly string[]): void {
   if (argv.includes("--yolo") || argv.includes("--autoconfirm")) {
     process.env[ENV.AUTOCONFIRM] = "1";
+  }
+  if (argv.includes("--trace")) {
+    process.env[ENV.TRACE] = "1";
+  }
+  const traceDirArg = argv.find((a) => a.startsWith("--trace-dir="));
+  if (traceDirArg) {
+    process.env[ENV.TRACE_DIR] = traceDirArg.slice("--trace-dir=".length);
   }
 }
 

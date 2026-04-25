@@ -51,4 +51,8 @@ export const ENV = {
   GLOBAL_CAP: "BROWSEROPS_GLOBAL_CAP",
   LOG_LEVEL: "BROWSEROPS_LOG_LEVEL",
   AUTOCONFIRM: "BROWSEROPS_AUTOCONFIRM",
+  /** Set to "1" to enable trace recording. Set to a dir path to also override the traces dir. */
+  TRACE: "BROWSEROPS_TRACE",
+  /** Override the directory where trace .jsonl files are written. */
+  TRACE_DIR: "BROWSEROPS_TRACE_DIR",
 } as const;
