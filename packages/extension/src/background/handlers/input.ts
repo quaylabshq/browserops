@@ -1,5 +1,5 @@
 import type { ErrorCode } from "@browserops/shared";
-import { isDestructiveChord } from "@browserops/shared";
+import { isDestructiveChord, resolveSite } from "@browserops/shared";
 import type { Router } from "../router.js";
 import type { RefCache } from "../ref-cache.js";
 import type { CdpManager } from "../cdp.js";
@@ -92,6 +92,50 @@ interface ClickAtParams {
 type TypeMode = "keystroke" | "paste" | "trusted";
 type ClearMode = "value" | "select_all" | "auto";
 const KEYSTROKE_AUTO_THRESHOLD = 64;
+
+// ---------------------------------------------------------------------------
+// Site-hint helpers (background-world code — not injected into the page).
+// ---------------------------------------------------------------------------
+
+/** JSON-serializable site hint passed into injected helpers (no RegExp). */
+export interface SiteHint {
+  framework: string;             // one of the Framework union values
+  semanticKeyMode?: "trusted";
+  clickMode?: "trusted";
+}
+
+function toSiteHint(
+  site: { framework: string; semanticKeyMode?: "trusted"; clickMode?: "trusted" } | null,
+): SiteHint | null {
+  if (!site) return null;
+  const hint: SiteHint = { framework: site.framework };
+  if (site.semanticKeyMode) hint.semanticKeyMode = site.semanticKeyMode;
+  if (site.clickMode) hint.clickMode = site.clickMode;
+  return hint;
+}
+
+/**
+ * Resolve a tab's URL hostname into a SiteHint (or null if unknown).
+ * Uses chrome.tabs.get to fetch the tab URL, then looks up the shared
+ * SITE_REGISTRY via resolveSite().
+ */
+async function getSiteHintForTab(chromeTabId: number): Promise<SiteHint | null> {
+  let url: string | undefined;
+  try {
+    const tab = await chrome.tabs.get(chromeTabId);
+    url = tab.url;
+  } catch {
+    return null;
+  }
+  if (!url) return null;
+  let hostname: string;
+  try {
+    hostname = new URL(url).hostname;
+  } catch {
+    return null;
+  }
+  return toSiteHint(resolveSite(hostname));
+}
 
 interface TypeParams {
   tab_id: string;
@@ -1225,6 +1269,121 @@ function injectedExecuteJs(code: string): {
   } catch (e) {
     return { thrown: true, error: String(e) };
   }
+}
+
+/**
+ * Injected: resolve the active editor element for a known framework.
+ *
+ * Two tiers:
+ *   1. Site hint — the background already knows which framework the site uses
+ *      (from the shared SITE_REGISTRY). Look up the framework's CSS selector
+ *      and drill to the editor root from the provided element.
+ *   2. Element fingerprint — walk the REGISTRY selectors against the element
+ *      itself (el.matches / el.querySelector / el.closest) to detect the
+ *      framework directly.
+ *
+ * Self-contained: runs in the page MAIN world, no module imports allowed.
+ * All arguments are JSON-serializable.
+ */
+function injectedResolveEditor(
+  el: Element | null,
+  siteHint: {
+    framework: string;
+    semanticKeyMode?: "trusted";
+    clickMode?: "trusted";
+  } | null,
+): {
+  name: string;                                    // framework name
+  root: Element;                                   // actual editor root element
+  hints: {
+    typeMode: "synthetic";                         // always synthetic for rich editors
+    semanticKeyMode: "synthetic" | "trusted";
+    clickMode?: "trusted";
+  };
+  source: "site" | "element";
+} | null {
+  if (!el) return null;
+
+  const REGISTRY: Array<{
+    name: string;
+    match: string;                                 // CSS selector
+    drillFrom: string | null;                      // CSS selector for wrapper (e.g. [role="textbox"])
+    typeMode: "synthetic";
+    semanticKeyMode: "synthetic" | "trusted";
+  }> = [
+    { name: "quill",       match: ".ql-editor",                   drillFrom: "[role=\"textbox\"]", typeMode: "synthetic", semanticKeyMode: "trusted" },
+    { name: "prosemirror", match: ".ProseMirror",                 drillFrom: "[role=\"textbox\"]", typeMode: "synthetic", semanticKeyMode: "trusted" },
+    { name: "slate",       match: "[data-slate-editor=\"true\"]", drillFrom: "[role=\"textbox\"]", typeMode: "synthetic", semanticKeyMode: "trusted" },
+    { name: "codemirror",  match: ".cm-content",                  drillFrom: null,                typeMode: "synthetic", semanticKeyMode: "synthetic" },
+  ];
+
+  // Tier 1: site hint — look up the framework entry and find the editor root.
+  if (siteHint) {
+    const entry = REGISTRY.find((e) => e.name === siteHint.framework);
+    if (entry) {
+      const root =
+        (el.matches(entry.match) ? el : null) ??
+        el.querySelector(entry.match) ??
+        el.closest(entry.match) ??
+        document.querySelector(entry.match);
+      return {
+        name: entry.name,
+        root: root ?? el,
+        hints: {
+          typeMode: entry.typeMode,
+          semanticKeyMode: siteHint.semanticKeyMode ?? entry.semanticKeyMode,
+          ...(siteHint.clickMode ? { clickMode: siteHint.clickMode } : {}),
+        },
+        source: "site",
+      };
+    }
+    // Site hint has a framework we don't have selectors for (e.g. gmail /
+    // gdocs-canvas / figma-canvas / custom-contenteditable). Still return
+    // hints so the dispatch layer can honour semanticKeyMode / clickMode,
+    // but root stays as el.
+    return {
+      name: siteHint.framework,
+      root: el,
+      hints: {
+        typeMode: "synthetic",
+        semanticKeyMode: siteHint.semanticKeyMode ?? "synthetic",
+        ...(siteHint.clickMode ? { clickMode: siteHint.clickMode } : {}),
+      },
+      source: "site",
+    };
+  }
+
+  // Tier 2: element fingerprint — walk the registry against the element.
+  for (const entry of REGISTRY) {
+    if (el.matches(entry.match)) {
+      return {
+        name: entry.name,
+        root: el,
+        hints: { typeMode: entry.typeMode, semanticKeyMode: entry.semanticKeyMode },
+        source: "element",
+      };
+    }
+    const inner = el.querySelector(entry.match);
+    if (inner) {
+      return {
+        name: entry.name,
+        root: inner,
+        hints: { typeMode: entry.typeMode, semanticKeyMode: entry.semanticKeyMode },
+        source: "element",
+      };
+    }
+    const outer = el.closest(entry.match);
+    if (outer) {
+      return {
+        name: entry.name,
+        root: outer,
+        hints: { typeMode: entry.typeMode, semanticKeyMode: entry.semanticKeyMode },
+        source: "element",
+      };
+    }
+  }
+
+  return null;
 }
 
 // ---------------------------------------------------------------------------
