@@ -1,8 +1,11 @@
 /**
- * Minimal chrome.debugger wrapper for "trusted input" modes on browser_click
- * and browser_type. Attach/detach is reference-counted with an idle detach so
- * multiple back-to-back ops on the same tab don't flash the "being controlled
- * by automation" banner N times.
+ * Minimal chrome.debugger wrapper. Attach/detach is reference-counted with
+ * an idle detach so multiple back-to-back ops on the same tab don't flash
+ * the "being controlled by automation" banner N times.
+ *
+ * Tabs can be flagged as "persistent" via setPersistent() — the debugger
+ * stays attached until explicitly disabled or the tab is closed. Used for
+ * canvas apps (Figma, Google Docs) where all input must go through CDP.
  *
  * The chrome.debugger permission is declared in manifest.ts. When Chrome's
  * DevTools (or another extension) attaches to the same tab, our attach fails
@@ -21,6 +24,7 @@ interface AttachState {
 export class CdpManager {
   private readonly attached = new Map<number, AttachState>();
   private readonly external = new Set<number>();
+  private readonly persistent = new Set<number>();
 
   constructor() {
     // External detach (user clicked the "Cancel" banner, DevTools opened,
@@ -31,6 +35,7 @@ export class CdpManager {
       if (id === undefined) return;
       if (reason !== "target_closed") this.external.add(id);
       this.attached.delete(id);
+      this.persistent.delete(id);
     });
   }
 
@@ -65,6 +70,32 @@ export class CdpManager {
     )) as T;
   }
 
+  /** Whether this tab has persistent CDP attachment. */
+  isPersistent(chromeTabId: number): boolean {
+    return this.persistent.has(chromeTabId);
+  }
+
+  /** Enable or disable persistent CDP for a tab. When enabled, the debugger
+   *  attaches immediately and won't auto-detach on idle. */
+  async setPersistent(chromeTabId: number, enabled: boolean): Promise<void> {
+    if (enabled) {
+      this.persistent.add(chromeTabId);
+      const state = await this.ensureAttached(chromeTabId);
+      if (state.detachTimer !== null) {
+        clearTimeout(state.detachTimer);
+        state.detachTimer = null;
+      }
+    } else {
+      this.persistent.delete(chromeTabId);
+      this.scheduleDetach(chromeTabId);
+    }
+  }
+
+  /** Remove persistent flag without detaching (for tab removal). */
+  clearPersistent(chromeTabId: number): void {
+    this.persistent.delete(chromeTabId);
+  }
+
   private async ensureAttached(chromeTabId: number): Promise<AttachState> {
     const existing = this.attached.get(chromeTabId);
     if (existing !== undefined) return existing;
@@ -84,6 +115,7 @@ export class CdpManager {
   }
 
   private scheduleDetach(chromeTabId: number): void {
+    if (this.persistent.has(chromeTabId)) return;
     const state = this.attached.get(chromeTabId);
     if (state === undefined) return;
     if (state.inflight > 0) return;
