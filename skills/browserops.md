@@ -157,7 +157,7 @@ Every mutating tool (`browser_click`, `browser_type`, `browser_press`, `browser_
 **Click escalation ladder** (try in order, stop at the first one whose `page_effect` shows the intended effect):
 
 1. **`browser_click` with a ref** from `browser_read`. Default; cheapest; most addressable.
-2. **`browser_click` with `dismiss_overlay: true`** if (1) returns `{clicked:false, occluded:true, suggestion:"dismiss_overlay"}`, or if (1) has `clicked:true` but zero `page_effect`.
+2. **`browser_click` with `auto_dismiss: true`** (smarter) or **`dismiss_overlay: true`** (simpler) if (1) returns `{clicked:false, occluded:true}`. `auto_dismiss` classifies the occluder (dialog, banner, consent) and tries multiple dismiss strategies (ESC, close button hunt, backdrop click).
 3. **`browser_click_by_text`** with the visible label, for `div`-with-onclick targets that never surface as a ref.
 4. **`browser_click_at` (coordinate click)** — the last resort, and genuinely useful on complex SPAs (Instagram, TikTok, some retail checkouts) where (1–3) all fail because the clickable surface is a gesture handler on a parent div, shadow DOM, or canvas. Pass viewport coordinates from `browser_read` or a visible-rect query. Do not guess pixels.
 
@@ -202,8 +202,16 @@ Common chord recipes:
 - On initial load, `page_effect.dom.added` should be substantial (usually > 50). If it's near zero, the page is still loading — wait.
 - **Never use `browser_reload` as a polling loop.** It fires once. Use `browser_wait_for` / `browser_wait_for_idle` with an explicit timeout.
 
+### `browser_quick_read`
+
+- **Prefer this over `browser_read` when you need to find a specific element by name or label.** It searches the a11y tree by accessible name (case-insensitive substring) and returns only matching refs — much cheaper than a full page read.
+- Use when you know what you're looking for: `browser_quick_read(tab_id, query:"Submit", role:"button")`.
+- Falls back: if `browser_quick_read` returns no matches, use `browser_read` for the full picture.
+- Note: replaces the current ref snapshot for the tab; refs from a prior `browser_read` become stale.
+
 ### `browser_read`
 
+- Use when you need the full page structure, not just a single element. For finding specific elements by name, prefer `browser_quick_read` — it's much cheaper.
 - Cheap and safe. Call it whenever you're about to re-click after `REF_STALE`, or before guessing a selector.
 - Prefer reading over `browser_execute_js` for addressable UI. JS is a last resort because it bypasses the observation/effect layer — you won't get `page_effect` for the side effects of raw JS.
 
@@ -218,11 +226,17 @@ Common chord recipes:
 
 - Every async step must have one of these with an explicit `timeout_ms`.
 - `wait_for` against a **stable DOM marker** is far more reliable than against URL or `document.title`.
+- Use `then_click` or `then_type` to chain an action immediately after the wait condition is met, eliminating a round-trip. Example: `browser_wait_for(tab_id, text:"Submit", then_click:{ref:5})`.
 - Do not screenshot to "verify" a step that already has a `wait_for`. Screenshots are for failure inspection, not success confirmation.
 
 ### `browser_screenshot`
 
 - Only on unexpected error or when the user explicitly asks. Not a verification tool.
+- Use the `intent` parameter instead of raw quality numbers:
+  - `"glance"` — 20% quality, 512px — just checking layout exists
+  - `"verify"` — 50% quality, 1024px — default state check
+  - `"read_text"` — 95% quality, 2048px — need to read text/labels/errors
+  - `"user_requested"` — full quality, no downscale — user explicitly asked
 
 ### `procedures_search` / `procedures_get`
 
@@ -253,7 +267,7 @@ Keyed by the symptom you observe, not the root cause. Root causes differ; fixes 
 | Symptom | First retry | If still failing |
 |---|---|---|
 | `clicked:true` but no page change | `browser_read` + retry with fresh ref | Climb the ladder: `dismiss_overlay:true` → `browser_click_by_text` → `browser_click_at` with coordinates. Verify `page_effect` at each step. |
-| `{clicked:false, occluded:true}` | Retry with `dismiss_overlay: true` | `browser_read` to find the occluder, click it first; if the occluder isn't addressable, fall through to `browser_click_at` on the target's coords |
+| `{clicked:false, occluded:true}` | Retry with `auto_dismiss: true` | `browser_read` to find the occluder, click it first; if the occluder isn't addressable, fall through to `browser_click_at` on the target's coords |
 | `browser_click_at` returned `clicked:true` but `page_effect` is all zeros | Treat as failure — the click landed on a parent/sibling, not the target | Adjust coordinates (try the visible-rect centre, not the edge); or fall back to `browser_click_by_text` |
 | `REF_STALE` | `browser_read`, retry with new ref | Investigate why the container re-rendered — usually a late-arriving skeleton |
 | `WRITE_NOT_REFLECTED` | `browser_wait_for` the editor is focusable, retry | Confirm the field isn't disabled; check for overlay |

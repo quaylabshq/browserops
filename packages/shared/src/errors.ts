@@ -26,6 +26,7 @@ export const ERROR_CODES = [
   "PROC_IN_USE",
   "PROC_OWNER_INVALID",
   "PROC_DOMAIN_INVALID",
+  "CHAINED_ACTION_FAILED",
 ] as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[number];

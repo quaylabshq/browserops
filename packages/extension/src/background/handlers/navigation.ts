@@ -198,7 +198,8 @@ export function registerNavigationHandlers(router: Router, opts: NavigationOpts)
     "browser_wait_for",
     async (
       params,
-    ): Promise<{ matched: "ref" | "text" | "url_pattern"; elapsed_ms: number }> => {
+      ctx,
+    ): Promise<{ matched: "ref" | "text" | "url_pattern"; elapsed_ms: number; action_result?: unknown }> => {
       const tabIdRaw = params["tab_id"];
       if (typeof tabIdRaw !== "string") {
         throw makeError("INVALID_PARAMS", "tab_id must be a string");
@@ -213,6 +214,32 @@ export function registerNavigationHandlers(router: Router, opts: NavigationOpts)
           "INVALID_PARAMS",
           "wait_for requires at least one of url_pattern, ref, text",
         );
+      }
+
+      // Parse chained action params up front.
+      const thenClick = params["then_click"] as { ref?: unknown } | undefined;
+      const thenType = params["then_type"] as { ref?: unknown; text?: unknown } | undefined;
+      if (thenClick !== undefined && thenType !== undefined) {
+        throw makeError("INVALID_PARAMS", "then_click and then_type are mutually exclusive");
+      }
+      if (thenClick !== undefined) {
+        if (typeof thenClick !== "object" || thenClick === null) {
+          throw makeError("INVALID_PARAMS", "then_click must be an object with ref");
+        }
+        if (typeof thenClick.ref !== "number" || !Number.isInteger(thenClick.ref) || (thenClick.ref as number) < 1) {
+          throw makeError("INVALID_PARAMS", "then_click.ref must be a positive integer");
+        }
+      }
+      if (thenType !== undefined) {
+        if (typeof thenType !== "object" || thenType === null) {
+          throw makeError("INVALID_PARAMS", "then_type must be an object with ref and text");
+        }
+        if (typeof thenType.ref !== "number" || !Number.isInteger(thenType.ref) || (thenType.ref as number) < 1) {
+          throw makeError("INVALID_PARAMS", "then_type.ref must be a positive integer");
+        }
+        if (typeof thenType.text !== "string") {
+          throw makeError("INVALID_PARAMS", "then_type.text must be a string");
+        }
       }
       if (urlPattern !== undefined && typeof urlPattern !== "string") {
         throw makeError("INVALID_PARAMS", "url_pattern must be a string");
@@ -273,13 +300,59 @@ export function registerNavigationHandlers(router: Router, opts: NavigationOpts)
       }
       const text = typeof textRaw === "string" ? textRaw : null;
 
+      // Helper to dispatch chained action after wait succeeds.
+      const dispatchChainedAction = async (): Promise<unknown | undefined> => {
+        if (thenClick !== undefined) {
+          const resp = await router.dispatch(
+            {
+              type: "request",
+              id: `chain-${Date.now()}`,
+              method: "browser_click",
+              params: { tab_id: tabIdRaw, ref: thenClick.ref as number, observe_effects: false },
+              timeout_ms: 30_000,
+            },
+            ctx,
+          );
+          if (!resp.ok) {
+            throw makeError(
+              "CHAINED_ACTION_FAILED",
+              `then_click failed: ${(resp.error as { message?: string })?.message ?? "unknown error"}`,
+            );
+          }
+          return resp.result;
+        }
+        if (thenType !== undefined) {
+          const resp = await router.dispatch(
+            {
+              type: "request",
+              id: `chain-${Date.now()}`,
+              method: "browser_type",
+              params: { tab_id: tabIdRaw, ref: thenType.ref as number, text: thenType.text as string, observe_effects: false },
+              timeout_ms: 30_000,
+            },
+            ctx,
+          );
+          if (!resp.ok) {
+            throw makeError(
+              "CHAINED_ACTION_FAILED",
+              `then_type failed: ${(resp.error as { message?: string })?.message ?? "unknown error"}`,
+            );
+          }
+          return resp.result;
+        }
+        return undefined;
+      };
+
       const started = Date.now();
       const deadline = started + timeoutMs;
       for (;;) {
         if (regex !== undefined) {
           const currentUrl = await readTabUrl(chromeId);
           if (regex.test(currentUrl)) {
-            return { matched: "url_pattern", elapsed_ms: Date.now() - started };
+            const actionResult = await dispatchChainedAction();
+            const out: { matched: "url_pattern"; elapsed_ms: number; action_result?: unknown } = { matched: "url_pattern", elapsed_ms: Date.now() - started };
+            if (actionResult !== undefined) out.action_result = actionResult;
+            return out;
           }
         }
         if (refSelector !== null || text !== null) {
@@ -292,7 +365,10 @@ export function registerNavigationHandlers(router: Router, opts: NavigationOpts)
           const first = results[0];
           const matched = first?.result?.matched;
           if (matched === "ref" || matched === "text") {
-            return { matched, elapsed_ms: Date.now() - started };
+            const actionResult = await dispatchChainedAction();
+            const out: { matched: "ref" | "text"; elapsed_ms: number; action_result?: unknown } = { matched, elapsed_ms: Date.now() - started };
+            if (actionResult !== undefined) out.action_result = actionResult;
+            return out;
           }
         }
         if (Date.now() >= deadline) {

@@ -483,18 +483,29 @@ const reload: ToolDef = {
 const screenshot: ToolDef = {
   name: "browser_screenshot",
   description:
-    "Capture a JPEG (default) or PNG of the tab and return it base64-encoded. Default is JPEG quality 40, downscaled so the longest edge is <= 1024 px, which typically yields 30-50k base64 chars. Set full_quality:true to bypass downscale and use quality 95; override max_dimension or quality individually for finer control.",
+    "Capture a JPEG (default) or PNG of the tab and return it base64-encoded. " +
+    "Prefer the `intent` parameter over raw quality/dimension knobs: " +
+    "'glance' (20% q, 512px — layout check), 'verify' (50% q, 1024px — default), " +
+    "'read_text' (95% q, 2048px — read labels/errors), 'user_requested' (full quality, no downscale). " +
+    "Explicit quality/max_dimension/full_quality values override intent defaults.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
     required: ["tab_id"] as const,
     properties: {
       tab_id: tabIdSchema,
+      intent: {
+        enum: ["glance", "verify", "read_text", "user_requested"] as const,
+        description:
+          "Quality preset. 'glance' for layout checks, 'verify' for state verification (default behavior), " +
+          "'read_text' when you need to read text/labels/errors, 'user_requested' when the user explicitly asked " +
+          "for a screenshot. Explicit quality/max_dimension/full_quality values override the preset.",
+      },
       full_page: { type: "boolean", default: false },
       format: { enum: ["png", "jpeg"] as const, default: "jpeg" },
-      quality: { type: "integer", minimum: 0, maximum: 100, default: 40 },
-      max_dimension: { type: "integer", minimum: 1, maximum: 8192, default: 1024 },
-      full_quality: { type: "boolean", default: false },
+      quality: { type: "integer", minimum: 0, maximum: 100 },
+      max_dimension: { type: "integer", minimum: 1, maximum: 8192 },
+      full_quality: { type: "boolean" },
     },
   },
   outputSchema: {
@@ -520,7 +531,8 @@ const screenshot: ToolDef = {
 const read: ToolDef = {
   name: "browser_read",
   description:
-    "Read structured page content in one of four modes (a11y_tree, markdown, sanitized_html, text). a11y_tree is the canonical source of refs. By default a11y_tree returns a compact tree dropping role='generic' / name-less nodes; pass verbose:true for the legacy full tree.",
+    "Read structured page content in one of four modes (a11y_tree, markdown, sanitized_html, text). a11y_tree is the canonical source of refs. By default a11y_tree returns a compact tree dropping role='generic' / name-less nodes; pass verbose:true for the legacy full tree. " +
+    "Prefer browser_quick_read when you only need to find a specific element by name or label — it is much cheaper and returns only matching refs.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -592,6 +604,69 @@ const read: ToolDef = {
   ] as const,
 } as const;
 
+const quickRead: ToolDef = {
+  name: "browser_quick_read",
+  description:
+    "Fast, targeted search of the a11y tree for elements matching a text query. Returns only matching refs — much cheaper than browser_read. " +
+    "Prefer this over browser_read when you need to find a specific element by name or label instead of reading the full page. " +
+    "The query matches against accessible names (case-insensitive substring). " +
+    "Note: replaces the current ref snapshot for the tab; refs from a prior browser_read become stale.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["tab_id", "query"] as const,
+    properties: {
+      tab_id: tabIdSchema,
+      query: { type: "string", minLength: 1, maxLength: 200 },
+      role: {
+        type: "string",
+        maxLength: 32,
+        description: "Filter results to elements with this ARIA role (e.g. 'button', 'textbox', 'link').",
+      },
+      viewport_only: { type: "boolean", default: false },
+      max_results: { type: "integer", minimum: 1, maximum: 50, default: 10 },
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["matches", "total", "query"] as const,
+    properties: {
+      matches: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["ref", "role", "name"] as const,
+          properties: {
+            ref: refSchema,
+            selector: { type: "string" },
+            role: { type: "string" },
+            name: { type: "string" },
+            attrs: { type: "object", additionalProperties: { type: "string" } },
+            rect: {
+              type: "object",
+              additionalProperties: false,
+              required: ["x", "y", "width", "height"] as const,
+              properties: {
+                x: { type: "number" },
+                y: { type: "number" },
+                width: { type: "number" },
+                height: { type: "number" },
+              },
+            },
+          },
+        },
+      },
+      total: { type: "integer", minimum: 0 },
+      query: { type: "string" },
+    },
+  },
+  action_weight: 0,
+  risky: "never",
+  errorCodes: [...BASE_CODES, ...TAB_CODES] as const,
+} as const;
+
 const click: ToolDef = {
   name: "browser_click",
   description:
@@ -608,7 +683,13 @@ const click: ToolDef = {
       modifiers: modifiersSchema,
       dismiss_overlay: {
         description:
-          "If the click is occluded (an overlay/scrim intercepted it), try to dismiss the overlay (ESC, then a close-button hunt) and retry once. Off by default — on sites where the overlay IS the content, auto-dismiss would be wrong.",
+          "If the click is occluded (an overlay/scrim intercepted it), try to dismiss the overlay (ESC, then a close-button hunt) and retry once. Off by default — on sites where the overlay IS the content, auto-dismiss would be wrong. Mutually exclusive with auto_dismiss.",
+        type: "boolean",
+        default: false,
+      },
+      auto_dismiss: {
+        description:
+          "Smarter overlay dismissal: classifies the occluder (dialog, banner, toast, consent) and tries multiple strategies in order (ESC, close button hunt up to 5 ancestor levels, backdrop click). Reports what was dismissed. Mutually exclusive with dismiss_overlay.",
         type: "boolean",
         default: false,
       },
@@ -638,6 +719,12 @@ const click: ToolDef = {
           text: { type: "string" },
           role: { type: ["string", "null"] },
         },
+      },
+      suggestion: {
+        type: "string",
+        description:
+          "Actionable suggestion when click is occluded — e.g. which overlay to dismiss, " +
+          "or a specific close-button ref to try.",
       },
       // True when the selector landed on a non-interactive descendant and
       // we walked up to the nearest interactive ancestor to dispatch on.
@@ -1098,7 +1185,9 @@ const querySelector: ToolDef = {
 const waitFor: ToolDef = {
   name: "browser_wait_for",
   description:
-    "Block until a ref, a text substring, or a URL pattern appears. Post-navigation/XHR synchronisation.",
+    "Block until a ref, a text substring, or a URL pattern appears. Post-navigation/XHR synchronisation. " +
+    "Optionally chain an action (then_click or then_type) to execute immediately after the condition is met, " +
+    "eliminating a round-trip.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -1110,6 +1199,23 @@ const waitFor: ToolDef = {
       url_pattern: { type: "string", minLength: 1, maxLength: 1024 },
       timeout_ms: { type: "integer", minimum: 100, maximum: 120000, default: 10000 },
       poll_ms: { type: "integer", minimum: 50, maximum: 5000, default: 250 },
+      then_click: {
+        type: "object",
+        additionalProperties: false,
+        required: ["ref"] as const,
+        properties: { ref: refSchema },
+        description: "After the wait condition is met, click this ref. Eliminates a round-trip. Mutually exclusive with then_type.",
+      },
+      then_type: {
+        type: "object",
+        additionalProperties: false,
+        required: ["ref", "text"] as const,
+        properties: {
+          ref: refSchema,
+          text: { type: "string", maxLength: 32768 },
+        },
+        description: "After the wait condition is met, type into this ref. Eliminates a round-trip. Mutually exclusive with then_click.",
+      },
     },
     anyOf: [
       { required: ["ref"] as const },
@@ -1124,15 +1230,22 @@ const waitFor: ToolDef = {
     properties: {
       matched: { enum: ["ref", "text", "url_pattern"] as const },
       elapsed_ms: { type: "integer", minimum: 0 },
+      action_result: {
+        type: "object",
+        description: "Result of the chained action (then_click or then_type), if any.",
+      },
     },
   },
-  action_weight: 0,
-  risky: "never",
+  action_weight: 0.5,
+  risky: "conditional",
   errorCodes: [
     ...BASE_CODES,
     ...TAB_CODES,
+    ...MUTATING_CODES,
+    ...RISKY_CODES,
     "REF_STALE",
     "REF_NOT_FOUND",
+    "CHAINED_ACTION_FAILED",
   ] as const,
 } as const;
 
@@ -1675,6 +1788,7 @@ export const TOOL_DEFS: readonly ToolDef[] = [
   reload,
   screenshot,
   read,
+  quickRead,
   click,
   clickAt,
   clickByText,

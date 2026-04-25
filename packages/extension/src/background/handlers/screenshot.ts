@@ -14,15 +14,24 @@ import type { Router } from "../router.js";
  * still matches the schema's required keys.
  */
 
+type ScreenshotIntent = "glance" | "verify" | "read_text" | "user_requested";
+
 interface ScreenshotParams {
   tab_id: string;
+  intent?: ScreenshotIntent;
   full_page?: boolean;
   format?: "png" | "jpeg";
   quality?: number;
-  // Step 1 plumbing: parsed but not yet used at runtime. Step 3 activates these.
   max_dimension?: number;
   full_quality?: boolean;
 }
+
+const INTENT_PRESETS: Record<ScreenshotIntent, { quality: number; max_dimension: number; full_quality: boolean }> = {
+  glance:         { quality: 20,  max_dimension: 512,  full_quality: false },
+  verify:         { quality: 50,  max_dimension: 1024, full_quality: false },
+  read_text:      { quality: 95,  max_dimension: 2048, full_quality: false },
+  user_requested: { quality: 95,  max_dimension: 8192, full_quality: true  },
+};
 
 interface ScreenshotResult {
   image_base64: string;
@@ -77,6 +86,13 @@ function parseParams(raw: Record<string, unknown>): ScreenshotParams {
       throw codedError("INVALID_PARAMS", "full_quality must be boolean");
     }
     out.full_quality = fullQuality;
+  }
+  const intent = raw["intent"];
+  if (intent !== undefined) {
+    if (intent !== "glance" && intent !== "verify" && intent !== "read_text" && intent !== "user_requested") {
+      throw codedError("INVALID_PARAMS", "intent must be one of: glance, verify, read_text, user_requested");
+    }
+    out.intent = intent;
   }
   return out;
 }
@@ -169,11 +185,12 @@ export function registerScreenshotHandler(
       throw codedError("TAB_NOT_FOUND", `chrome tab ${chromeTabId} no longer exists`);
     }
 
-    const fullQuality = params.full_quality === true;
+    const preset = params.intent !== undefined ? INTENT_PRESETS[params.intent] : undefined;
+    const fullQuality = params.full_quality ?? preset?.full_quality ?? false;
     const explicitFormat = params.format;
     const format: "png" | "jpeg" = explicitFormat ?? "jpeg";
-    const quality: number = params.quality ?? (fullQuality ? 95 : 40);
-    const maxDimension = params.max_dimension ?? 1024;
+    const quality: number = params.quality ?? preset?.quality ?? (fullQuality ? 95 : 40);
+    const maxDimension = params.max_dimension ?? preset?.max_dimension ?? 1024;
 
     if (fullQuality) {
       // Bypass: capture at the requested format/quality and skip downscale.

@@ -1041,4 +1041,289 @@ export function registerReadHandler(
     }
     return { match: res.matches.length > 0 ? res.matches[0] : null };
   });
+
+  // -------------------------------------------------------------------------
+  // browser_quick_read — lightweight a11y search by accessible name
+  // -------------------------------------------------------------------------
+
+  /**
+   * DOM-only a11y search. Runs in the ISOLATED world.
+   * Must be fully self-contained — no outer closure refs.
+   * Walks the DOM looking for elements whose accessible name contains the query.
+   */
+  function injectedA11yFind(
+    query: string,
+    roleFilter: string | null,
+    viewportOnly: boolean,
+    maxResults: number,
+  ): { entries: Array<{ ref: number; selector: string; role: string; name: string; attrs: Record<string, string>; rect: { x: number; y: number; width: number; height: number } }>; total: number } {
+    const MAX_SELECTOR_DEPTH = 6;
+    const NAME_MAX = 80;
+
+    const INTERACTIVE_ROLES = new Set([
+      "button", "link", "textbox", "searchbox", "checkbox", "combobox",
+      "listbox", "option", "menuitem", "menuitemcheckbox", "menuitemradio",
+      "tab", "switch", "radio", "slider", "spinbutton", "treeitem",
+    ]);
+    const STRUCTURAL_ROLES = new Set([
+      "main", "navigation", "banner", "contentinfo", "form", "dialog",
+      "region", "heading", "search", "complementary", "tablist", "tabpanel",
+    ]);
+    const INTERACTIVE_TAGS = new Set(["a", "button", "input", "textarea", "select"]);
+    const STRUCTURAL_TAGS = new Set(["main", "nav", "header", "footer", "form", "h1", "h2", "h3", "h4", "h5", "h6"]);
+
+    const truncate = (s: string): string => {
+      const trimmed = s.replace(/\s+/g, " ").trim();
+      if (trimmed.length <= NAME_MAX) return trimmed;
+      return trimmed.slice(0, NAME_MAX - 1) + "\u2026";
+    };
+
+    const canEmit = (el: Element): boolean => {
+      const rect = el.getBoundingClientRect();
+      if (rect.width === 0 && rect.height === 0) return false;
+      const style = window.getComputedStyle(el);
+      if (style.visibility === "hidden" || style.display === "none") return false;
+      if (style.opacity === "0") return false;
+      if (viewportOnly) {
+        if (rect.bottom < 0 || rect.top > window.innerHeight || rect.right < 0 || rect.left > window.innerWidth) return false;
+      }
+      return true;
+    };
+
+    const canDescend = (el: Element): boolean => {
+      const style = window.getComputedStyle(el);
+      if (style.display === "none") return false;
+      return true;
+    };
+
+    const isClickCandidate = (el: Element): boolean => {
+      if (el.hasAttribute("onclick")) return true;
+      const style = window.getComputedStyle(el);
+      if (style.cursor !== "pointer") return false;
+      const parent = el.parentElement;
+      if (parent === null) return true;
+      return window.getComputedStyle(parent).cursor !== "pointer";
+    };
+
+    const roleFor = (el: Element): string | null => {
+      const explicit = el.getAttribute("role");
+      if (explicit !== null && explicit.length > 0) return explicit.toLowerCase();
+      const tag = el.tagName.toLowerCase();
+      if (tag === "a") return el.hasAttribute("href") ? "link" : null;
+      if (tag === "button") return "button";
+      if (tag === "select") return "combobox";
+      if (tag === "textarea") return "textbox";
+      if (tag === "input") {
+        const t = (el.getAttribute("type") ?? "text").toLowerCase();
+        if (t === "checkbox") return "checkbox";
+        if (t === "radio") return "radio";
+        if (t === "submit" || t === "button" || t === "reset") return "button";
+        if (t === "range") return "slider";
+        if (t === "number") return "spinbutton";
+        if (t === "search") return "searchbox";
+        return "textbox";
+      }
+      if (/^h[1-6]$/.test(tag)) return "heading";
+      if (tag === "main") return "main";
+      if (tag === "nav") return "navigation";
+      if (tag === "header") return "banner";
+      if (tag === "footer") return "contentinfo";
+      if (tag === "form") return "form";
+      if (el.getAttribute("contenteditable") === "true") return "textbox";
+      const tabindex = el.getAttribute("tabindex");
+      if (tabindex !== null && Number.parseInt(tabindex, 10) >= 0) return "generic";
+      if (isClickCandidate(el)) return "button";
+      return null;
+    };
+
+    const shouldKeep = (el: Element, role: string | null): boolean => {
+      if (role === null) return false;
+      if (INTERACTIVE_ROLES.has(role) || STRUCTURAL_ROLES.has(role)) return true;
+      const tag = el.tagName.toLowerCase();
+      if (INTERACTIVE_TAGS.has(tag) || STRUCTURAL_TAGS.has(tag)) return true;
+      if (el.getAttribute("contenteditable") === "true") return true;
+      const tabindex = el.getAttribute("tabindex");
+      if (tabindex !== null && Number.parseInt(tabindex, 10) >= 0) return true;
+      return false;
+    };
+
+    const nameOf = (el: Element): string => {
+      const ariaLabel = el.getAttribute("aria-label");
+      if (ariaLabel !== null && ariaLabel.trim().length > 0) return truncate(ariaLabel);
+      const labelledBy = el.getAttribute("aria-labelledby");
+      if (labelledBy !== null) {
+        const parts: string[] = [];
+        for (const id of labelledBy.split(/\s+/)) {
+          if (id.length === 0) continue;
+          const ref = document.getElementById(id);
+          if (ref !== null) parts.push(ref.textContent ?? "");
+        }
+        const joined = parts.join(" ").trim();
+        if (joined.length > 0) return truncate(joined);
+      }
+      const tag = el.tagName.toLowerCase();
+      if (tag === "img") {
+        const alt = el.getAttribute("alt");
+        if (alt !== null && alt.length > 0) return truncate(alt);
+      }
+      if (tag === "input" || tag === "textarea" || tag === "select") {
+        const placeholder = el.getAttribute("placeholder");
+        if (placeholder !== null && placeholder.length > 0) return truncate(placeholder);
+        const value = (el as HTMLInputElement).value;
+        const inputType = (el.getAttribute("type") ?? "").toLowerCase();
+        if (typeof value === "string" && value.length > 0 && inputType !== "password") return truncate(value);
+      }
+      const text = (el.textContent ?? "").trim();
+      if (text.length > 0) return truncate(text);
+      const title = el.getAttribute("title");
+      if (title !== null && title.length > 0) return truncate(title);
+      return "";
+    };
+
+    const isSafeId = (id: string): boolean => /^[a-zA-Z_-][\w-]*$/.test(id);
+
+    const selectorFor = (el: Element): string => {
+      const id = el.getAttribute("id");
+      if (id !== null && isSafeId(id)) {
+        try {
+          if (document.querySelectorAll(`#${CSS.escape(id)}`).length === 1) return `#${CSS.escape(id)}`;
+        } catch { /* fall through */ }
+      }
+      const testId = el.getAttribute("data-testid");
+      if (testId !== null && testId.length > 0) {
+        const candidate = `[data-testid="${testId.replace(/"/g, '\\"')}"]`;
+        try {
+          if (document.querySelectorAll(candidate).length === 1) return candidate;
+        } catch { /* ignore */ }
+      }
+      const parts: string[] = [];
+      let node: Element | null = el;
+      let depth = 0;
+      while (node !== null && node !== document.body && depth < MAX_SELECTOR_DEPTH) {
+        const parent: Element | null = node.parentElement;
+        if (parent === null) break;
+        const tag = node.tagName.toLowerCase();
+        let index = 1;
+        for (const sibling of Array.from(parent.children)) {
+          if (sibling === node) break;
+          if (sibling.tagName.toLowerCase() === tag) index += 1;
+        }
+        parts.unshift(`${tag}:nth-of-type(${index})`);
+        node = parent;
+        depth += 1;
+      }
+      return parts.length > 0 ? parts.join(" > ") : el.tagName.toLowerCase();
+    };
+
+    const attrsOf = (el: Element): Record<string, string> => {
+      const attrs: Record<string, string> = {};
+      attrs["domType"] = el.tagName.toLowerCase();
+      const tag = el.tagName.toLowerCase();
+      if (tag === "input") attrs["inputType"] = (el.getAttribute("type") ?? "text").toLowerCase();
+      if (tag === "a") { const href = el.getAttribute("href"); if (href !== null) attrs["href"] = href; }
+      if (tag === "button") { const t = el.getAttribute("type"); if (t !== null) attrs["type"] = t; }
+      return attrs;
+    };
+
+    const entries: Array<{ ref: number; selector: string; role: string; name: string; attrs: Record<string, string>; rect: { x: number; y: number; width: number; height: number } }> = [];
+    let total = 0;
+    let refCounter = 0;
+    const queryLower = query.toLowerCase();
+
+    const walk = (el: Element): void => {
+      if (!canDescend(el)) return;
+      const role = roleFor(el);
+      if (role !== null && shouldKeep(el, role) && canEmit(el)) {
+        if (roleFilter !== null && role !== roleFilter) {
+          // Role doesn't match filter — skip this element but still walk children.
+        } else {
+          const name = nameOf(el);
+          if (name.toLowerCase().includes(queryLower)) {
+            total += 1;
+            if (entries.length < maxResults) {
+              refCounter += 1;
+              const rect = el.getBoundingClientRect();
+              entries.push({
+                ref: refCounter,
+                selector: selectorFor(el),
+                role,
+                name,
+                attrs: attrsOf(el),
+                rect: { x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) },
+              });
+            }
+          }
+        }
+      }
+      for (const child of Array.from(el.children)) walk(child);
+      if (el.shadowRoot !== null) {
+        for (const child of Array.from(el.shadowRoot.children)) walk(child);
+      }
+    };
+
+    if (document.body !== null) walk(document.body);
+    return { entries, total };
+  }
+
+  router.register("browser_quick_read", async (rawParams) => {
+    const tabId = rawParams["tab_id"];
+    if (typeof tabId !== "string") {
+      throw codedError("INVALID_PARAMS", "tab_id must be a string");
+    }
+    const chromeTabId = opts.tabIdMap.get(tabId);
+    if (chromeTabId === undefined) {
+      throw codedError("TAB_NOT_FOUND", `unknown tab_id: ${tabId}`);
+    }
+    const query = rawParams["query"];
+    if (typeof query !== "string" || query.length === 0) {
+      throw codedError("INVALID_PARAMS", "query must be a non-empty string");
+    }
+    const roleRaw = rawParams["role"];
+    const roleFilter = typeof roleRaw === "string" ? roleRaw.toLowerCase() : null;
+    const viewportOnly = rawParams["viewport_only"] === true;
+    const maxResultsRaw = rawParams["max_results"];
+    const maxResults = typeof maxResultsRaw === "number" && Number.isInteger(maxResultsRaw)
+      ? Math.min(Math.max(maxResultsRaw, 1), 50)
+      : 10;
+
+    let tab: chrome.tabs.Tab;
+    try {
+      tab = await chrome.tabs.get(chromeTabId);
+    } catch {
+      throw codedError("TAB_NOT_FOUND", `chrome tab ${chromeTabId} no longer exists`);
+    }
+
+    const url = typeof tab.url === "string" ? tab.url : "";
+
+    const raw: unknown = await execInTabWithArgs<
+      readonly [string, string | null, boolean, number],
+      unknown
+    >(
+      chromeTabId,
+      injectedA11yFind,
+      [query, roleFilter, viewportOnly, maxResults],
+      "ISOLATED",
+    );
+
+    const result = raw as { entries: Array<{ ref: number; selector: string; role: string; name: string; attrs: Record<string, string>; rect: { x: number; y: number; width: number; height: number } }>; total: number };
+
+    // Store entries in refCache so returned refs can be used with browser_click etc.
+    const entriesMap = new Map<number, RefEntry>();
+    for (const entry of result.entries) {
+      entriesMap.set(entry.ref, entry);
+    }
+    const snapshot: RefSnapshot = {
+      tab_id: tabId,
+      url,
+      createdAt: Date.now(),
+      entries: entriesMap,
+    };
+    opts.refCache.set(tabId, snapshot);
+
+    return {
+      matches: result.entries,
+      total: result.total,
+      query,
+    };
+  });
 }
