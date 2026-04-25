@@ -279,7 +279,10 @@ export class WSBridge {
       return;
     }
 
-    if (!this.isOriginAllowed(origin)) {
+    // Extensions with host_permissions may bypass CORS and omit Origin.
+    // Allow empty origin: the server only binds 127.0.0.1, and without CORS
+    // headers web pages still cannot read the response.
+    if (origin !== "" && !this.isOriginAllowed(origin)) {
       void this.logger.write({ dir: "system", event: "pair_origin_rejected", origin });
       res.statusCode = 403;
       res.setHeader("content-type", "text/plain");
@@ -288,7 +291,7 @@ export class WSBridge {
     }
 
     if (this.pairConsumed) {
-      this.writeCorsHeaders(res, origin);
+      if (origin) this.writeCorsHeaders(res, origin);
       res.statusCode = 410;
       res.setHeader("content-type", "application/json");
       res.end(JSON.stringify({ error: "already_paired" }));
@@ -297,7 +300,7 @@ export class WSBridge {
 
     this.pairConsumed = true;
     void this.logger.write({ dir: "system", event: "pair_issued", origin });
-    this.writeCorsHeaders(res, origin);
+    if (origin) this.writeCorsHeaders(res, origin);
     res.statusCode = 200;
     res.setHeader("content-type", "application/json");
     res.end(JSON.stringify({
@@ -316,7 +319,9 @@ export class WSBridge {
 
   private handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
     const origin = req.headers.origin ?? "";
-    if (!this.isOriginAllowed(origin)) {
+    // Allow empty origin — extensions with host_permissions may omit it.
+    // Real auth happens via the token in the Hello frame.
+    if (origin !== "" && !this.isOriginAllowed(origin)) {
       void this.logger.write({ dir: "system", event: "origin_rejected", origin });
       try { socket.write("HTTP/1.1 403 Forbidden\r\n\r\n"); } catch { /* ignore */ }
       socket.destroy();
