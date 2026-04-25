@@ -30,6 +30,8 @@ function injectedInstallObserver(
     text_changes: 0,
     truncated: false,
     obs: null as MutationObserver | null,
+    console_errors: 0,
+    origConsoleError: null as ((...args: unknown[]) => unknown) | null,
   };
 
   const CAP = 10_000;
@@ -69,6 +71,14 @@ function injectedInstallObserver(
   state.obs = observer;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (window as any)[key] = state;
+
+  // Patch console.error to count errors during the observation window.
+  const origError = window.console.error;
+  state.origConsoleError = origError;
+  window.console.error = function(...args: unknown[]) {
+    state.console_errors = Math.min(state.console_errors + 1, 10000);
+    try { return origError.apply(this, args); } catch (e) { /* swallow */ }
+  };
 
   // Defined inline here so it runs in MAIN world (cannot reference outer module scope)
   const active = document.activeElement;
@@ -115,6 +125,7 @@ function injectedReadObserver(token: string): {
   url: string;
   focus_selector: string | null;
   truncated: boolean;
+  console_errors: number;
 } {
   const key = `__browserops_effect_${token}__` as keyof Window;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -125,6 +136,8 @@ function injectedReadObserver(token: string): {
     text_changes: number;
     truncated: boolean;
     obs: MutationObserver | null;
+    console_errors: number;
+    origConsoleError: ((...args: unknown[]) => unknown) | null;
   } | undefined;
 
   if (!state) {
@@ -134,7 +147,13 @@ function injectedReadObserver(token: string): {
       url: location.href,
       focus_selector: null,
       truncated: true,
+      console_errors: 0,
     };
+  }
+
+  // Restore the original console.error before reading/cleanup.
+  if (state.origConsoleError) {
+    window.console.error = state.origConsoleError;
   }
 
   try {
@@ -187,6 +206,7 @@ function injectedReadObserver(token: string): {
     url: location.href,
     focus_selector,
     truncated: state.truncated,
+    console_errors: state.console_errors,
   };
 }
 
@@ -199,6 +219,7 @@ function zeroEffect(): PageEffect {
     url: { changed: false },
     focus: { changed: false },
     network: { requests_started: 0, requests_completed: 0, in_flight_at_end: 0 },
+    console_errors: 0,
     window_ms: 0,
   };
 }
@@ -267,6 +288,7 @@ export async function withEffectObservation<T>(
     url: string;
     focus_selector: string | null;
     truncated: boolean;
+    console_errors: number;
   };
   try {
     readResult = await execInTab(chromeTabId, injectedReadObserver, [token] as const);
@@ -286,6 +308,7 @@ export async function withEffectObservation<T>(
         ),
         in_flight_at_end: netAfterPartial.inFlight,
       },
+      console_errors: 0,
       window_ms: windowEnd - windowStart,
       truncated: true,
     };
@@ -318,6 +341,7 @@ export async function withEffectObservation<T>(
       requests_completed: Math.max(0, netAfter.totalCompleted - netBefore.totalCompleted),
       in_flight_at_end: netAfter.inFlight,
     },
+    console_errors: readResult.console_errors,
     window_ms: windowEnd - windowStart,
     ...(readResult.truncated ? { truncated: true } : {}),
   };
