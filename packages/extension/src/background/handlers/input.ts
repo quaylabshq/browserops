@@ -1903,15 +1903,39 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
         if (res.found === false) {
           throw codedError("REF_STALE", `ref ${params.ref} no longer resolves in tab ${params.tab_id}`);
         }
-        // Verify the write actually landed. Rich-text editors (Quill, ProseMirror,
-        // Lexical, Draft.js) and some React-controlled inputs silently drop
-        // synthetic writes — the injected function dispatched N char events but
-        // the field contains nothing. Surface that explicitly so agents can
-        // fall back to clear_mode=select_all, mode=trusted, or execute_js.
+        // If the write didn't land (rich editors silently dropping synthetic
+        // events), auto-retry with execCommand("insertText") — the synchronous
+        // DOM-native path that works on Quill, ProseMirror, Slate, Draft.js,
+        // Lexical, Gmail, and most contenteditable editors.
         if (params.text.length > 0 && res.reflected === 0) {
+          const retryRes = await execInTab(chromeId, (sel: string, txt: string, doSubmit: boolean) => {
+            const root = document.querySelector(sel) as HTMLElement | null;
+            if (!root) return { found: false, reflected: 0 };
+            // Drill into wrapper role="textbox" nodes.
+            const inner = root.isContentEditable
+              ? null
+              : root.querySelector<HTMLElement>(
+                  '[contenteditable="true"], [contenteditable=""], .ql-editor, [data-slate-editor="true"], .ProseMirror, .public-DraftEditor-content',
+                );
+            const el = (inner ?? root) as HTMLElement;
+            el.focus();
+            const before = (el.isContentEditable ? (el.textContent ?? "") : ((el as HTMLInputElement).value ?? "")).length;
+            document.execCommand("insertText", false, txt);
+            const after = (el.isContentEditable ? (el.textContent ?? "") : ((el as HTMLInputElement).value ?? "")).length;
+            if (doSubmit && (el as HTMLElement & { form?: HTMLFormElement }).form) {
+              (el as HTMLElement & { form?: HTMLFormElement }).form!.requestSubmit?.();
+            }
+            return { found: true, reflected: Math.max(0, after - before) };
+          }, [selector, params.text, submit] as const);
+
+          if (retryRes.found && retryRes.reflected > 0) {
+            const r: TypeResult = { typed: retryRes.reflected, mode: "paste" };
+            if (cleared !== undefined) r.cleared = cleared;
+            return r;
+          }
           throw codedError(
             "WRITE_NOT_REFLECTED",
-            `typed ${res.typed} characters but field content did not change; the target may need a different selector or browser_execute_js`,
+            `typed ${res.typed} characters but field content did not change (execCommand retry also failed)`,
           );
         }
         if (params.text.length > 0 && res.reflected >= params.text.length * 2) {
