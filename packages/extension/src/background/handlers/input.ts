@@ -204,7 +204,7 @@ function resolveSelector(refCache: RefCache, tabId: string, ref: number): string
  * Run `fn` in the target tab's MAIN world and return its serialised result.
  * Throws INTERNAL when executeScript returns an empty/broken result frame.
  */
-async function execInTab<A extends readonly unknown[], R>(
+export async function execInTab<A extends readonly unknown[], R>(
   chromeTabId: number,
   fn: (...args: A) => R,
   args: A,
