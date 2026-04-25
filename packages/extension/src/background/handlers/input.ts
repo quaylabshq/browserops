@@ -1871,9 +1871,22 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
         mode: TypeMode;
         cleared?: boolean;
       };
+      // When mode is auto-resolved to "keystroke", check whether the target is
+      // contenteditable. Rich editors (Quill, ProseMirror, Slate, Draft.js)
+      // steal focus between per-character async events, causing silent failures.
+      // Paste mode uses a single synchronous execCommand("insertText") which
+      // avoids the focus-stealing window entirely.
+      const effectiveMode: TypeMode =
+        params.mode !== undefined
+          ? mode  // agent explicitly chose a mode — respect it
+          : await execInTab(chromeId, (sel: string) => {
+              const el = document.querySelector(sel) as HTMLElement | null;
+              return el !== null && el.isContentEditable;
+            }, [selector] as const).then(isCE => isCE ? "paste" as const : mode).catch(() => mode);
+
       const dispatchSynthetic = async (): Promise<TypeResult> => {
         let res: { found: boolean; typed: number; reflected: number };
-        if (mode === "paste") {
+        if (effectiveMode === "paste") {
           res = await execInTab(
             chromeId,
             injectedTypePaste,
@@ -1907,7 +1920,7 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
             `typed ${res.typed} characters but field reflected ${res.reflected} — likely double-insertion by a stacked beforeinput handler`,
           );
         }
-        const r: TypeResult = { typed: res.reflected, mode };
+        const r: TypeResult = { typed: res.reflected, mode: effectiveMode };
         if (cleared !== undefined) r.cleared = cleared;
         return r;
       };
