@@ -1,4 +1,4 @@
-import { NAVIGATE_TIMEOUT_MS, WAIT_FOR_TIMEOUT_CAP_MS, type ErrorCode } from "@browserops/shared";
+import { NAVIGATE_TIMEOUT_MS, WAIT_FOR_TIMEOUT_CAP_MS, type ErrorCode, type PageEffect } from "@browserops/shared";
 import type { Router } from "../router.js";
 import type { RefCache } from "../ref-cache.js";
 import type { NetworkTracker } from "../network-tracker.js";
@@ -87,21 +87,57 @@ function injectedCheckWaitFor(
 export function registerNavigationHandlers(router: Router, opts: NavigationOpts): void {
   const { tabIdMap, refCache, network } = opts;
 
-  router.register("browser_navigate", async (params): Promise<{ final_url: string }> => {
-    const chromeId = resolveChromeId(tabIdMap, params["tab_id"]);
-    const url = params["url"];
-    if (typeof url !== "string") {
-      throw makeError("INVALID_PARAMS", "url must be a string");
-    }
-    const waitForLoadRaw = params["wait_for_load"];
-    const shouldWait = waitForLoadRaw !== false;
-    await chrome.tabs.update(chromeId, { url });
-    if (shouldWait) {
-      await waitForLoadComplete(chromeId, NAVIGATE_TIMEOUT_MS);
-    }
-    const finalUrl = await readTabUrl(chromeId);
-    return { final_url: finalUrl };
-  });
+  router.register(
+    "browser_navigate",
+    async (params): Promise<{ final_url: string; page_effect?: PageEffect }> => {
+      const chromeId = resolveChromeId(tabIdMap, params["tab_id"]);
+      const url = params["url"];
+      if (typeof url !== "string") {
+        throw makeError("INVALID_PARAMS", "url must be a string");
+      }
+      const waitForLoadRaw = params["wait_for_load"];
+      const shouldWait = waitForLoadRaw !== false;
+      // observe_effects defaults to true; only explicit false opts out.
+      const observeEffects = params["observe_effects"] !== false;
+
+      // Capture baseline before navigation begins.
+      const baselineUrl = observeEffects ? await readTabUrl(chromeId) : "";
+      const netBefore = observeEffects ? network.snapshot(chromeId) : null;
+
+      await chrome.tabs.update(chromeId, { url });
+      if (shouldWait) {
+        await waitForLoadComplete(chromeId, NAVIGATE_TIMEOUT_MS);
+      }
+      const finalUrl = await readTabUrl(chromeId);
+
+      if (!observeEffects || netBefore === null) {
+        return { final_url: finalUrl };
+      }
+
+      // 300ms post-load settle window to capture JS rendering and late network activity.
+      await new Promise<void>((r) => setTimeout(r, 300));
+
+      const netAfter = network.snapshot(chromeId);
+      const urlChanged = baselineUrl !== finalUrl;
+
+      const effect: PageEffect = {
+        dom: { added: 0, removed: 0, attr_changes: 0, text_changes: 0 },
+        url: {
+          changed: urlChanged,
+          ...(urlChanged ? { before: baselineUrl, after: finalUrl } : {}),
+        },
+        focus: { changed: false },
+        network: {
+          requests_started: Math.max(0, netAfter.totalStarted - netBefore.totalStarted),
+          requests_completed: Math.max(0, netAfter.totalCompleted - netBefore.totalCompleted),
+          in_flight_at_end: netAfter.inFlight,
+        },
+        window_ms: 300,
+      };
+
+      return { final_url: finalUrl, page_effect: effect };
+    },
+  );
 
   router.register("browser_back", async (params): Promise<{ final_url: string }> => {
     const chromeId = resolveChromeId(tabIdMap, params["tab_id"]);
