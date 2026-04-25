@@ -2442,6 +2442,12 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
           `typed ${res.typed} characters but field content did not change; the target may be a rich-text wrapper that requires mode="trusted" or a different selector`,
         );
       }
+      if (params.text.length > 0 && res.reflected >= params.text.length * 2) {
+        throw codedError(
+          "WRITE_AMPLIFIED",
+          `typed ${res.typed} characters but field reflected ${res.reflected} — likely double-insertion by a stacked beforeinput handler`,
+        );
+      }
       const result: {
         typed: number;
         mode: TypeMode;
