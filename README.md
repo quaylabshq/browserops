@@ -12,28 +12,30 @@ An MCP server that drives your live Chrome browser. Any MCP-compatible client (C
 
 ## Quick start
 
-### 1. Scaffold the bridge
+### 1. Clone and set up
 
 ```bash
-npx @browserops/bridge init
+git clone https://github.com/<org>/browserops.git
+cd browserops
+pnpm setup
 ```
 
-This generates `~/.browserops/token`, seeds the bundled procedure examples into `~/browserops/procedures/shared/`, and prints copy-paste MCP client config snippets for Claude Code, Cursor, Zed, and Continue. Pick the snippet for the client you use and add it to that client's MCP config.
-
-(Cloning and building from source? See [Develop locally](#develop-locally).)
+`pnpm setup` runs install + build + `browserops-bridge init` in one shot. The init step generates `~/.browserops/token`, seeds the bundled procedure examples into `~/browserops/procedures/shared/`, and prints copy-paste MCP client config snippets for Claude Code, Cursor, Zed, and Continue. Pick the snippet for the client you use and add it to that client's MCP config.
 
 ### 2. Load the extension in Chrome
 
 1. Open `chrome://extensions`.
 2. Toggle **Developer mode** on (top right).
-3. Click **Load unpacked** and select the unpacked extension directory (clone the repo and use `packages/extension/dist/` after `pnpm build`).
-4. An onboarding tab opens automatically. Once the bridge is running (your MCP client will spawn it the first time you use the `browser_*` tools), click **Confirm & connect** — no token copy-paste required.
-
-The 6-digit **pair code** shown on the onboarding page should match the one the bridge prints to its stderr (`pair code XXX-XXX`). If you missed the tab, open the popup and click **Run setup**. Prefer the old copy-paste flow? Open the extension's options page and paste `~/.browserops/token` there.
+3. Click **Load unpacked** and select `packages/extension/dist/` from this repo (produced by `pnpm setup`).
+4. An onboarding tab opens automatically.
 
 ### 3. Use it
 
-Open your MCP client. Chrome's extension icon turns green ("connected") within a second of the client spawning the bridge. Ask the agent things like:
+Open your MCP client and send any prompt that uses a `browser_*` tool (e.g. "what tabs do I have open?"). The client spawns the bridge on first tool use — the extension's onboarding tab will then show a 6-digit **pair code** matching the one the bridge prints to stderr. Click **Confirm & connect** on the onboarding tab and Chrome's extension icon turns green within a second.
+
+(If you missed the onboarding tab, open the popup and click **Run setup**. Prefer the old copy-paste flow? Open the extension's options page and paste `~/.browserops/token` there.)
+
+Then try:
 
 > What tabs do I have open?
 
@@ -210,16 +212,7 @@ Authoring checklist:
 
 ## Develop locally
 
-If you're hacking on browserops itself (or want to side-load before publish):
-
-```bash
-git clone https://github.com/<org>/browserops.git
-cd browserops
-pnpm install
-pnpm build
-```
-
-Produces `packages/bridge/dist/index.js` (the MCP server, shebanged) and `packages/extension/dist/` (the unpacked extension to load in Chrome). Then either point your MCP client at `node /absolute/path/to/packages/bridge/dist/index.js`, or run `node packages/bridge/dist/index.js init` to print snippets with the local path resolved for you.
+The Quick Start already clones and builds. `pnpm setup` = `pnpm install && pnpm build && node packages/bridge/dist/index.js init`; if you'd rather run the steps individually (or just rerun `init` to reprint the MCP snippets), they work standalone. The build produces `packages/bridge/dist/index.js` (the MCP server, shebanged) and `packages/extension/dist/` (the unpacked extension).
 
 ## Dev loop
 
@@ -283,6 +276,5 @@ browserops/
 │   ├── shared/        # protocol types, error codes, tool catalogue
 │   ├── bridge/        # MCP + WebSocket server (single Node process)
 │   └── extension/     # MV3 extension (background SW, options, popup)
-├── examples/          # seed procedures you can copy into ~/browserops/procedures
-└── sanitize_html.py   # reference HTML sanitizer reused by read tool
+└── examples/          # seed procedures you can copy into ~/browserops/procedures
 ```
