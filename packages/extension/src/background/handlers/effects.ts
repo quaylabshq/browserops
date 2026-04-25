@@ -2,6 +2,71 @@ import { type PageEffect } from "@browserops/shared";
 import { NetworkTracker } from "../network-tracker.js";
 import { execInTab } from "./input.js";
 
+// ---------------------------------------------------------------------------
+// Effect-expectation assertion helper
+// ---------------------------------------------------------------------------
+
+/**
+ * Checks whether a PageEffect satisfies the caller's declared expectation.
+ *
+ * Returns a human-readable warning string when the observed effect violates
+ * the expectation, or `null` when it matches (or no expectation was given).
+ * Never throws — callers attach the string to `warnings[]` in the response.
+ */
+export function checkEffectExpectation(
+  effect: PageEffect,
+  expect: "any" | "dom" | "navigation" | "none" | undefined,
+): string | null {
+  if (expect === undefined) return null;
+
+  const { dom, url, network } = effect;
+
+  if (expect === "dom") {
+    const total = dom.added + dom.removed + dom.attr_changes + dom.text_changes;
+    if (total === 0) {
+      return `expect_effect=dom but no DOM mutations observed (dom:{added:${dom.added},removed:${dom.removed},attr_changes:${dom.attr_changes},text_changes:${dom.text_changes}})`;
+    }
+    return null;
+  }
+
+  if (expect === "navigation") {
+    if (!url.changed) {
+      return `expect_effect=navigation but url.changed=false`;
+    }
+    return null;
+  }
+
+  if (expect === "none") {
+    const parts: string[] = [];
+    if (dom.added > 0) parts.push(`dom.added=${dom.added}`);
+    if (dom.removed > 0) parts.push(`dom.removed=${dom.removed}`);
+    if (dom.attr_changes > 0) parts.push(`dom.attr_changes=${dom.attr_changes}`);
+    if (dom.text_changes > 0) parts.push(`dom.text_changes=${dom.text_changes}`);
+    if (url.changed) parts.push(`url.changed=true`);
+    if (network.requests_started > 0) parts.push(`network.requests_started=${network.requests_started}`);
+    if (parts.length > 0) {
+      return `expect_effect=none but observed ${parts.join(", ")}`;
+    }
+    return null;
+  }
+
+  if (expect === "any") {
+    const anyEffect =
+      dom.added > 0 ||
+      dom.removed > 0 ||
+      dom.attr_changes > 0 ||
+      dom.text_changes > 0 ||
+      url.changed ||
+      network.requests_started > 0;
+    if (!anyEffect) {
+      return `expect_effect=any but no observable effect`;
+    }
+    return null;
+  }
+
+  return null;
+}
+
 export interface EffectObservationConfig {
   chromeTabId: number;
   windowMs?: number; // default 300
