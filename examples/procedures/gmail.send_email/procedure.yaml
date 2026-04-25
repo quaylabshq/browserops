@@ -1,7 +1,7 @@
 schema_version: 1
 
 name: gmail.send_email
-description: Compose and send a Gmail email via the web UI
+description: Compose and send a Gmail email via the compose deep-link URL, then close the tab
 kind: leaf
 domain: gmail
 
@@ -25,69 +25,42 @@ inputs:
   body:
     type: string
     required: true
-    description: "Plain-text email body"
+    description: "Plain-text email body (newlines preserved via %0A when encoded)"
 
-preconditions:
-  - url_matches: "^https://mail\\.google\\.com/"
-    fallback:
-      action: browser_navigate
-      with:
-        url: "https://mail.google.com/mail/u/0/"
-
-# Canonical pattern: read → bind → act-by-ref.
+# Deep-link pattern: one navigate replaces the old open-compose / fill-to /
+# fill-subject / fill-body sequence. The agent substituting {{input.*}} into
+# the URL MUST URL-encode each value (space -> %20, newline -> %0A, & -> %26,
+# etc.) — the bridge template engine does not do this automatically and Gmail
+# will silently mangle raw unescaped characters.
 #
-# browser_type requires `ref` (an integer from the a11y_tree). To target a
-# specific field deterministically, the procedure does a scoped browser_read
-# of the compose dialog, binds the result, and lets the agent select the
-# correct ref from {{compose.refs}} by role+name (e.g. role=textbox, name~="To").
-# Sub-keys of object outputs (.refs.<...>) are agent-resolved at runtime;
-# the binding validator only checks that the first segment (.refs) exists
-# in the tool's outputSchema.
+# The procedure opens a fresh tab (so closing it at the end does not disturb
+# the user's inbox) and closes that tab once the "Message sent" toast fires.
 steps:
   - id: open_compose
-    action: browser_click_by_text
+    action: browser_new_tab
     with:
-      tab_id: "{{tab_id}}"
-      text: "Compose"
-    wait_for:
-      selector: "[role='dialog'][aria-label*='New Message'], [role='dialog'][aria-label*='Message']"
-
-  - id: read_compose
-    action: browser_read
-    with:
-      tab_id: "{{tab_id}}"
-      mode: "a11y_tree"
-      selector: "[role='dialog']"
+      url: "https://mail.google.com/mail/?view=cm&fs=1&to={{input.to}}&su={{input.subject}}&body={{input.body}}"
+      active: true
     bind: compose
-
-  - id: fill_recipient
-    action: browser_type
-    with:
-      tab_id: "{{tab_id}}"
-      ref: "{{compose.refs.to}}"
-      text: "{{input.to}}"
-
-  - id: fill_subject
-    action: browser_type
-    with:
-      tab_id: "{{tab_id}}"
-      ref: "{{compose.refs.subject}}"
-      text: "{{input.subject}}"
-
-  - id: fill_body
-    action: browser_type
-    with:
-      tab_id: "{{tab_id}}"
-      ref: "{{compose.refs.body}}"
-      text: "{{input.body}}"
+    wait_for:
+      text: "Send"
+      timeout_ms: 20000
 
   - id: send
     action: browser_click_by_text
     with:
-      tab_id: "{{tab_id}}"
+      tab_id: "{{compose.tab_id}}"
       text: "Send"
+      role: button
+      match: prefix
     wait_for:
       text: "Message sent"
+      timeout_ms: 15000
+
+  - id: close
+    action: browser_close_tab
+    with:
+      tab_id: "{{compose.tab_id}}"
 
 success_criteria:
   - toast_text: "Message sent"
