@@ -43,6 +43,8 @@ user's real Chrome tabs (with existing logins intact)
 
 ## browserops orchestration rules
 
+_Agent runtime rules (planning, delegation, checkpoints, stuck-state escalation) live in the `browserops` skill at `~/.claude/skills/browserops/SKILL.md`. The rules below are a summary for repo contributors — the skill is the source of truth._
+
 ### Procedure-first: always search before planning
 Before any browser task, call `procedures_search` with tokens from the user's request.
 If score >= 0.5, use that procedure. Do not re-plan steps that are already encoded.
