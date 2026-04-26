@@ -70,6 +70,21 @@ export interface ObservedHints {
 }
 
 /**
+ * Telemetry attached to a tool result when the dispatch pipeline had to
+ * retry with a stronger dispatch mode. The agent sees `auto_retry.attempted`
+ * and can reason about whether the host belongs in the registry.
+ */
+export interface AutoRetryInfo {
+  attempted: true;
+  /** Dispatch mode the extension used on the first (failed) attempt. */
+  first_mode: "synthetic";
+  /** Whether the first attempt produced a measurable page effect. */
+  first_effect_empty: true;
+  /** Dispatch mode the extension used on the second attempt. */
+  final_mode: string;
+}
+
+/**
  * Compute dispatch-mode hints based on observed facts for a single
  * (hostname, action_class) pair.
  *
@@ -441,6 +456,11 @@ export class McpBridgeServer {
     const id = extra.requestId !== undefined ? String(extra.requestId) : randomId();
     const name = req.params.name;
     const params: Record<string, unknown> = req.params.arguments ?? {};
+    // Snapshot the caller's original top-level keys BEFORE AJV's useDefaults
+    // mutation. This lets downstream gates (e.g. auto-retry) distinguish
+    // "agent pinned mode:synthetic" from "agent didn't specify; schema
+    // default was applied."
+    const explicitKeys: ReadonlySet<string> = new Set(Object.keys(params));
 
     await this.deps.logger.write({
       dir: "mcp_in",
@@ -565,12 +585,64 @@ export class McpBridgeServer {
     // Raw input is recorded verbatim — callers who set BROWSEROPS_TRACE=1 have
     // explicitly opted in. Redaction of secrets in params is a future concern.
     try {
-      const extResult = await this.deps.wsBridge.callExtension(
+      const firstExtResult = await this.deps.wsBridge.callExtension(
         def.name,
         forwardParams,
         timeoutMs,
         extra.signal,
       );
+
+      // 9b. In-call auto-retry for browser_click when synthetic dispatch
+      // produced no measurable page effect. We retry once with mode:trusted,
+      // re-using the same approval/rate-limit budget. Both observations are
+      // recorded so observed-facts learns the escalation pattern for this
+      // host (synthetic fail → trusted success/fail) and future calls get
+      // auto-escalated via injectObservedHints. Retry errors are swallowed;
+      // the first result is returned unchanged in that case.
+      let extResult: unknown = firstExtResult;
+      if (this.shouldAutoRetryClick(name, explicitKeys, params, firstExtResult)) {
+        // Record the first (synthetic, zero-effect) observation now; the
+        // normal recordObservation below will then record the retry.
+        this.recordObservation(name, params, firstExtResult);
+        try {
+          const retryParams: Record<string, unknown> = { ...forwardParams, mode: "trusted" };
+          const retryExtResult = await this.deps.wsBridge.callExtension(
+            def.name,
+            retryParams,
+            timeoutMs,
+            extra.signal,
+          );
+          const finalMode =
+            retryExtResult && typeof retryExtResult === "object" &&
+            typeof (retryExtResult as Record<string, unknown>)["mode_used"] === "string"
+              ? ((retryExtResult as Record<string, unknown>)["mode_used"] as string)
+              : "trusted";
+          const autoRetry: AutoRetryInfo = {
+            attempted: true,
+            first_mode: "synthetic",
+            first_effect_empty: true,
+            final_mode: finalMode,
+          };
+          extResult =
+            retryExtResult && typeof retryExtResult === "object"
+              ? { ...(retryExtResult as Record<string, unknown>), auto_retry: autoRetry }
+              : retryExtResult;
+          process.stderr.write(
+            `[browserops] auto-retry: browser_click on ${
+              (firstExtResult as Record<string, unknown>)["site"] ?? "<unknown host>"
+            } escalated synthetic→trusted (first attempt had zero page_effect)\n`,
+          );
+        } catch (retryErr) {
+          const msg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+          process.stderr.write(
+            `[browserops] auto-retry failed: ${msg} — returning original synthetic result\n`,
+          );
+          // Retry path failed; fall back to the first attempt's result so
+          // the agent sees something rather than a spurious error.
+          extResult = firstExtResult;
+        }
+      }
+
       const result = await this.reply(id, name, toolOk(extResult));
       this.emitTrace(id, name, params, startMs, result);
       this.recordObservation(name, params, extResult);
@@ -633,6 +705,88 @@ export class McpBridgeServer {
   }
 
   /**
+   * Derive whether a tool result's `page_effect` shows any measurable
+   * change. Returns null when no page_effect is present (agent disabled
+   * observation, or observation failed) — callers treat null as "no
+   * evidence either way."
+   */
+  private deriveHadEffect(extResult: unknown): boolean | null {
+    if (!extResult || typeof extResult !== "object") return null;
+    const pe = (extResult as Record<string, unknown>)["page_effect"];
+    if (!pe || typeof pe !== "object") return null;
+    const pef = pe as Record<string, unknown>;
+
+    const dom = pef["dom"] && typeof pef["dom"] === "object"
+      ? pef["dom"] as Record<string, unknown>
+      : null;
+    const domDelta = dom
+      ? ((dom["added"] as number | undefined) ?? 0) +
+        ((dom["removed"] as number | undefined) ?? 0) +
+        ((dom["attr_changes"] as number | undefined) ?? 0) +
+        ((dom["text_changes"] as number | undefined) ?? 0)
+      : 0;
+
+    const url = pef["url"] && typeof pef["url"] === "object"
+      ? pef["url"] as Record<string, unknown>
+      : null;
+    const urlChanged = url ? Boolean(url["changed"]) : false;
+
+    const focus = pef["focus"] && typeof pef["focus"] === "object"
+      ? pef["focus"] as Record<string, unknown>
+      : null;
+    const focusChanged = focus ? Boolean(focus["changed"]) : false;
+
+    const network = pef["network"] && typeof pef["network"] === "object"
+      ? pef["network"] as Record<string, unknown>
+      : null;
+    const networkStarted = network
+      ? ((network["requests_started"] as number | undefined) ?? 0)
+      : 0;
+
+    return domDelta > 0 || urlChanged || focusChanged || networkStarted > 0;
+  }
+
+  /**
+   * Predicate: given the first attempt's params and result, should the
+   * dispatch pipeline retry once with mode:"trusted"?
+   *
+   * Gates (all must hold):
+   *  - Tool is browser_click. (type / press excluded — type has
+   *    WRITE_AMPLIFIED risk on Quill/ProseMirror/Slate when trusted is
+   *    forced; press escalation is a separate follow-up.)
+   *  - Agent did not pin `mode` explicitly. If they said synthetic they
+   *    opted out; if they said trusted we're already at the ceiling.
+   *  - Agent did not disable observation (no evidence means no decision).
+   *  - Agent did not say `expect_effect: "none"` — a legitimate no-op click.
+   *  - Extension returned a successful result (not an error envelope).
+   *  - Result shows `clicked: true` — if clicked:false, the bug is
+   *    addressing (occluded / stale ref), not dispatch mode.
+   *  - First attempt used synthetic mode — trusted-already-failed means
+   *    retrying with trusted is pointless.
+   *  - Observed effect is false (not null). No page_effect means we
+   *    can't tell; we conservatively don't retry.
+   */
+  private shouldAutoRetryClick(
+    toolName: string,
+    explicitKeys: ReadonlySet<string>,
+    params: Record<string, unknown>,
+    extResult: unknown,
+  ): boolean {
+    if (toolName !== "browser_click") return false;
+    // Agent explicitly pinned a mode → respect it. We must check the
+    // caller's ORIGINAL keys here, not the post-validation params, because
+    // AJV fills in the schema default `mode: "synthetic"` on every call.
+    if (explicitKeys.has("mode")) return false;
+    if (params["observe_effects"] === false) return false;
+    if (params["expect_effect"] === "none") return false;
+    if (!extResult || typeof extResult !== "object") return false;
+    const r = extResult as Record<string, unknown>;
+    if (r["clicked"] !== true) return false;
+    if (r["mode_used"] !== "synthetic") return false;
+    return this.deriveHadEffect(extResult) === false;
+  }
+
+  /**
    * Record an observation to the observed-facts store after a successful
    * browser_click / browser_type / browser_press result.
    *
@@ -671,40 +825,9 @@ export class McpBridgeServer {
       const res = extResult as Record<string, unknown>;
 
       // page_effect must be present to record — if absent, skip.
-      const pageEffect = res["page_effect"];
-      if (!pageEffect || typeof pageEffect !== "object") return;
-      const pe = pageEffect as Record<string, unknown>;
-
-      // Derive had_effect from the page_effect fields.
-      const dom = pe["dom"] && typeof pe["dom"] === "object"
-        ? pe["dom"] as Record<string, unknown>
-        : null;
-      const domDelta = dom
-        ? ((dom["added"] as number | undefined) ?? 0) +
-          ((dom["removed"] as number | undefined) ?? 0) +
-          ((dom["attr_changes"] as number | undefined) ?? 0) +
-          ((dom["text_changes"] as number | undefined) ?? 0)
-        : 0;
-
-      const url = pe["url"] && typeof pe["url"] === "object"
-        ? pe["url"] as Record<string, unknown>
-        : null;
-      const urlChanged = url ? Boolean(url["changed"]) : false;
-
-      const focus = pe["focus"] && typeof pe["focus"] === "object"
-        ? pe["focus"] as Record<string, unknown>
-        : null;
-      const focusChanged = focus ? Boolean(focus["changed"]) : false;
-
-      const network = pe["network"] && typeof pe["network"] === "object"
-        ? pe["network"] as Record<string, unknown>
-        : null;
-      const networkStarted = network
-        ? ((network["requests_started"] as number | undefined) ?? 0)
-        : 0;
-
-      const had_effect =
-        domDelta > 0 || urlChanged || focusChanged || networkStarted > 0;
+      const hadEffect = this.deriveHadEffect(extResult);
+      if (hadEffect === null) return;
+      const had_effect = hadEffect;
 
       // Extract hostname from result.site (preferred) or input.url (fallback).
       let hostname: string | undefined;
