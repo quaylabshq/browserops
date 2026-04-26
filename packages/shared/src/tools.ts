@@ -1461,6 +1461,64 @@ const proceduresPromote: ToolDef = {
   errorCodes: [...BASE_CODES, ...PROC_CODES] as const,
 } as const;
 
+const proceduresCompile: ToolDef = {
+  name: "procedures_compile",
+  description:
+    "Compile a JSONL trace file into a draft procedure YAML. " +
+    "Reads the trace, drops read-only and failed-call events, and emits one step per " +
+    "remaining tool call with a loose expected_effect clause derived from observed page_effect. " +
+    "Returns the YAML as a string for review — never auto-saved. " +
+    "Caller can review and persist via procedures_save.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["trace_path", "out_name"] as const,
+    properties: {
+      trace_path: {
+        type: "string",
+        description: "Absolute path to a .jsonl trace file produced by browserops tracing.",
+        minLength: 1,
+        maxLength: 4096,
+      },
+      out_name: {
+        type: "string",
+        pattern: "^[a-z][a-z0-9_.-]{0,79}$",
+        description: "Dot-delimited procedure name for the compiled output (e.g. 'slack.search_messages').",
+      },
+      skip_tools: {
+        type: "array",
+        items: { type: "string" },
+        description:
+          "Additional tool names to exclude from the compiled procedure (beyond the default read-only skip list).",
+        maxItems: 50,
+      },
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["yaml", "warnings"] as const,
+    properties: {
+      yaml: {
+        type: "string",
+        description: "The compiled YAML body as a string. Review and save via procedures_save.",
+      },
+      path: {
+        type: "string",
+        description: "Always absent — procedures_compile never auto-saves.",
+      },
+      warnings: {
+        type: "array",
+        items: { type: "string" },
+        description: "Compile-time warnings (e.g. empty trace, filtered events).",
+      },
+    },
+  },
+  action_weight: 0,
+  risky: "never",
+  errorCodes: [...BASE_CODES, ...PROC_CODES] as const,
+} as const;
+
 const proceduresDelete: ToolDef = {
   name: "procedures_delete",
   description:
@@ -1527,6 +1585,7 @@ export const TOOL_DEFS: readonly ToolDef[] = [
   proceduresSave,
   proceduresPromote,
   proceduresDelete,
+  proceduresCompile,
 ] as const;
 
 export const TOOL_DEF_MAP: Record<string, ToolDef> = Object.freeze(
