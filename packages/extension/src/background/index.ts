@@ -174,12 +174,28 @@ function onConnectionChange(connected: boolean): void {
 }
 
 // Keep YOLO badge state synced across SW restart and popup toggles.
-void chrome.storage.session.get("autoApprove").then((s) => {
-  currentAutoApprove = s["autoApprove"] === true;
+//
+// The popup's storage key was renamed from "autoApprove" (true = auto) to
+// "requireApproval" (true = gate) when auto-approve became the default. Read
+// both keys: if requireApproval is present, use it (inverted); else fall back
+// to the legacy autoApprove key for any in-flight old sessions; otherwise
+// default to auto-approve = true (the new default), so the YOLO badge is
+// visible the moment the SW boots on a fresh install.
+void chrome.storage.session.get(["requireApproval", "autoApprove"]).then((s) => {
+  if ("requireApproval" in s) {
+    currentAutoApprove = s["requireApproval"] !== true;
+  } else if ("autoApprove" in s) {
+    currentAutoApprove = s["autoApprove"] === true;
+  } else {
+    currentAutoApprove = true;
+  }
   applyBadge();
 });
 chrome.storage.session.onChanged.addListener((changes) => {
-  if ("autoApprove" in changes) {
+  if ("requireApproval" in changes) {
+    currentAutoApprove = changes["requireApproval"]?.newValue !== true;
+    applyBadge();
+  } else if ("autoApprove" in changes) {
     currentAutoApprove = changes["autoApprove"]?.newValue === true;
     applyBadge();
   }
