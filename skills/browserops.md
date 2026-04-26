@@ -49,9 +49,11 @@ You cannot know from inside the agent how any given site will react to a synthet
    - `NO_PINNED_TAB` → fall through silently: try `browser_current_tab`; if that also returns nothing usable, call `browser_new_tab` and proceed on the fresh tab.
    - Only surface the "click 'Use this tab' in the popup" suggestion to the user if *every* fallback above has failed (no current tab, new-tab creation denied, etc.) — not as the first move.
    - For cross-tab work, `browser_list_tabs` and pick explicitly by title/url.
-3. **Decide on delegation.** Count the likely tool calls in the plan (including retries):
-   - **≤ 8 steps, linear**: run directly from the current agent. No sub-agent.
-   - **> 8 steps, or any retry/branching**: delegate to a sub-agent. Minimal brief only: `procedure name + inputs + tab_id`. **Never inline procedure steps** into the brief — the sub-agent calls `procedures_get` itself.
+3. **Decompose → list → delegate (default).** Before calling any tool, break the user's request into a flat list of concrete subtasks and record it with your task-tracking primitive (e.g. `TaskCreate`). Then run each subtask in its own sub-agent. The main context stays an orchestrator; it does not accumulate page dumps, screenshots, or intermediate tool results, and it cannot lose sight of the overall goal because the list is the source of truth.
+   - **Trivial single primitive** (one `browser_navigate`, one `browser_read`, one quick factual read): run directly, no list needed.
+   - **Anything else** — multi-step flows, anything likely to need retries (`REF_STALE`, occluded clicks, `wait_for` loops), any composite procedure: one sub-agent per subtask. Brief = procedure name + inputs + tab_id (or, for ad-hoc work, the specific primitive sequence for *that subtask only*). **Never inline procedure steps** — the sub-agent calls `procedures_get` itself. **Never batch two subtasks into one brief** — that defeats the isolation and recreates main-context bloat inside the subagent.
+   - After each sub-agent returns, update the list (mark the subtask done, adjust the next one based on what was observed), then dispatch the next. The sub-agent should report in ≤ 5 lines: what it did, pass/fail gate (`page_effect`-based where applicable), tool result summary. Nothing else.
+   - Pick the model per subtask: haiku for mechanical single-tool-call or fill-and-submit steps; sonnet when the subtask needs multi-step retry logic or non-trivial decisions.
 4. **Thread the tab_id** through every subsequent call. Don't re-resolve it per step.
 
 ---
@@ -200,7 +202,7 @@ Keyed by the symptom you observe, not the root cause. Root causes differ; fixes 
 
 ## 6. Sub-agent delegation
 
-When you do delegate (>8 steps or retries), the brief must be minimal. Bad and good examples:
+Delegation is the default, not the exception (§2 step 3). The main agent decomposes the task, tracks the list, and hands each subtask to a fresh sub-agent. The brief must be minimal. Bad and good examples:
 
 **Bad** (inlining steps the sub-agent can fetch itself):
 > Run gmail.send_email: open https://mail.google.com, click Compose, type the recipient, type the subject, type the body, click Send, wait for the sent confirmation…
@@ -289,13 +291,14 @@ If you're editing browserops itself (not just using it):
 
 ## 11. Non-negotiables (the "never" list)
 
-1. Never treat a dispatch self-report (`clicked:true`, `typed:N`) as proof of state change. Check `page_effect`.
-2. Never manually force `mode:"trusted"` on `browser_type` for Quill/ProseMirror/Slate.
-3. Never save an untested procedure.
-4. Never inline procedure steps into a sub-agent brief.
-5. Never use `browser_reload` as a polling primitive.
-6. Never screenshot to verify a step that has a `wait_for` condition.
-7. Never bypass `USER_DECLINED` by retrying silently.
-8. Never use `Meta`/`Control` in chords — use `Primary`.
-9. Never route around a refused destructive chord. Ask instead.
-10. Never "fix" `WRITE_AMPLIFIED` by retrying with the same params. It's a registry bug; report it.
+1. Never start a compound task without decomposing it into a tracked subtask list and delegating each subtask to its own sub-agent (§2 step 3).
+2. Never treat a dispatch self-report (`clicked:true`, `typed:N`) as proof of state change. Check `page_effect`.
+3. Never manually force `mode:"trusted"` on `browser_type` for Quill/ProseMirror/Slate.
+4. Never save an untested procedure.
+5. Never inline procedure steps into a sub-agent brief. Never batch two subtasks into one brief.
+6. Never use `browser_reload` as a polling primitive.
+7. Never screenshot to verify a step that has a `wait_for` condition.
+8. Never bypass `USER_DECLINED` by retrying silently.
+9. Never use `Meta`/`Control` in chords — use `Primary`.
+10. Never route around a refused destructive chord. Ask instead.
+11. Never "fix" `WRITE_AMPLIFIED` by retrying with the same params. It's a registry bug; report it.
