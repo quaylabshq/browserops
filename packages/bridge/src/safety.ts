@@ -1,6 +1,7 @@
 import { ENV, RISKY_CONFIRM_TIMEOUT_MS } from "@browserops/shared";
 import type { RiskyDomainMatcher } from "./risky-domains.js";
 import type { Logger } from "./logger.js";
+import type { TraceWriter } from "./trace-writer.js";
 
 export interface TabInfo {
   url?: string;
@@ -40,17 +41,31 @@ export interface ConfirmationChannel {
  * deferred to v2 per plan 06 open questions.
  */
 export class Safety {
-  private readonly autoConfirm: boolean;
+  private readonly approvalMode: "auto" | "gate";
 
   constructor(
     private readonly matcher: RiskyDomainMatcher,
     private readonly channel: ConfirmationChannel,
     private readonly logger: Logger,
+    private readonly traceWriter?: TraceWriter,
   ) {
-    this.autoConfirm = process.env[ENV.AUTOCONFIRM] === "1";
-    if (this.autoConfirm) {
+    // Determine approval mode: default to "auto", opt in to "gate" via env var or explicit flag.
+    const approvalEnv = process.env[ENV.APPROVAL];
+    const autoconfirmEnv = process.env[ENV.AUTOCONFIRM];
+
+    // New BROWSEROPS_APPROVAL=gate takes precedence; also support old BROWSEROPS_AUTOCONFIRM=0
+    // for backwards compatibility.
+    if (approvalEnv === "gate" || autoconfirmEnv === "0") {
+      this.approvalMode = "gate";
+    } else {
+      this.approvalMode = "auto";
+    }
+
+    // Log startup state. --autoconfirm (sets BROWSEROPS_AUTOCONFIRM=1) is now a no-op since
+    // auto-approve is the default.
+    if (autoconfirmEnv === "1") {
       process.stderr.write(
-        `browserops: WARNING — ${ENV.AUTOCONFIRM}=1; risky-action prompts auto-approve. For testing only.\n`,
+        `[browserops] ${ENV.AUTOCONFIRM}=1 is now the default; ignoring.\n`,
       );
     }
   }
@@ -87,8 +102,31 @@ export class Safety {
     tool: string;
     params: Record<string, unknown>;
     reason: string;
+    tab_hostname?: string;
   }): Promise<{ allow: boolean }> {
     const decision_id = cryptoRandomId();
+
+    // In "auto" mode, short-circuit to approval without prompting.
+    if (this.approvalMode === "auto") {
+      await this.logger.write({
+        dir: "safety",
+        decision_id,
+        phase: "auto_approved",
+      });
+      // Emit auto_approved trace event.
+      if (this.traceWriter?.enabled) {
+        this.traceWriter.append({
+          type: "auto_approved",
+          tool: input.tool,
+          tab_hostname: input.tab_hostname,
+          ts: new Date().toISOString(),
+          decision_id,
+        });
+      }
+      return { allow: true };
+    }
+
+    // "gate" mode: prompt the user.
     await this.logger.write({
       dir: "safety",
       method: input.tool,
@@ -96,15 +134,6 @@ export class Safety {
       reason: input.reason,
       phase: "prompted",
     });
-
-    if (this.autoConfirm) {
-      await this.logger.write({
-        dir: "safety",
-        decision_id,
-        phase: "auto_approved",
-      });
-      return { allow: true };
-    }
 
     try {
       const result = await this.channel.awaitConfirmation({

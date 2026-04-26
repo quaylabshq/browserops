@@ -19,3 +19,11 @@ export interface TraceEvent {
   // the trace flat and the compile step (Phase 4) extracts it from
   // result.value.page_effect when present.
 }
+
+export interface AutoApprovedEvent {
+  type: "auto_approved";            // discriminates from TraceEvent
+  tool: string;                      // the risky tool name
+  tab_hostname?: string;             // hostname of the tab (if available)
+  ts: string;                        // ISO-8601 timestamp
+  decision_id: string;               // correlates with safety decision log
+}
