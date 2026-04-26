@@ -122,9 +122,20 @@ interface ExecuteJsParams {
   args?: readonly unknown[];
 }
 
-function codedError(code: ErrorCode, message: string): Error {
-  const err = new Error(message) as Error & { code: ErrorCode };
+interface ErrorHints {
+  next_action?: string;
+  diagnostic?: Record<string, unknown>;
+}
+
+function codedError(code: ErrorCode, message: string, hints?: ErrorHints): Error {
+  const err = new Error(message) as Error & {
+    code: ErrorCode;
+    next_action?: string;
+    diagnostic?: Record<string, unknown>;
+  };
   err.code = code;
+  if (hints?.next_action !== undefined) err.next_action = hints.next_action;
+  if (hints?.diagnostic !== undefined) err.diagnostic = hints.diagnostic;
   return err;
 }
 
@@ -147,11 +158,32 @@ interface ResolvedRef {
 function resolveRef(refCache: RefCache, tabId: string, ref: number): ResolvedRef {
   const snap = refCache.get(tabId);
   if (snap === undefined) {
-    throw codedError("REF_STALE", `no a11y snapshot for tab ${tabId}; call browser_read first`);
+    throw codedError(
+      "REF_STALE",
+      `no a11y snapshot for tab ${tabId}; call browser_read first`,
+      {
+        next_action:
+          "no a11y snapshot exists — call browser_quick_read or browser_read first to populate refs, then retry the action",
+        diagnostic: { tab_id: tabId, ref, snapshot_present: false },
+      },
+    );
   }
   const entry = snap.entries.get(ref);
   if (entry === undefined) {
-    throw codedError("REF_NOT_FOUND", `ref ${ref} not present in current snapshot for ${tabId}`);
+    throw codedError(
+      "REF_NOT_FOUND",
+      `ref ${ref} not present in current snapshot for ${tabId}`,
+      {
+        next_action:
+          "element ref is stale — call browser_quick_read again to get a fresh ref, do not reuse the old one",
+        diagnostic: {
+          tab_id: tabId,
+          ref,
+          snapshot_url: snap.url,
+          snapshot_size: snap.entries.size,
+        },
+      },
+    );
   }
   return { selector: entry.selector, role: entry.role };
 }
@@ -1803,7 +1835,20 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       if (cdp.isPersistent(chromeId)) {
         const center = await execInTab(chromeId, injectedElementCenter, [selector] as const);
         if (center === null) {
-          throw codedError("REF_STALE", `ref ${params.ref} no longer resolves in tab ${params.tab_id}`);
+          throw codedError(
+            "REF_STALE",
+            `ref ${params.ref} no longer resolves in tab ${params.tab_id}`,
+            {
+              next_action:
+                "element ref is stale (DOM changed since last read) — call browser_quick_read again to get a fresh ref, do not reuse the old one",
+              diagnostic: {
+                ref: params.ref,
+                tab_id: params.tab_id,
+                last_known_selector: selector,
+                stage: "click_cdp_pre_dispatch",
+              },
+            },
+          );
         }
         const dispatch = async () => {
           await cdpClick(cdp, chromeId, center.x, center.y, buttonName, mods);
@@ -2119,7 +2164,22 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
           );
         }
         if (res.found === false) {
-          throw codedError("REF_STALE", `ref ${params.ref} no longer resolves in tab ${params.tab_id}`);
+          throw codedError(
+            "REF_STALE",
+            `ref ${params.ref} no longer resolves in tab ${params.tab_id}`,
+            {
+              next_action:
+                "element ref is stale (DOM changed between read and type) — call browser_quick_read again to get a fresh ref, do not reuse the old one",
+              diagnostic: {
+                ref: params.ref,
+                tab_id: params.tab_id,
+                last_known_selector: selector,
+                role: ref.role,
+                stage: "type_synthetic_dispatch",
+                mode,
+              },
+            },
+          );
         }
         // If the write didn't land, auto-retry with escalating strategies:
         // 1. paste mode (execCommand insertText in one shot)
@@ -2151,9 +2211,30 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
             if (cleared !== undefined) r.cleared = cleared;
             return r;
           }
+          const isContentEditable =
+            looksRichEditor || ref.role === "textbox" && /contenteditable/i.test(selector);
           throw codedError(
             "WRITE_NOT_REFLECTED",
             `typed ${params.text.length} characters via keystroke, paste, and clipboard strategies but field content did not change; try browser_set_cdp enabled:true for trusted events`,
+            {
+              next_action: isContentEditable
+                ? "contenteditable / rich editor detected — switch to browser_execute_js with `el.focus(); document.execCommand('insertText', false, <text>)` instead of retrying browser_type"
+                : "value did not reflect — call browser_quick_read again to confirm element is still focusable, then retry once with clear_first:true; if still failing, enable CDP via browser_set_cdp",
+              diagnostic: {
+                ref: params.ref,
+                tab_id: params.tab_id,
+                selector,
+                role: ref.role,
+                is_contenteditable: isContentEditable,
+                looks_rich_editor: looksRichEditor,
+                expected_value_length: params.text.length,
+                observed_reflected_length: res.reflected,
+                strategies_tried:
+                  mode === "paste"
+                    ? ["paste", "clipboard"]
+                    : ["keystroke", "paste", "clipboard"],
+              },
+            },
           );
         }
         if (params.text.length > 0 && res.reflected >= params.text.length * 2) {

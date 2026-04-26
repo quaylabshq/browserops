@@ -34,23 +34,46 @@ export class Router {
       const result = await handler(req.params, ctx);
       return { type: "response", id: req.id, ok: true, result };
     } catch (err: unknown) {
-      const { code, message, details } = extractError(err);
+      const { code, message, details, next_action, diagnostic } = extractError(err);
+      const error: {
+        code: ErrorCode;
+        message: string;
+        details?: unknown;
+        next_action?: string;
+        diagnostic?: Record<string, unknown>;
+      } = { code, message };
+      if (details !== undefined) error.details = details;
+      if (next_action !== undefined) error.next_action = next_action;
+      if (diagnostic !== undefined) error.diagnostic = diagnostic;
       return {
         type: "response",
         id: req.id,
         ok: false,
-        error: details === undefined ? { code, message } : { code, message, details },
+        error,
       };
     }
   }
 }
 
-function extractError(err: unknown): { code: ErrorCode; message: string; details?: unknown } {
+function extractError(err: unknown): {
+  code: ErrorCode;
+  message: string;
+  details?: unknown;
+  next_action?: string;
+  diagnostic?: Record<string, unknown>;
+} {
   if (err instanceof Error) {
     const maybeCode = (err as { code?: unknown }).code;
     const code: ErrorCode = isErrorCode(maybeCode) ? maybeCode : "INTERNAL";
     const details = (err as { details?: unknown }).details;
-    return { code, message: err.message, details };
+    const nextActionRaw = (err as { next_action?: unknown }).next_action;
+    const next_action = typeof nextActionRaw === "string" ? nextActionRaw : undefined;
+    const diagnosticRaw = (err as { diagnostic?: unknown }).diagnostic;
+    const diagnostic =
+      diagnosticRaw !== null && typeof diagnosticRaw === "object" && !Array.isArray(diagnosticRaw)
+        ? (diagnosticRaw as Record<string, unknown>)
+        : undefined;
+    return { code, message: err.message, details, next_action, diagnostic };
   }
   return { code: "INTERNAL", message: typeof err === "string" ? err : "unknown error" };
 }
