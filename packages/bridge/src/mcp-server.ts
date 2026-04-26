@@ -28,6 +28,94 @@ import type { TraceWriter } from "./trace-writer.js";
 import type { ObservedFactsStore, ObservedFact } from "./observed-facts.js";
 import { buildProcedureHandlers } from "./procedures/handlers.js";
 
+// ---------------------------------------------------------------------------
+// TabHostnameCache
+//
+// Populated from browser_navigate final_url. Tabs that were opened by the
+// user (not via browserops navigate) have no cache entry; auto-escalation is
+// skipped for them — acceptable first cut.
+// ---------------------------------------------------------------------------
+
+export class TabHostnameCache {
+  private readonly map = new Map<string, string>(); // tab_id (t_foo) → hostname
+
+  set(tabId: string, hostname: string): void {
+    this.map.set(tabId, hostname);
+  }
+
+  get(tabId: string): string | undefined {
+    return this.map.get(tabId);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Escalation threshold constants
+// ---------------------------------------------------------------------------
+
+/** Minimum synthetic samples before escalation is considered. */
+export const ESCALATE_MIN_SYNTHETIC_SAMPLES = 3;
+/** Synthetic effect rate must be below this to escalate. */
+export const ESCALATE_MAX_SYNTHETIC_EFFECT_RATE = 0.2;
+/** Trusted effect rate must be at or above this to escalate. */
+export const ESCALATE_MIN_TRUSTED_EFFECT_RATE = 0.5;
+
+// ---------------------------------------------------------------------------
+// ObservedHints — attached to forwarded params when escalation fires
+// ---------------------------------------------------------------------------
+
+export interface ObservedHints {
+  clickMode?: "trusted";
+  semanticKeyMode?: "trusted";
+  typeMode?: "trusted";
+}
+
+/**
+ * Compute dispatch-mode hints based on observed facts for a single
+ * (hostname, action_class) pair.
+ *
+ * Returns non-null ObservedHints when the evidence shows:
+ *   - synthetic_samples >= ESCALATE_MIN_SYNTHETIC_SAMPLES
+ *   - synthetic_effect_rate < ESCALATE_MAX_SYNTHETIC_EFFECT_RATE
+ *   - a trusted observation exists with effect_rate >= ESCALATE_MIN_TRUSTED_EFFECT_RATE
+ *
+ * Returns null when below threshold — fail open to existing behavior.
+ */
+export function computeObservedHints(
+  facts: ObservedFact[],
+  actionClass: "click" | "type" | "press",
+): ObservedHints | null {
+  const relevant = facts.filter((f) => f.action_class === actionClass);
+
+  const syntheticFact = relevant.find((f) => f.dispatch_mode === "synthetic");
+  const trustedFact = relevant.find((f) => f.dispatch_mode === "trusted");
+
+  // Must have enough synthetic evidence.
+  if (!syntheticFact || syntheticFact.samples < ESCALATE_MIN_SYNTHETIC_SAMPLES) {
+    return null;
+  }
+
+  const syntheticEffectRate = syntheticFact.effect_count / syntheticFact.samples;
+  if (syntheticEffectRate >= ESCALATE_MAX_SYNTHETIC_EFFECT_RATE) {
+    return null;
+  }
+
+  // Must have trusted evidence that actually works.
+  if (!trustedFact || trustedFact.samples === 0) {
+    return null;
+  }
+
+  const trustedEffectRate = trustedFact.effect_count / trustedFact.samples;
+  if (trustedEffectRate < ESCALATE_MIN_TRUSTED_EFFECT_RATE) {
+    return null;
+  }
+
+  // Escalate: map action_class to the correct hint field.
+  if (actionClass === "click") return { clickMode: "trusted" };
+  if (actionClass === "type") return { typeMode: "trusted" };
+  if (actionClass === "press") return { semanticKeyMode: "trusted" };
+  return null;
+}
+
 /**
  * Minimal shape McpBridgeServer needs to talk to the extension. Implemented
  * by {@link WSBridge} (primary) and RemoteWSBridge (secondary).
@@ -120,11 +208,17 @@ export interface McpBridgeDeps {
   /** Optional trace writer. When provided, the router will emit a TraceEvent after each tool result. */
   traceWriter?: TraceWriter;
   /**
-   * Optional observed-facts store. When provided, Phase 6 Step 2/3 will
-   * populate and query it from the dispatch pipeline. Attached here but not
-   * yet consumed — wiring happens in subsequent phases.
+   * Optional observed-facts store. When provided, the dispatch pipeline
+   * records and queries observations to auto-escalate dispatch modes.
    */
   observedFacts?: ObservedFactsStore;
+  /**
+   * Optional tab hostname cache. Populated from browser_navigate final_url.
+   * Used to look up the hostname for a tab_id when injecting observed_hints.
+   * Tabs opened outside of browserops navigation have no entry (acceptable
+   * first cut — Phase 6.5 can track hostnames from response metadata).
+   */
+  tabHostnameCache?: TabHostnameCache;
 }
 
 interface ToolErrorPayload {
@@ -398,19 +492,28 @@ export class McpBridgeServer {
     // 8. Timeout.
     const timeoutMs = this.timeoutFor(def, params);
 
+    // 8a. Auto-escalation: inject observed_hints into params for
+    // browser_click / browser_type / browser_press when observations show
+    // synthetic is ineffective on this site. Graceful on all errors — if we
+    // can't look up the hostname or facts, we simply don't inject.
+    const forwardParams = this.injectObservedHints(name, params);
+
     // 9. Call extension (forward cancellation).
     // Raw input is recorded verbatim — callers who set BROWSEROPS_TRACE=1 have
     // explicitly opted in. Redaction of secrets in params is a future concern.
     try {
       const extResult = await this.deps.wsBridge.callExtension(
         def.name,
-        params,
+        forwardParams,
         timeoutMs,
         extra.signal,
       );
       const result = await this.reply(id, name, toolOk(extResult));
       this.emitTrace(id, name, params, startMs, result);
       this.recordObservation(name, params, extResult);
+      // Populate hostname cache from browser_navigate final_url so future
+      // calls on this tab_id can benefit from observed-hints escalation.
+      this.updateHostnameCache(name, params, extResult);
       return result;
     } catch (err) {
       const code = extractErrorCode(err);
@@ -587,6 +690,92 @@ export class McpBridgeServer {
       store.recordObservation({ hostname, action_class, dispatch_mode, had_effect });
     } catch {
       // Recording must never break the call.
+    }
+  }
+
+  /**
+   * Populate the tab hostname cache from a successful browser_navigate result.
+   * Called after every successful extension call; no-op for all other tools.
+   */
+  private updateHostnameCache(
+    toolName: string,
+    input: Record<string, unknown>,
+    extResult: unknown,
+  ): void {
+    if (toolName !== "browser_navigate") return;
+    const cache = this.deps.tabHostnameCache;
+    if (!cache) return;
+    try {
+      const tabId = typeof input["tab_id"] === "string" ? input["tab_id"] : undefined;
+      if (!tabId) return;
+
+      // Prefer final_url from the extension result; fall back to input url.
+      let urlStr: string | undefined;
+      if (extResult && typeof extResult === "object") {
+        const r = extResult as Record<string, unknown>;
+        if (typeof r["final_url"] === "string") urlStr = r["final_url"];
+      }
+      if (!urlStr && typeof input["url"] === "string") urlStr = input["url"];
+      if (!urlStr) return;
+
+      const hostname = new URL(urlStr).hostname;
+      if (hostname) cache.set(tabId, hostname);
+    } catch {
+      // URL parse errors or missing fields — just skip.
+    }
+  }
+
+  /**
+   * Inject `observed_hints` into the params before forwarding to the extension
+   * for browser_click / browser_type / browser_press.
+   *
+   * If no hostname is cached for the tab, or no escalation threshold is met,
+   * returns the original params object unmodified.
+   */
+  private injectObservedHints(
+    toolName: string,
+    params: Record<string, unknown>,
+  ): Record<string, unknown> {
+    try {
+      let actionClass: "click" | "type" | "press";
+      if (toolName === "browser_click") {
+        actionClass = "click";
+      } else if (toolName === "browser_type") {
+        actionClass = "type";
+      } else if (toolName === "browser_press") {
+        actionClass = "press";
+      } else {
+        return params;
+      }
+
+      const cache = this.deps.tabHostnameCache;
+      const store = this.deps.observedFacts;
+      if (!cache || !store) return params;
+
+      const tabId = typeof params["tab_id"] === "string" ? params["tab_id"] : undefined;
+      if (!tabId) return params;
+
+      const hostname = cache.get(tabId);
+      if (!hostname) return params;
+
+      const facts = store.getFacts(hostname);
+      if (facts.length === 0) return params;
+
+      const hints = computeObservedHints(facts, actionClass);
+      if (hints === null) return params;
+
+      // Log the escalation so it's visible in bridge stderr.
+      const hintDesc = Object.entries(hints)
+        .map(([k, v]) => `${k}=${v}`)
+        .join(",");
+      process.stderr.write(
+        `[browserops] observed_hints:${hintDesc} overriding synthetic for ${hostname} (${toolName})\n`,
+      );
+
+      return { ...params, observed_hints: hints };
+    } catch {
+      // Any error: fail open, no injection.
+      return params;
     }
   }
 
