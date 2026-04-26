@@ -522,17 +522,6 @@ function injectedTypeKeystroke(
       void isPrintable;
     };
 
-    // Detect rich-editor frameworks whose beforeinput handler owns insertion.
-    // On these elements execCommand("insertText") must NOT be called after
-    // dispatching beforeinput — the framework already inserted the character
-    // via its internal model (Delta / ProseMirror transaction / Slate op) and
-    // a second insertion doubles every character.
-    // CodeMirror (.cm-content) is intentionally excluded: CM6 handles the
-    // full event sequence natively without doubling.
-    const isRichEditor =
-      el.matches(".ql-editor, .ProseMirror, [data-slate-editor=\"true\"]") ||
-      el.closest(".ql-editor, .ProseMirror, [data-slate-editor=\"true\"]") !== null;
-
     let index = 0;
     const typeOne = (): void => {
       if (index >= text.length) {
@@ -565,15 +554,16 @@ function injectedTypeKeystroke(
         const biAllowed = el.dispatchEvent(beforeInput);
 
         if (biAllowed) {
-          if (isRichEditor) {
-            // The framework's beforeinput handler already inserted the character
-            // via its internal model (Quill Delta, ProseMirror transaction, Slate
-            // op). Calling execCommand here would insert it a second time.
-            // Also skip the synthetic `input` dispatch: the framework fires its
-            // own `input` event after applying the change, and a synthetic one
-            // would confuse its listeners.
-          } else if (el.isContentEditable) {
-            document.execCommand("insertText", false, ch);
+          if (el.isContentEditable) {
+            // If the framework's beforeinput handler already inserted the
+            // character (Quill, ProseMirror, Slate, Draft.js, Lexical, Gmail,
+            // etc.), calling execCommand would double-insert. Check whether
+            // content grew — if it did, the framework handled it.
+            const contentGrew =
+              (el.textContent ?? "").length > before.length + index;
+            if (!contentGrew) {
+              document.execCommand("insertText", false, ch);
+            }
           } else {
             const next = (el.value ?? "") + ch;
             if (setter !== undefined) setter.call(el, next);
