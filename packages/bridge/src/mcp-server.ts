@@ -25,7 +25,7 @@ import type { Safety, TabInfo } from "./safety.js";
 import type { TabRegistry } from "./tab-registry.js";
 import type { Logger } from "./logger.js";
 import type { TraceWriter } from "./trace-writer.js";
-import { PROCEDURE_HANDLERS } from "./procedures/handlers.js";
+import { buildProcedureHandlers } from "./procedures/handlers.js";
 
 /**
  * Minimal shape McpBridgeServer needs to talk to the extension. Implemented
@@ -215,10 +215,12 @@ export class McpBridgeServer {
   private readonly deps: McpBridgeDeps;
   private readonly server: Server;
   private readonly validators = new Map<string, ValidateFunction>();
+  private readonly procedureHandlers: Record<string, (raw: Record<string, unknown>) => Promise<unknown>>;
   private transport?: StdioServerTransport;
 
   constructor(deps: McpBridgeDeps) {
     this.deps = deps;
+    this.procedureHandlers = buildProcedureHandlers(deps.wsBridge);
 
     const ajv = new Ajv({ allErrors: true, strict: false, useDefaults: true });
     addFormats(ajv);
@@ -304,7 +306,7 @@ export class McpBridgeServer {
 
     // 4a. In-process procedure handlers — bypass extension WebSocket entirely.
     if (name.startsWith("procedures_")) {
-      const handler = PROCEDURE_HANDLERS[name];
+      const handler = this.procedureHandlers[name];
       if (handler) {
         let result: ToolCallResult;
         try {
