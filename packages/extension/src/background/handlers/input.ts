@@ -1,5 +1,5 @@
 import type { ErrorCode, PageEffect } from "@browserops/shared";
-import { isDestructiveChord, resolveSite } from "@browserops/shared";
+import { isDestructiveChord } from "@browserops/shared";
 import type { Router } from "../router.js";
 import type { RefCache } from "../ref-cache.js";
 import type { CdpManager } from "../cdp.js";
@@ -19,17 +19,11 @@ function parseExpectEffect(raw: unknown): ExpectEffect | undefined {
 /**
  * browser_click / type / press / scroll / hover / execute_js handlers.
  *
- * v1 coverage: DOM-only via
- * chrome.scripting.executeScript. No CDP attach; the richer CDP-based
- * implementations described in plan 04 are deferred until we add a
- * debugger-session manager. In practice a DOM-only path handles ~90% of
- * real pages (React/Vue/plain HTML) — the gap is sites that bind on the
- * untrusted-event flag of KeyboardEvent or require trusted MouseEvents,
- * which we accept as a known limitation for v1.
+ * All input dispatch is synthetic (DOM events via chrome.scripting.executeScript).
+ * CDP is only used by browser_execute_js (Runtime.evaluate to bypass Trusted Types CSP).
  *
- * Ref lookup contract: the parallel plan 05 task writes an a11y snapshot
- * to RefCache during browser_read(mode: "a11y_tree"). Each entry has a
- * `.selector` field which is what we feed to document.querySelector in
+ * Ref lookup contract: browser_read(mode: "a11y_tree") populates RefCache.
+ * Each entry has a `.selector` field used by document.querySelector in
  * the injected world.
  */
 
@@ -46,8 +40,6 @@ type Modifier = "Control" | "Alt" | "Shift" | "Meta";
  * to either Meta (macOS) or Control (elsewhere) so chords are portable.
  */
 type ModifierInput = Modifier | "Primary";
-type ClickMode = "synthetic" | "trusted";
-
 // Platform detection for the Primary alias. navigator.userAgentData.platform
 // is the modern signal and returns "macOS" / "Windows" / "Linux"; fall back
 // to the legacy navigator.platform string when it's not available (Firefox,
@@ -71,26 +63,11 @@ function resolvePrimary(mods: readonly ModifierInput[]): Modifier[] {
   return [...out];
 }
 
-// CDP Input modifier bitmask (see Input.dispatchKeyEvent).
-const CDP_MOD = { Alt: 1, Control: 2, Meta: 4, Shift: 8 } as const;
-function cdpModifiers(mods: readonly Modifier[]): number {
-  let mask = 0;
-  for (const m of mods) mask |= CDP_MOD[m];
-  return mask;
-}
-const CDP_BUTTON_NAME: Record<0 | 1 | 2, "left" | "middle" | "right"> = {
-  0: "left",
-  1: "middle",
-  2: "right",
-};
-const CDP_BUTTONS_MASK: Record<0 | 1 | 2, number> = { 0: 1, 1: 4, 2: 2 };
-
 interface ClickParams {
   tab_id: string;
   ref: number;
   button?: "left" | "middle" | "right";
   modifiers?: readonly Modifier[];
-  mode?: ClickMode;
   observe_effects?: boolean;
   expect_effect?: ExpectEffect;
 }
@@ -101,117 +78,11 @@ interface ClickAtParams {
   y: number;
   button?: "left" | "middle" | "right";
   modifiers?: readonly Modifier[];
-  mode?: ClickMode;
 }
 
-type TypeMode = "keystroke" | "paste" | "trusted";
+type TypeMode = "keystroke" | "paste";
 type ClearMode = "value" | "select_all" | "auto";
 const KEYSTROKE_AUTO_THRESHOLD = 64;
-
-// ---------------------------------------------------------------------------
-// Site-hint helpers (background-world code — not injected into the page).
-// ---------------------------------------------------------------------------
-
-/** JSON-serializable site hint passed into injected helpers (no RegExp). */
-export interface SiteHint {
-  framework: string;             // one of the Framework union values
-  semanticKeyMode?: "trusted";
-  clickMode?: "trusted";
-  typeMode?: "trusted";
-}
-
-/**
- * Observed hints injected by the bridge when evidence shows synthetic has been
- * ineffective on this hostname. Precedence: observed_hints > SITE_REGISTRY.
- */
-interface ObservedHints {
-  clickMode?: "trusted";
-  semanticKeyMode?: "trusted";
-  typeMode?: "trusted";
-}
-
-function parseObservedHints(raw: unknown): ObservedHints | null {
-  if (!raw || typeof raw !== "object") return null;
-  const r = raw as Record<string, unknown>;
-  const hints: ObservedHints = {};
-  if (r["clickMode"] === "trusted") hints.clickMode = "trusted";
-  if (r["semanticKeyMode"] === "trusted") hints.semanticKeyMode = "trusted";
-  if (r["typeMode"] === "trusted") hints.typeMode = "trusted";
-  if (Object.keys(hints).length === 0) return null;
-  return hints;
-}
-
-function toSiteHint(
-  site: { framework: string; semanticKeyMode?: "trusted"; clickMode?: "trusted" } | null,
-): SiteHint | null {
-  if (!site) return null;
-  const hint: SiteHint = { framework: site.framework };
-  if (site.semanticKeyMode) hint.semanticKeyMode = site.semanticKeyMode;
-  if (site.clickMode) hint.clickMode = site.clickMode;
-  return hint;
-}
-
-/**
- * Resolve a tab's URL hostname into a SiteHint (or null if unknown).
- * Uses chrome.tabs.get to fetch the tab URL, then looks up the shared
- * SITE_REGISTRY via resolveSite().
- *
- * If observedHints is provided, its fields are merged over the SITE_REGISTRY
- * result (observed evidence takes precedence over static registry defaults).
- * When the registry returns null, a minimal SiteHint with framework="unknown"
- * is synthesised so the hints can still be propagated.
- */
-async function getSiteHintForTab(
-  chromeTabId: number,
-  observedHints?: ObservedHints | null,
-): Promise<SiteHint | null> {
-  let url: string | undefined;
-  try {
-    const tab = await chrome.tabs.get(chromeTabId);
-    url = tab.url;
-  } catch {
-    return null;
-  }
-  if (!url) return null;
-  let hostname: string;
-  try {
-    hostname = new URL(url).hostname;
-  } catch {
-    return null;
-  }
-  const registryHint = toSiteHint(resolveSite(hostname));
-
-  if (!observedHints) return registryHint;
-
-  // Merge observed hints over registry defaults. If no registry entry,
-  // synthesise a minimal hint so the fields can be forwarded.
-  const base: SiteHint = registryHint ?? { framework: "unknown" };
-  let overrode = false;
-
-  if (observedHints.clickMode === "trusted" && base.clickMode !== "trusted") {
-    base.clickMode = "trusted";
-    overrode = true;
-  }
-  if (observedHints.semanticKeyMode === "trusted" && base.semanticKeyMode !== "trusted") {
-    base.semanticKeyMode = "trusted";
-    overrode = true;
-  }
-  // typeMode is carried on SiteHint for completeness but not currently used by
-  // the typed dispatch path (it checks framework directly). Log and store.
-  if (observedHints.typeMode === "trusted") {
-    (base as SiteHint & { typeMode?: "trusted" }).typeMode = "trusted";
-    overrode = true;
-  }
-
-  if (overrode) {
-    console.log(
-      `[browserops] observed_hints applied for ${hostname}: ` +
-      JSON.stringify(observedHints),
-    );
-  }
-
-  return base;
-}
 
 interface TypeParams {
   tab_id: string;
@@ -596,8 +467,7 @@ function injectedTypePaste(
  * key off individual keystrokes (search autocompletes, live validators,
  * controlled React inputs) react correctly.
  *
- * Still untrusted (isTrusted=false); for sites that gate on trusted
- * events, use mode=trusted (CDP path, v2).
+ * Still untrusted (isTrusted=false).
  */
 function injectedTypeKeystroke(
   selector: string,
@@ -753,109 +623,11 @@ function dispatchEnterAndSubmit(
   }
 }
 
-/**
- * Probe document.activeElement for a known rich-text editor framework and
- * return structured information for the background to decide whether to use
- * CDP trusted dispatch. Runs in MAIN world; no module imports.
- *
- * Uses the same minimal 3-framework registry as performTrustedType so the
- * detection logic stays consistent across type and press paths.
- */
-function injectedProbeActiveEditor(
-  siteHint: { framework: string; semanticKeyMode?: "trusted"; clickMode?: "trusted" } | null,
-): {
-  editor: string | null;
-  semanticKeyMode: "synthetic" | "trusted";
-  /** CSS selector that uniquely identifies the drilled editor root, or null. */
-  rootSelector: string | null;
-} {
-  const active = document.activeElement as HTMLElement | null;
-  if (!active) return { editor: null, semanticKeyMode: "synthetic", rootSelector: null };
-
-  // Minimal registry — 3 rich-text frameworks where Enter/Escape/Tab need CDP.
-  const REGISTRY: Array<{ name: string; match: string; semanticKeyMode: "synthetic" | "trusted" }> = [
-    { name: "quill",       match: ".ql-editor",                   semanticKeyMode: "trusted" },
-    { name: "prosemirror", match: ".ProseMirror",                 semanticKeyMode: "trusted" },
-    { name: "slate",       match: "[data-slate-editor=\"true\"]", semanticKeyMode: "trusted" },
-  ];
-
-  let matchedName: string | null = null;
-  let matchedMode: "synthetic" | "trusted" = "synthetic";
-  let root: Element | null = null;
-
-  // Tier 1: site hint names a known framework.
-  if (siteHint) {
-    const entry = REGISTRY.find((e) => e.name === siteHint.framework);
-    if (entry) {
-      matchedName = entry.name;
-      matchedMode = siteHint.semanticKeyMode ?? entry.semanticKeyMode;
-      root =
-        (active.matches(entry.match) ? active : null) ??
-        active.querySelector(entry.match) ??
-        active.closest(entry.match) ??
-        document.querySelector(entry.match);
-    } else {
-      // Known site but unknown framework — honour semanticKeyMode hint.
-      matchedName = siteHint.framework;
-      matchedMode = siteHint.semanticKeyMode ?? "synthetic";
-      root = active;
-    }
-  }
-
-  // Tier 2: element fingerprint — only if site hint didn't match a framework.
-  if (matchedName === null) {
-    for (const entry of REGISTRY) {
-      const candidate =
-        (active.matches(entry.match) ? active : null) ??
-        active.querySelector(entry.match) ??
-        active.closest(entry.match);
-      if (candidate) {
-        matchedName = entry.name;
-        matchedMode = entry.semanticKeyMode;
-        root = candidate;
-        break;
-      }
-    }
-  }
-
-  if (matchedName === null || root === null) {
-    return { editor: null, semanticKeyMode: "synthetic", rootSelector: null };
-  }
-
-  // Assign a stable data-attribute so the background can reference the root
-  // if it needs to; for press we only need the semanticKeyMode decision.
-  // (rootSelector is informational — the background dispatches via CDP which
-  // operates on the focused element, not a selector.)
-  let rootSelector: string | null = null;
-  try {
-    if (root.id && root.id.length > 0) {
-      rootSelector = `#${CSS.escape(root.id)}`;
-    } else if (root.className && typeof root.className === "string") {
-      // Use the first class as a best-effort selector — good enough for
-      // well-known frameworks (.ql-editor, .ProseMirror, etc.).
-      const firstClass = root.className.trim().split(/\s+/)[0];
-      if (firstClass && firstClass.length > 0) rootSelector = `.${CSS.escape(firstClass)}`;
-    }
-  } catch {
-    /* ignore selector building errors */
-  }
-
-  return { editor: matchedName, semanticKeyMode: matchedMode, rootSelector };
-}
-
 function injectedPress(
   key: string,
   modifiers: { ctrl: boolean; alt: boolean; shift: boolean; meta: boolean },
-  /** CSS selector for the drilled editor root, or null to use document.activeElement. */
-  rootSelector: string | null,
 ): void {
-  // Use the drilled editor root when available (resolves the wrapper-vs-editor
-  // mismatch on Slack/Notion/Linear where document.activeElement points to the
-  // outer role="textbox" div but Quill/ProseMirror listen on the inner root).
   const active: HTMLElement =
-    (rootSelector !== null
-      ? (document.querySelector(rootSelector) as HTMLElement | null)
-      : null) ??
     (document.activeElement as HTMLElement | null) ??
     document.body;
   const init: KeyboardEventInit = {
@@ -1368,222 +1140,6 @@ function injectedFindAndReplaceSynthetic(
   return { status: "unsupported_kind", tag };
 }
 
-/**
- * Injected: resolve the target (selector or activeElement), focus it, and
- * set the DOM selection to the next match of `find` starting at
- * `searchFromLogical`. Does not mutate field content — the CDP trusted
- * insertText call in the caller will perform the actual replacement by
- * replacing the current selection. Returns the logical offset of the match
- * so the caller can advance the search cursor for occurrence="all".
- */
-type FindReplaceSelectResult =
-  | { status: "selected"; kind: "input" | "textarea" | "contenteditable"; hit: number }
-  | { status: "not_found" }
-  | { status: "no_target" }
-  | { status: "unsupported_kind"; tag: string };
-
-function injectedSelectMatchForTrusted(
-  selectorOrNull: string | null,
-  find: string,
-  caseSensitive: boolean,
-  searchFromLogical: number,
-): FindReplaceSelectResult {
-  const root: Element | null =
-    selectorOrNull !== null
-      ? document.querySelector(selectorOrNull)
-      : document.activeElement;
-  if (root === null || !(root instanceof Element)) {
-    return { status: "no_target" };
-  }
-  const tag = root.tagName.toLowerCase();
-  if (tag === "input" || tag === "textarea") {
-    const field = root as HTMLInputElement | HTMLTextAreaElement;
-    const value = typeof field.value === "string" ? field.value : "";
-    const haystack = caseSensitive ? value : value.toLowerCase();
-    const needle = caseSensitive ? find : find.toLowerCase();
-    const hit = haystack.indexOf(needle, searchFromLogical);
-    if (hit < 0) return { status: "not_found" };
-    field.focus();
-    field.selectionStart = hit;
-    field.selectionEnd = hit + find.length;
-    return { status: "selected", kind: tag, hit };
-  }
-  if ((root as HTMLElement).isContentEditable === true) {
-    const host = root as HTMLElement;
-    host.focus();
-    interface Seg { node: Text; start: number; end: number }
-    const segs: Seg[] = [];
-    const walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT);
-    let running = 0;
-    let logical = "";
-    let cur: Node | null = walker.nextNode();
-    while (cur !== null) {
-      const t = cur as Text;
-      const data = t.data;
-      segs.push({ node: t, start: running, end: running + data.length });
-      running += data.length;
-      logical += data;
-      cur = walker.nextNode();
-    }
-    const haystack = caseSensitive ? logical : logical.toLowerCase();
-    const needle = caseSensitive ? find : find.toLowerCase();
-    const hit = haystack.indexOf(needle, searchFromLogical);
-    if (hit < 0) return { status: "not_found" };
-    const hitEnd = hit + find.length;
-    const locate = (pos: number): { node: Text; offset: number } | null => {
-      for (const seg of segs) {
-        if (pos >= seg.start && pos <= seg.end) {
-          return { node: seg.node, offset: pos - seg.start };
-        }
-      }
-      return null;
-    };
-    const startPt = locate(hit);
-    const endPt = locate(hitEnd);
-    if (startPt === null || endPt === null) return { status: "not_found" };
-    const range = document.createRange();
-    range.setStart(startPt.node, startPt.offset);
-    range.setEnd(endPt.node, endPt.offset);
-    const sel = window.getSelection();
-    if (sel !== null) {
-      sel.removeAllRanges();
-      sel.addRange(range);
-    }
-    return { status: "selected", kind: "contenteditable", hit };
-  }
-  return { status: "unsupported_kind", tag };
-}
-
-function injectedExecuteJs(code: string): {
-  thrown: boolean;
-  value?: unknown;
-  error?: string;
-} {
-  try {
-    // Indirect eval forces global scope, matching the "main world" intent
-    // and preventing the wrapper's locals from leaking into `code`.
-    const value = (0, eval)(code) as unknown;
-    return { thrown: false, value };
-  } catch (e) {
-    return { thrown: true, error: String(e) };
-  }
-}
-
-/**
- * Injected: resolve the active editor element for a known framework.
- *
- * Two tiers:
- *   1. Site hint — the background already knows which framework the site uses
- *      (from the shared SITE_REGISTRY). Look up the framework's CSS selector
- *      and drill to the editor root from the provided element.
- *   2. Element fingerprint — walk the REGISTRY selectors against the element
- *      itself (el.matches / el.querySelector / el.closest) to detect the
- *      framework directly.
- *
- * Self-contained: runs in the page MAIN world, no module imports allowed.
- * All arguments are JSON-serializable.
- */
-function injectedResolveEditor(
-  el: Element | null,
-  siteHint: {
-    framework: string;
-    semanticKeyMode?: "trusted";
-    clickMode?: "trusted";
-  } | null,
-): {
-  name: string;                                    // framework name
-  root: Element;                                   // actual editor root element
-  hints: {
-    typeMode: "synthetic";                         // always synthetic for rich editors
-    semanticKeyMode: "synthetic" | "trusted";
-    clickMode?: "trusted";
-  };
-  source: "site" | "element";
-} | null {
-  if (!el) return null;
-
-  const REGISTRY: Array<{
-    name: string;
-    match: string;                                 // CSS selector
-    drillFrom: string | null;                      // CSS selector for wrapper (e.g. [role="textbox"])
-    typeMode: "synthetic";
-    semanticKeyMode: "synthetic" | "trusted";
-  }> = [
-    { name: "quill",       match: ".ql-editor",                   drillFrom: "[role=\"textbox\"]", typeMode: "synthetic", semanticKeyMode: "trusted" },
-    { name: "prosemirror", match: ".ProseMirror",                 drillFrom: "[role=\"textbox\"]", typeMode: "synthetic", semanticKeyMode: "trusted" },
-    { name: "slate",       match: "[data-slate-editor=\"true\"]", drillFrom: "[role=\"textbox\"]", typeMode: "synthetic", semanticKeyMode: "trusted" },
-    { name: "codemirror",  match: ".cm-content",                  drillFrom: null,                typeMode: "synthetic", semanticKeyMode: "synthetic" },
-  ];
-
-  // Tier 1: site hint — look up the framework entry and find the editor root.
-  if (siteHint) {
-    const entry = REGISTRY.find((e) => e.name === siteHint.framework);
-    if (entry) {
-      const root =
-        (el.matches(entry.match) ? el : null) ??
-        el.querySelector(entry.match) ??
-        el.closest(entry.match) ??
-        document.querySelector(entry.match);
-      return {
-        name: entry.name,
-        root: root ?? el,
-        hints: {
-          typeMode: entry.typeMode,
-          semanticKeyMode: siteHint.semanticKeyMode ?? entry.semanticKeyMode,
-          ...(siteHint.clickMode ? { clickMode: siteHint.clickMode } : {}),
-        },
-        source: "site",
-      };
-    }
-    // Site hint has a framework we don't have selectors for (e.g. gmail /
-    // gdocs-canvas / figma-canvas / custom-contenteditable). Still return
-    // hints so the dispatch layer can honour semanticKeyMode / clickMode,
-    // but root stays as el.
-    return {
-      name: siteHint.framework,
-      root: el,
-      hints: {
-        typeMode: "synthetic",
-        semanticKeyMode: siteHint.semanticKeyMode ?? "synthetic",
-        ...(siteHint.clickMode ? { clickMode: siteHint.clickMode } : {}),
-      },
-      source: "site",
-    };
-  }
-
-  // Tier 2: element fingerprint — walk the registry against the element.
-  for (const entry of REGISTRY) {
-    if (el.matches(entry.match)) {
-      return {
-        name: entry.name,
-        root: el,
-        hints: { typeMode: entry.typeMode, semanticKeyMode: entry.semanticKeyMode },
-        source: "element",
-      };
-    }
-    const inner = el.querySelector(entry.match);
-    if (inner) {
-      return {
-        name: entry.name,
-        root: inner,
-        hints: { typeMode: entry.typeMode, semanticKeyMode: entry.semanticKeyMode },
-        source: "element",
-      };
-    }
-    const outer = el.closest(entry.match);
-    if (outer) {
-      return {
-        name: entry.name,
-        root: outer,
-        hints: { typeMode: entry.typeMode, semanticKeyMode: entry.semanticKeyMode },
-        source: "element",
-      };
-    }
-  }
-
-  return null;
-}
-
 // ---------------------------------------------------------------------------
 // Param parsing
 // ---------------------------------------------------------------------------
@@ -1629,14 +1185,6 @@ function modifierFlags(mods: readonly Modifier[]): {
   };
 }
 
-function parseClickMode(raw: unknown): ClickMode | undefined {
-  if (raw === undefined) return undefined;
-  if (raw !== "synthetic" && raw !== "trusted") {
-    throw codedError("INVALID_PARAMS", "mode must be synthetic|trusted");
-  }
-  return raw;
-}
-
 function parseClick(raw: Record<string, unknown>): ClickParams {
   const tab_id = raw["tab_id"];
   const ref = raw["ref"];
@@ -1654,8 +1202,6 @@ function parseClick(raw: Record<string, unknown>): ClickParams {
     button: (button as ClickParams["button"]) ?? "left",
     modifiers: parseModifiers(raw["modifiers"]),
   };
-  const mode = parseClickMode(raw["mode"]);
-  if (mode !== undefined) result.mode = mode;
   // observe_effects defaults to true; only false explicitly disables observation.
   if (raw["observe_effects"] === false) result.observe_effects = false;
   const expectEffect = parseExpectEffect(raw["expect_effect"]);
@@ -1679,16 +1225,13 @@ function parseClickAt(raw: Record<string, unknown>): ClickAtParams {
     throw codedError("INVALID_PARAMS", "button must be left|middle|right");
   }
   const mods = parseModifiers(raw["modifiers"]);
-  const result: ClickAtParams = {
+  return {
     tab_id,
     x,
     y,
     button: (button as ClickAtParams["button"]) ?? "left",
     modifiers: mods,
   };
-  const mode = parseClickMode(raw["mode"]);
-  if (mode !== undefined) result.mode = mode;
-  return result;
 }
 
 function parseType(raw: Record<string, unknown>): TypeParams {
@@ -1701,8 +1244,8 @@ function parseType(raw: Record<string, unknown>): TypeParams {
   }
   if (typeof text !== "string") throw codedError("INVALID_PARAMS", "text must be a string");
   const mode = raw["mode"];
-  if (mode !== undefined && mode !== "keystroke" && mode !== "paste" && mode !== "trusted") {
-    throw codedError("INVALID_PARAMS", "mode must be keystroke|paste|trusted");
+  if (mode !== undefined && mode !== "keystroke" && mode !== "paste") {
+    throw codedError("INVALID_PARAMS", "mode must be keystroke|paste");
   }
   const submit = raw["submit"];
   const clearFirst = raw["clear_first"];
@@ -1725,8 +1268,8 @@ function parseType(raw: Record<string, unknown>): TypeParams {
     text,
     submit: typeof submit === "boolean" ? submit : false,
     clear_first: typeof clearFirst === "boolean" ? clearFirst : false,
+    mode: mode !== undefined ? (mode as TypeMode) : undefined,
   };
-  if (mode !== undefined) result.mode = mode as TypeMode;
   if (clearMode !== undefined) result.clear_mode = clearMode as ClearMode;
   if (typeof delay === "number") result.delay_ms = delay;
   // observe_effects defaults to true; only false explicitly disables observation.
@@ -1820,7 +1363,6 @@ function parseHover(raw: Record<string, unknown>): HoverParams {
   return { tab_id, ref };
 }
 
-type FindReplaceMode = "synthetic" | "trusted";
 type FindReplaceOccurrence = "first" | "all";
 
 interface FindReplaceParams {
@@ -1829,7 +1371,6 @@ interface FindReplaceParams {
   find: string;
   replace: string;
   occurrence: FindReplaceOccurrence;
-  mode?: FindReplaceMode;
   case_sensitive: boolean;
 }
 
@@ -1862,14 +1403,6 @@ function parseFindAndReplace(raw: Record<string, unknown>): FindReplaceParams {
     }
     occurrence = occurrenceRaw;
   }
-  const modeRaw = raw["mode"];
-  let mode: FindReplaceMode | undefined;
-  if (modeRaw !== undefined) {
-    if (modeRaw !== "synthetic" && modeRaw !== "trusted") {
-      throw codedError("INVALID_PARAMS", "mode must be 'synthetic' or 'trusted'");
-    }
-    mode = modeRaw;
-  }
   const caseRaw = raw["case_sensitive"];
   let case_sensitive = true;
   if (caseRaw !== undefined) {
@@ -1886,7 +1419,6 @@ function parseFindAndReplace(raw: Record<string, unknown>): FindReplaceParams {
     case_sensitive,
   };
   if (ref !== undefined) out.ref = ref;
-  if (mode !== undefined) out.mode = mode;
   return out;
 }
 
@@ -1913,25 +1445,6 @@ const BUTTON_INDEX: Record<NonNullable<ClickParams["button"]>, number> = {
   middle: 1,
   right: 2,
 };
-
-/**
- * Resolve a selector to its viewport-centered (x, y), scrolling it into view.
- * Used by trusted-mode click; CDP's Input.dispatchMouseEvent wants coords.
- */
-function injectedResolveCenter(selector: string): { found: boolean; x?: number; y?: number } {
-  const el = document.querySelector(selector) as HTMLElement | null;
-  if (el === null) return { found: false };
-  try { el.scrollIntoView({ block: "center", inline: "center" }); } catch { /* ignore */ }
-  const rect = el.getBoundingClientRect();
-  return { found: true, x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
-}
-
-function injectedFocusSelector(selector: string): { found: boolean } {
-  const el = document.querySelector(selector) as HTMLElement | null;
-  if (el === null) return { found: false };
-  try { el.focus(); } catch { /* ignore */ }
-  return { found: true };
-}
 
 /**
  * Best-effort overlay dismissal: press ESC, then if we can identify the
@@ -2033,147 +1546,6 @@ function injectedClickAtPoint(
   el.click();
 }
 
-async function performTrustedClick(
-  cdp: CdpManager,
-  chromeTabId: number,
-  x: number,
-  y: number,
-  button: 0 | 1 | 2,
-  modifiers: readonly Modifier[],
-): Promise<void> {
-  const btn = CDP_BUTTON_NAME[button];
-  const buttons = CDP_BUTTONS_MASK[button];
-  const mods = cdpModifiers(modifiers);
-  await cdp.withAttach(chromeTabId, async () => {
-    await cdp.send(chromeTabId, "Input.dispatchMouseEvent", {
-      type: "mouseMoved",
-      x, y,
-      button: "none",
-      buttons: 0,
-      modifiers: mods,
-    });
-    await cdp.send(chromeTabId, "Input.dispatchMouseEvent", {
-      type: "mousePressed",
-      x, y,
-      button: btn,
-      buttons,
-      clickCount: 1,
-      modifiers: mods,
-    });
-    await cdp.send(chromeTabId, "Input.dispatchMouseEvent", {
-      type: "mouseReleased",
-      x, y,
-      button: btn,
-      buttons: 0,
-      clickCount: 1,
-      modifiers: mods,
-    });
-  });
-}
-
-async function performTrustedType(
-  cdp: CdpManager,
-  chromeTabId: number,
-  text: string,
-  delayMs: number,
-  selector: string,
-): Promise<{ modeUsed: "insertText" | "trusted"; editorName: string | null }> {
-  // Detect whether the focused element is a rich-text editor (Quill /
-  // ProseMirror / Slate). For those frameworks, the per-char
-  // keyDown+char+keyUp sequence double-inserts every character: the CDP
-  // Input.dispatchKeyEvent char event triggers native contenteditable
-  // insertion AND the framework's own beforeinput → Delta/document handler.
-  // Input.insertText fires a single beforeinput(insertText) and does NOT
-  // also trigger native insertion, so the double-insert is structurally
-  // impossible.
-  //
-  // CodeMirror and unknown/custom editors keep the per-char loop because
-  // CM6 handles trusted keys natively without a parallel framework path.
-  const RICH_EDITOR_NAMES = new Set(["quill", "prosemirror", "slate"]);
-  const siteHint = await getSiteHintForTab(chromeTabId);
-  // Resolve the editor type in the page world. injectedResolveEditor cannot
-  // receive a live Element across the serialization boundary, so we use a
-  // thin wrapper that calls document.querySelector(selector) inside the page
-  // and passes the element directly to the same detection logic. The full
-  // injectedResolveEditor function is not re-used here to avoid the
-  // serialisation complexity of its return type — we only need the name.
-  const editorResult = await execInTab(
-    chromeTabId,
-    (sel: string, hint: { framework: string; semanticKeyMode?: "trusted"; clickMode?: "trusted" } | null) => {
-      const el = document.querySelector(sel) as Element | null;
-      if (!el) return null;
-      // Minimal registry — only the three frameworks where Input.insertText
-      // eliminates the double-insert. CodeMirror uses the per-char loop.
-      const REGISTRY: Array<{ name: string; match: string }> = [
-        { name: "quill",       match: ".ql-editor" },
-        { name: "prosemirror", match: ".ProseMirror" },
-        { name: "slate",       match: "[data-slate-editor=\"true\"]" },
-      ];
-      // Tier 1: site hint names one of the three frameworks explicitly.
-      if (hint) {
-        const entry = REGISTRY.find((e) => e.name === hint.framework);
-        if (entry) return { name: entry.name, source: "site" as const };
-      }
-      // Tier 2: element fingerprint — check the element itself and its subtree.
-      for (const entry of REGISTRY) {
-        if (
-          el.matches(entry.match) ||
-          el.querySelector(entry.match) !== null ||
-          el.closest(entry.match) !== null
-        ) {
-          return { name: entry.name, source: "element" as const };
-        }
-      }
-      return null;
-    },
-    [selector, siteHint] as const,
-  ).catch(() => null);
-
-  const useInsertText = editorResult !== null && RICH_EDITOR_NAMES.has(editorResult.name);
-
-  await cdp.withAttach(chromeTabId, async () => {
-    if (useInsertText) {
-      // Single Input.insertText call: fires one beforeinput(insertText)
-      // which Quill / ProseMirror / Slate handle through their documented
-      // path. The browser does NOT also natively insert the text, so the
-      // double-insert observed on Slack ("DDoonnee SSiirr") is impossible.
-      await cdp.send(chromeTabId, "Input.insertText", { text });
-      return;
-    }
-    // Plain inputs / textareas / CodeMirror / unknown: existing per-char
-    // keyDown + char + keyUp loop. Behaviour unchanged.
-    for (const ch of text) {
-      // keyDown + char + keyUp is what CDP treats as a full keystroke. The
-      // "char" event with `text` is the one that actually inserts into
-      // focused fields — keyDown/keyUp alone don't mutate value.
-      await cdp.send(chromeTabId, "Input.dispatchKeyEvent", {
-        type: "keyDown",
-        text: ch.length === 1 ? ch : undefined,
-        unmodifiedText: ch.length === 1 ? ch : undefined,
-        key: ch,
-      });
-      await cdp.send(chromeTabId, "Input.dispatchKeyEvent", {
-        type: "char",
-        text: ch,
-        unmodifiedText: ch,
-        key: ch,
-      });
-      await cdp.send(chromeTabId, "Input.dispatchKeyEvent", {
-        type: "keyUp",
-        key: ch,
-      });
-      if (delayMs > 0) {
-        await new Promise<void>((r) => setTimeout(r, delayMs));
-      }
-    }
-  });
-
-  return {
-    modeUsed: useInsertText ? "insertText" : "trusted",
-    editorName: editorResult?.name ?? null,
-  };
-}
-
 export function registerInputHandlers(router: Router, opts: InputOpts): void {
   const { tabIdMap, refCache, cdp, network } = opts;
 
@@ -2183,9 +1555,6 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       raw,
     ): Promise<{
       clicked: boolean;
-      mode: ClickMode;
-      mode_used: ClickMode;
-      site?: string;
       dismissed_overlay?: boolean;
       occluded?: boolean;
       occluder?: { tag: string; text: string; role: string | null } | null;
@@ -2199,80 +1568,8 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       const selector = resolveSelector(refCache, params.tab_id, params.ref);
       const button = BUTTON_INDEX[params.button ?? "left"];
       const modifiers = params.modifiers ?? [];
-      // observe_effects defaults to true; callers pass false to opt out.
       const observeEffects = params.observe_effects !== false;
       const expectEffect = params.expect_effect;
-
-      // Auto-escalate to trusted mode on Tier 1 canvas apps when the caller
-      // did not explicitly specify a mode. Sites like Figma, Google Docs,
-      // Canva, Miro, Whimsical, and Figjam gate on isTrusted for click events.
-      // observed_hints from the bridge (learned from past observations) are
-      // merged over SITE_REGISTRY defaults with higher precedence.
-      let mode: ClickMode = params.mode ?? "synthetic";
-      let siteHostname: string | undefined;
-      if (params.mode === undefined) {
-        // Caller's explicit mode beats site hint auto-escalation.
-        const observedHints = parseObservedHints(raw["observed_hints"]);
-        const siteHint = await getSiteHintForTab(chromeId, observedHints);
-        if (siteHint?.clickMode === "trusted") {
-          mode = "trusted";
-          // Retrieve the hostname for the site field in the response.
-          try {
-            const tab = await chrome.tabs.get(chromeId);
-            if (tab.url) siteHostname = new URL(tab.url).hostname;
-          } catch { /* ignore */ }
-        }
-      }
-
-      if (mode === "trusted") {
-        const center = await execInTab(chromeId, injectedResolveCenter, [selector] as const);
-        if (center.found === false || center.x === undefined || center.y === undefined) {
-          throw codedError(
-            "REF_STALE",
-            `ref ${params.ref} no longer resolves in tab ${params.tab_id}`,
-          );
-        }
-
-        // Wrap just the trusted dispatch (not the ref-resolution above).
-        const dispatchTrusted = async (): Promise<{
-          clicked: true;
-          mode: ClickMode;
-          mode_used: ClickMode;
-          site?: string;
-        }> => {
-          await performTrustedClick(
-            cdp,
-            chromeId,
-            center.x!,
-            center.y!,
-            button as 0 | 1 | 2,
-            modifiers,
-          );
-          const r: { clicked: true; mode: ClickMode; mode_used: ClickMode; site?: string } = {
-            clicked: true,
-            mode,
-            mode_used: mode,
-          };
-          if (siteHostname !== undefined) r.site = siteHostname;
-          return r;
-        };
-
-        if (observeEffects) {
-          const { result, effect } = await withEffectObservation(
-            { chromeTabId: chromeId, windowMs: 300, networkTracker: network },
-            dispatchTrusted,
-          );
-          const warning = checkEffectExpectation(effect, expectEffect);
-          const out: typeof result & { page_effect: PageEffect; warnings?: string[] } = { ...result, page_effect: effect };
-          if (warning !== null) out.warnings = [warning];
-          return out;
-        }
-        if (expectEffect !== undefined) {
-          const r = await dispatchTrusted();
-          return { ...r, warnings: ["expect_effect set but observe_effects:false — no effect data to verify against"] };
-        }
-        return dispatchTrusted();
-      }
 
       const mods = modifierFlags(modifiers);
       const dismissOverlay = raw["dismiss_overlay"] === true;
@@ -2288,8 +1585,6 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
         const dismiss = await execInTab(chromeId, injectedDismissOverlay, [selector] as const);
         if (dismiss.dismissed) {
           dismissedOverlay = true;
-          // One retry. If it's still occluded, surface that — the caller can
-          // decide whether to escalate to trusted mode, navigate away, etc.
           res = await execInTab(chromeId, injectedClick, [selector, button, mods] as const);
           if (res.found === false) {
             throw codedError(
@@ -2300,33 +1595,24 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
         }
       }
 
-      // Wrap only the final dispatch + result-build. The retry loop above
-      // (dismiss_overlay) runs outside the observation window — only the last
-      // successful dispatch is observed.
-      type SyntheticResult = {
+      type ClickResult = {
         clicked: boolean;
-        mode: ClickMode;
-        mode_used: ClickMode;
-        site?: string;
         dismissed_overlay?: boolean;
         occluded?: boolean;
         occluder?: { tag: string; text: string; role: string | null } | null;
         retargeted?: boolean;
         suggestion?: string;
       };
-      const buildSyntheticResult = (): SyntheticResult => {
-        const r: SyntheticResult = { clicked: true, mode, mode_used: mode };
-        if (siteHostname !== undefined) r.site = siteHostname;
+      const buildResult = (): ClickResult => {
+        const r: ClickResult = { clicked: true };
         if (dismissedOverlay) r.dismissed_overlay = true;
         if (res.occluded === true) {
           r.occluded = true;
           r.occluder = res.occluder ?? null;
           if (!dismissOverlay) {
-            // dismiss_overlay was not requested — click was absorbed by overlay.
             r.clicked = false;
             r.suggestion = "retry with dismiss_overlay: true";
           } else {
-            // dismiss_overlay was attempted but the target is still occluded.
             r.clicked = false;
             r.suggestion =
               "overlay could not be dismissed; target element may be permanently covered";
@@ -2339,7 +1625,7 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       if (observeEffects) {
         const { result, effect } = await withEffectObservation(
           { chromeTabId: chromeId, windowMs: 300, networkTracker: network },
-          async () => buildSyntheticResult(),
+          async () => buildResult(),
         );
         const warning = checkEffectExpectation(effect, expectEffect);
         const out: typeof result & { page_effect: PageEffect; warnings?: string[] } = { ...result, page_effect: effect };
@@ -2347,10 +1633,10 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
         return out;
       }
       if (expectEffect !== undefined) {
-        const r = buildSyntheticResult();
+        const r = buildResult();
         return { ...r, warnings: ["expect_effect set but observe_effects:false — no effect data to verify against"] };
       }
-      return buildSyntheticResult();
+      return buildResult();
     },
   );
 
@@ -2358,32 +1644,17 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
     "browser_click_at",
     async (
       raw,
-    ): Promise<{ clicked: true; mode: ClickMode; x: number; y: number }> => {
+    ): Promise<{ clicked: true; x: number; y: number }> => {
       const params = parseClickAt(raw);
       const chromeId = resolveChromeId(tabIdMap, params.tab_id);
-      const mode: ClickMode = params.mode ?? "synthetic";
       const button = BUTTON_INDEX[params.button ?? "left"];
       const modifiers = params.modifiers ?? [];
-      if (mode === "trusted") {
-        await performTrustedClick(
-          cdp,
-          chromeId,
-          params.x,
-          params.y,
-          button as 0 | 1 | 2,
-          modifiers,
-        );
-        return { clicked: true, mode, x: params.x, y: params.y };
-      }
-      // Synthetic fallback: synthesize the click via executeScript at the
-      // coordinates. elementFromPoint picks the top element; we dispatch the
-      // usual pointer/mouse sequence on it.
       await execInTab(
         chromeId,
         injectedClickAtPoint,
         [params.x, params.y, button, modifierFlags(modifiers)] as const,
       );
-      return { clicked: true, mode, x: params.x, y: params.y };
+      return { clicked: true, x: params.x, y: params.y };
     },
   );
 
@@ -2462,9 +1733,6 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
     async (raw): Promise<{
       typed: number;
       mode: TypeMode;
-      mode_used: TypeMode | "insertText";
-      editor?: string;
-      site?: string;
       cleared?: boolean;
       page_effect?: PageEffect;
       warnings?: string[];
@@ -2474,125 +1742,10 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       const selector = resolveSelector(refCache, params.tab_id, params.ref);
       const submit = params.submit ?? false;
       const clearMode = resolveClearMode(params);
-      // observe_effects defaults to true; callers pass false to opt out.
       const observeEffects = params.observe_effects !== false;
       const expectEffect = params.expect_effect;
       let cleared: boolean | undefined;
-
-      // Apply observed_hints: if the bridge observed that synthetic typing is
-      // ineffective on this hostname, escalate to trusted (when the caller
-      // didn't explicitly specify a mode).
-      const typeObservedHints = parseObservedHints(raw["observed_hints"]);
-      const escalateType =
-        params.mode === undefined &&
-        typeObservedHints?.typeMode === "trusted";
-      const mode: TypeMode = escalateType
-        ? "trusted"
-        : resolveTypeMode(params.text, params.mode);
-      if (escalateType) {
-        console.log(
-          `[browserops] observed_hints:typeMode=trusted overriding synthetic for tab ${params.tab_id}`,
-        );
-      }
-
-      if (mode === "trusted") {
-        // Focus the element first (via executeScript), then let CDP do the
-        // trusted keystrokes at the currently-focused field.
-        const focused = await execInTab(chromeId, injectedFocusSelector, [selector] as const);
-        if (focused.found === false) {
-          throw codedError(
-            "REF_STALE",
-            `ref ${params.ref} no longer resolves in tab ${params.tab_id}`,
-          );
-        }
-        if (clearMode !== undefined) {
-          // Select-all + delete via CDP keystrokes. Meta on mac, Control elsewhere.
-          // We can't easily detect platform from the SW; send both modifiers.
-          await cdp.withAttach(chromeId, async () => {
-            await cdp.send(chromeId, "Input.dispatchKeyEvent", {
-              type: "keyDown", key: "a", text: "a",
-              modifiers: CDP_MOD.Control | CDP_MOD.Meta,
-            });
-            await cdp.send(chromeId, "Input.dispatchKeyEvent", {
-              type: "keyUp", key: "a",
-              modifiers: CDP_MOD.Control | CDP_MOD.Meta,
-            });
-            await cdp.send(chromeId, "Input.dispatchKeyEvent", {
-              type: "keyDown", key: "Delete",
-            });
-            await cdp.send(chromeId, "Input.dispatchKeyEvent", {
-              type: "keyUp", key: "Delete",
-            });
-          });
-          cleared = true;
-        }
-
-        // Wrap the actual text dispatch (performTrustedType + optional submit).
-        // Focus-drilling and clear happen before the observation window.
-        const dispatchTrusted = async (): Promise<{
-          typed: number;
-          mode: TypeMode;
-          mode_used: TypeMode | "insertText";
-          editor?: string;
-          site?: string;
-          cleared?: boolean;
-        }> => {
-          const trustedInfo = await performTrustedType(cdp, chromeId, params.text, params.delay_ms ?? 0, selector);
-          if (submit) {
-            await cdp.withAttach(chromeId, async () => {
-              await cdp.send(chromeId, "Input.dispatchKeyEvent", {
-                type: "keyDown", key: "Enter", text: "\r",
-              });
-              await cdp.send(chromeId, "Input.dispatchKeyEvent", {
-                type: "keyUp", key: "Enter",
-              });
-            });
-          }
-          // Resolve site hostname if the site hint fired (editor detected via site tier).
-          let siteHostname: string | undefined;
-          if (trustedInfo.editorName !== null) {
-            const siteHint = await getSiteHintForTab(chromeId);
-            if (siteHint !== null) {
-              try {
-                const tab = await chrome.tabs.get(chromeId);
-                if (tab.url) siteHostname = new URL(tab.url).hostname;
-              } catch { /* ignore */ }
-            }
-          }
-          const r: {
-            typed: number;
-            mode: TypeMode;
-            mode_used: TypeMode | "insertText";
-            editor?: string;
-            site?: string;
-            cleared?: boolean;
-          } = {
-            typed: params.text.length,
-            mode,
-            mode_used: trustedInfo.modeUsed,
-          };
-          if (trustedInfo.editorName !== null) r.editor = trustedInfo.editorName;
-          if (siteHostname !== undefined) r.site = siteHostname;
-          if (cleared !== undefined) r.cleared = cleared;
-          return r;
-        };
-
-        if (observeEffects) {
-          const { result, effect } = await withEffectObservation(
-            { chromeTabId: chromeId, windowMs: 300, networkTracker: network },
-            dispatchTrusted,
-          );
-          const warning = checkEffectExpectation(effect, expectEffect);
-          const out: typeof result & { page_effect: PageEffect; warnings?: string[] } = { ...result, page_effect: effect };
-          if (warning !== null) out.warnings = [warning];
-          return out;
-        }
-        if (expectEffect !== undefined) {
-          const r = await dispatchTrusted();
-          return { ...r, warnings: ["expect_effect set but observe_effects:false — no effect data to verify against"] };
-        }
-        return dispatchTrusted();
-      }
+      const mode: TypeMode = resolveTypeMode(params.text, params.mode);
 
       if (clearMode !== undefined) {
         const clearRes = await execInTab(
@@ -2609,16 +1762,12 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
         cleared = clearRes.cleared;
       }
 
-      // Wrap only the final dispatch. Clear happens before the observation window.
-      type SyntheticTypeResult = {
+      type TypeResult = {
         typed: number;
         mode: TypeMode;
-        mode_used: TypeMode | "insertText";
-        editor?: string;
-        site?: string;
         cleared?: boolean;
       };
-      const dispatchSynthetic = async (): Promise<SyntheticTypeResult> => {
+      const dispatchSynthetic = async (): Promise<TypeResult> => {
         let res: { found: boolean; typed: number; reflected: number };
         if (mode === "paste") {
           res = await execInTab(
@@ -2645,7 +1794,7 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
         if (params.text.length > 0 && res.reflected === 0) {
           throw codedError(
             "WRITE_NOT_REFLECTED",
-            `typed ${res.typed} characters but field content did not change; the target may be a rich-text wrapper that requires mode="trusted" or a different selector`,
+            `typed ${res.typed} characters but field content did not change; the target may need a different selector or browser_execute_js`,
           );
         }
         if (params.text.length > 0 && res.reflected >= params.text.length * 2) {
@@ -2654,11 +1803,7 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
             `typed ${res.typed} characters but field reflected ${res.reflected} — likely double-insertion by a stacked beforeinput handler`,
           );
         }
-        const r: SyntheticTypeResult = {
-          typed: res.reflected,
-          mode,
-          mode_used: mode,
-        };
+        const r: TypeResult = { typed: res.reflected, mode };
         if (cleared !== undefined) r.cleared = cleared;
         return r;
       };
@@ -2683,21 +1828,13 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
 
   router.register("browser_press", async (raw): Promise<{
     pressed: true;
-    dispatch: "synthetic" | "trusted";
-    editor?: string;
-    site?: string;
     page_effect?: PageEffect;
     warnings?: string[];
   }> => {
     const params = parsePress(raw);
     const chromeId = resolveChromeId(tabIdMap, params.tab_id);
-    // observe_effects defaults to true; callers pass false to opt out.
     const observeEffects = params.observe_effects !== false;
     const expectEffect = params.expect_effect;
-    // Partition into leading modifiers + trailing key. If the array is
-    // entirely modifiers, fire the last one as the key (matches "hold Ctrl"
-    // semantics for chord primitives). Accepts Primary as a modifier and
-    // resolves it to Meta/Control based on the extension's platform.
     const keys = params.keys;
     const terminal = keys[keys.length - 1] ?? "";
     const modsIn: ModifierInput[] = [];
@@ -2708,154 +1845,24 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       }
     }
     const mods = resolvePrimary(modsIn);
-    // Deny-listed chords (close tab, quit browser, new tab/window, etc.)
-    // are refused outright — agents have browser_close_tab / browser_new_tab
-    // for those intents.
     const denyReason = isDestructiveChord(terminal, mods);
     if (denyReason !== null) {
       throw codedError("RISKY_ACTION_DENIED", `refused destructive chord: ${denyReason}`);
     }
 
-    // Semantic keys that rich editors gate on isTrusted. Only Enter, Escape,
-    // and Tab are treated as semantic — all other keys stay on the synthetic
-    // path regardless of framework.
-    const SEMANTIC_KEYS = new Set(["Enter", "Escape", "Tab"]);
-    const isSemanticKey = SEMANTIC_KEYS.has(terminal);
-
-    // Probe the active element (and optionally resolve the site hint) to decide
-    // whether to use CDP trusted dispatch. We do this even for non-semantic keys
-    // so Part A (wrapper drilling) can redirect the synthetic dispatch to the
-    // real editor root instead of the outer role="textbox" wrapper.
-    // observed_hints from the bridge (if present) are merged over SITE_REGISTRY.
-    const pressObservedHints = parseObservedHints(raw["observed_hints"]);
-    const siteHint = await getSiteHintForTab(chromeId, pressObservedHints);
-    const probe = await execInTab(
-      chromeId,
-      injectedProbeActiveEditor,
-      [siteHint] as const,
-    ).catch(() => ({ editor: null as string | null, semanticKeyMode: "synthetic" as const, rootSelector: null as string | null }));
-
-    // Part B: CDP trusted dispatch for Enter/Escape/Tab on matched rich editors
-    // with semanticKeyMode === "trusted". This is how performTrustedType handles
-    // trusted keys — reuse the same cdp.withAttach + Input.dispatchKeyEvent pattern.
-    if (isSemanticKey && probe.editor !== null && probe.semanticKeyMode === "trusted") {
-      // Part C: apply modifier bitmask to the CDP events.
-      // Sequence: modifier keyDowns → key keyDown → key keyUp → modifier keyUps.
-      // CDP modifier bitmask: Alt=1, Control=2, Meta=4, Shift=8.
-      const modBitmask = cdpModifiers(mods);
-
-      // Key metadata for well-known semantic keys.
-      const CDP_KEY_META: Record<string, { text?: string; windowsVirtualKeyCode?: number }> = {
-        "Enter":  { text: "\r", windowsVirtualKeyCode: 13 },
-        "Escape": { windowsVirtualKeyCode: 27 },
-        "Tab":    { text: "\t", windowsVirtualKeyCode: 9 },
-      };
-      const keyMeta = CDP_KEY_META[terminal] ?? {};
-
-      const dispatchTrustedPress = async (): Promise<{
-        pressed: true;
-        dispatch: "trusted";
-        editor?: string;
-        site?: string;
-      }> => {
-        await cdp.withAttach(chromeId, async () => {
-          // Fire modifier keyDowns first.
-          for (const mod of mods) {
-            await cdp.send(chromeId, "Input.dispatchKeyEvent", {
-              type: "keyDown",
-              key: mod,
-              modifiers: modBitmask,
-            });
-          }
-          // Key down.
-          await cdp.send(chromeId, "Input.dispatchKeyEvent", {
-            type: "keyDown",
-            key: terminal,
-            modifiers: modBitmask,
-            ...keyMeta,
-          });
-          // Key up.
-          await cdp.send(chromeId, "Input.dispatchKeyEvent", {
-            type: "keyUp",
-            key: terminal,
-            modifiers: modBitmask,
-          });
-          // Modifier keyUps (reverse order).
-          for (const mod of [...mods].reverse()) {
-            await cdp.send(chromeId, "Input.dispatchKeyEvent", {
-              type: "keyUp",
-              key: mod,
-              modifiers: modBitmask,
-            });
-          }
-        });
-        // Surface dispatch mode, editor framework, and site hint in response.
-        const r: { pressed: true; dispatch: "trusted"; editor?: string; site?: string } = {
-          pressed: true,
-          dispatch: "trusted",
-        };
-        if (probe.editor !== null) r.editor = probe.editor;
-        if (siteHint !== null) {
-          try {
-            const tab = await chrome.tabs.get(chromeId);
-            if (tab.url) r.site = new URL(tab.url).hostname;
-          } catch { /* ignore */ }
-        }
-        return r;
-      };
-
-      if (observeEffects) {
-        const { result, effect } = await withEffectObservation(
-          { chromeTabId: chromeId, windowMs: 300, networkTracker: network },
-          dispatchTrustedPress,
-        );
-        const warning = checkEffectExpectation(effect, expectEffect);
-        const out: typeof result & { page_effect: PageEffect; warnings?: string[] } = { ...result, page_effect: effect };
-        if (warning !== null) out.warnings = [warning];
-        return out;
-      }
-      if (expectEffect !== undefined) {
-        const r = await dispatchTrustedPress();
-        return { ...r, warnings: ["expect_effect set but observe_effects:false — no effect data to verify against"] };
-      }
-      return dispatchTrustedPress();
-    }
-
-    // Synthetic path: dispatch KeyboardEvent to the drilled editor root (if
-    // one was found) or document.activeElement. This fixes Part A — on Slack
-    // the activeElement is the outer role="textbox" wrapper, but Quill's
-    // keydown listener lives on the inner .ql-editor. For non-editor elements
-    // probe.rootSelector is null and behaviour is unchanged.
-    const dispatchSyntheticPress = async (): Promise<{
-      pressed: true;
-      dispatch: "synthetic";
-      editor?: string;
-      site?: string;
-    }> => {
+    const dispatchPress = async (): Promise<{ pressed: true }> => {
       await execInTab(
         chromeId,
         injectedPress,
-        [terminal, modifierFlags(mods), probe.rootSelector] as const,
+        [terminal, modifierFlags(mods)] as const,
       );
-      // Surface dispatch mode, editor framework, and site hint in response.
-      const r: { pressed: true; dispatch: "synthetic"; editor?: string; site?: string } = {
-        pressed: true,
-        dispatch: "synthetic",
-      };
-      if (probe.editor !== null) r.editor = probe.editor;
-      if (siteHint !== null) {
-        try {
-          const tab = await chrome.tabs.get(chromeId);
-          if (tab.url) r.site = new URL(tab.url).hostname;
-        } catch { /* ignore */ }
-      }
-      return r;
+      return { pressed: true };
     };
 
     if (observeEffects) {
       const { result, effect } = await withEffectObservation(
         { chromeTabId: chromeId, windowMs: 300, networkTracker: network },
-        dispatchSyntheticPress,
+        dispatchPress,
       );
       const warning = checkEffectExpectation(effect, expectEffect);
       const out: typeof result & { page_effect: PageEffect; warnings?: string[] } = { ...result, page_effect: effect };
@@ -2863,10 +1870,10 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       return out;
     }
     if (expectEffect !== undefined) {
-      const r = await dispatchSyntheticPress();
+      const r = await dispatchPress();
       return { ...r, warnings: ["expect_effect set but observe_effects:false — no effect data to verify against"] };
     }
-    return dispatchSyntheticPress();
+    return dispatchPress();
   });
 
   router.register("browser_scroll", async (raw): Promise<{ scrolled: true }> => {
@@ -2907,53 +1914,6 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       params.ref !== undefined
         ? resolveSelector(refCache, params.tab_id, params.ref)
         : null;
-    const mode: FindReplaceMode = params.mode ?? "synthetic";
-    if (mode === "trusted") {
-      const MAX_ITER = 1024;
-      let replaced = 0;
-      let searchFrom = 0;
-      let firstKind: "input" | "textarea" | "contenteditable" | null = null;
-      while (replaced < MAX_ITER) {
-        const sel = await execInTab(chromeId, injectedSelectMatchForTrusted, [
-          selectorArg,
-          params.find,
-          params.case_sensitive,
-          searchFrom,
-        ] as const);
-        if (sel.status === "no_target") {
-          if (replaced === 0) {
-            throw codedError(
-              "INVALID_PARAMS",
-              "no target element (ref was not provided and document.activeElement is not editable)",
-            );
-          }
-          break;
-        }
-        if (sel.status === "unsupported_kind") {
-          throw codedError(
-            "INTERNAL",
-            `element <${sel.tag}> is not editable (expected input, textarea, or contenteditable)`,
-          );
-        }
-        if (sel.status === "not_found") {
-          break;
-        }
-        firstKind = sel.kind;
-        await cdp.withAttach(chromeId, async () => {
-          await cdp.send(chromeId, "Input.insertText", { text: params.replace });
-        });
-        replaced += 1;
-        if (params.occurrence === "first") break;
-        // Advance search cursor past the inserted text so `replace` containing
-        // `find` can't loop.
-        searchFrom = sel.hit + params.replace.length;
-      }
-      if (replaced === 0) {
-        throw codedError("TEXT_NOT_FOUND", `substring not found in target element`);
-      }
-      void firstKind;
-      return { replaced, mode, used_fallback: false };
-    }
     const res = await execInTab(chromeId, injectedFindAndReplaceSynthetic, [
       selectorArg,
       params.find,
@@ -2978,7 +1938,6 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
     }
     return {
       replaced: res.replaced,
-      mode,
       used_fallback: res.used_fallback,
     };
   });
