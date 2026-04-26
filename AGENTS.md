@@ -74,9 +74,6 @@ When a composite procedure covers the full flow, the sub-agent brief references 
 Run example.qa_signup. Report the temp email used and the API key string.
 ```
 
-### Known procedure bugs fixed
-- `gmail.send_email` v2: `mode: trusted` removed from `fill_body` — caused doubled characters in Gmail's rich-text editor.
-
 ## Keyboard chords
 
 `browser_press` sends a keyboard chord to the focused element in a tab. The last entry of `keys` is the key; everything before it is a modifier.
