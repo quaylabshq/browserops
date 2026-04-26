@@ -23,7 +23,7 @@ interface SafetyPromptParams {
 }
 
 const SESSION_KEY = "pendingSafetyPrompt";
-const AUTO_APPROVE_KEY = "autoApprove";
+const REQUIRE_APPROVAL_KEY = "requireApproval";
 
 const pending = new Map<
   string,
@@ -31,8 +31,8 @@ const pending = new Map<
 >();
 
 async function isAutoApprove(): Promise<boolean> {
-  const s = await chrome.storage.session.get(AUTO_APPROVE_KEY);
-  return s[AUTO_APPROVE_KEY] === true;
+  const s = await chrome.storage.session.get(REQUIRE_APPROVAL_KEY);
+  return s[REQUIRE_APPROVAL_KEY] !== true;
 }
 
 function codedError(code: ErrorCode, message: string): Error {
