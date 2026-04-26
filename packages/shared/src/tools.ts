@@ -1209,6 +1209,36 @@ const executeJs: ToolDef = {
   ] as const,
 } as const;
 
+const setCdp: ToolDef = {
+  name: "browser_set_cdp",
+  description:
+    "Enable or disable persistent CDP (Chrome DevTools Protocol) attachment for a tab. " +
+    "When enabled, all input dispatch (click, type, press) routes through trusted CDP " +
+    "events instead of synthetic DOM events. Required for canvas apps (Figma, Google Docs, " +
+    "Sheets, Canva, Miro) that ignore untrusted events. Call after navigating to the site. " +
+    "Shows a 'controlled by automated software' banner while active.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["tab_id", "enabled"] as const,
+    properties: {
+      tab_id: tabIdSchema,
+      enabled: { type: "boolean" },
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["enabled"] as const,
+    properties: {
+      enabled: { type: "boolean" },
+    },
+  },
+  action_weight: 0.5,
+  risky: "never",
+  errorCodes: [...BASE_CODES, ...TAB_CODES, "CDP_ATTACH_FAILED"] as const,
+} as const;
+
 // ---------------------------------------------------------------------------
 // Procedures tools
 // ---------------------------------------------------------------------------
@@ -1658,6 +1688,7 @@ export const TOOL_DEFS: readonly ToolDef[] = [
   describeRef,
   querySelector,
   executeJs,
+  setCdp,
   proceduresList,
   proceduresSearch,
   proceduresGet,
