@@ -53,6 +53,8 @@ export interface ResponseErr {
     code: ErrorCode;
     message: string;
     details?: unknown;
+    next_action?: string;
+    diagnostic?: Record<string, unknown>;
   };
   meta?: ResponseMeta;
 }
