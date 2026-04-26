@@ -63,7 +63,9 @@ async function attemptPair(host: string, port: number): Promise<void> {
     return;
   }
   if (!res.ok) {
-    errorMsg.textContent = `Bridge replied ${res.status} ${res.statusText}.`;
+    const body = await res.text().catch(() => "");
+    const detail = body ? ` — ${body}` : "";
+    errorMsg.textContent = `Bridge replied ${res.status} ${res.statusText}${detail}.`;
     show("error");
     return;
   }
