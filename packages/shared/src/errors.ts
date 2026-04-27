@@ -17,6 +17,7 @@ export const ERROR_CODES = [
   "RISKY_ACTION_DENIED",
   "EXTENSION_DISCONNECTED",
   "INVALID_PARAMS",
+  "INVALID_STATE",
   "INTERNAL",
   // Procedure-memory errors (plan 06)
   "PROC_NOT_FOUND",
