@@ -8,6 +8,13 @@
 import * as fs from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname } from "node:path";
+import {
+  FEATURES,
+  FEATURE_METADATA,
+  isFeatureName,
+  resolveFeatures,
+  type FeatureName,
+} from "@browserops/shared";
 import { atomicWrite, backup } from "./fs.js";
 import { configPath, STATE_DIR } from "./paths.js";
 
@@ -16,9 +23,20 @@ export type LauncherId = "claude" | "codex" | "cursor";
 export interface BrowserOpsConfig {
   default_launcher?: LauncherId;
   safe_mode?: boolean;
+  /**
+   * Gated feature flags. The bridge reads this same file and uses
+   * resolveFeatures() to merge against FEATURE_METADATA defaults.
+   * Managed via `browserops feature enable/disable`, not `config set`.
+   */
+  features?: Partial<Record<FeatureName, boolean>>;
 }
 
-export type ConfigKey = keyof BrowserOpsConfig;
+/**
+ * Subset of BrowserOpsConfig keys managed by `browserops config set/get`.
+ * `features` is excluded — it has its own dedicated `feature` subcommand
+ * because the value is a sub-object, not a single primitive.
+ */
+export type ConfigKey = Exclude<keyof BrowserOpsConfig, "features">;
 
 const VALID_LAUNCHERS: readonly LauncherId[] = ["claude", "codex", "cursor"];
 
@@ -136,4 +154,79 @@ export async function getDefaultLauncher(): Promise<{
 export async function getSafeMode(): Promise<boolean> {
   const cfg = await readConfig();
   return cfg.safe_mode === true;
+}
+
+// ---------------------------------------------------------------------------
+// Gated features — managed via `browserops feature enable/disable`
+// ---------------------------------------------------------------------------
+
+export interface FeatureState {
+  name: FeatureName;
+  enabled: boolean;
+  /** Reason for the resolved state, useful in `feature list` output. */
+  source: "default" | "config";
+  description: string;
+  stability: "stable" | "experimental";
+}
+
+/** Resolve every known feature against the config file + manifest defaults. */
+export async function getFeatureStates(): Promise<FeatureState[]> {
+  const cfg = await readConfig();
+  const partial = cfg.features ?? {};
+  return FEATURES.map<FeatureState>((name) => {
+    const explicit = partial[name];
+    const enabled =
+      typeof explicit === "boolean" ? explicit : FEATURE_METADATA[name].default;
+    return {
+      name,
+      enabled,
+      source: typeof explicit === "boolean" ? "config" : "default",
+      description: FEATURE_METADATA[name].description,
+      stability: FEATURE_METADATA[name].stability,
+    };
+  });
+}
+
+/** Same as the bridge's resolveFeatures but reading the CLI's config layer. */
+export async function getEnabledFeatureSet(): Promise<Set<FeatureName>> {
+  const cfg = await readConfig();
+  return resolveFeatures(cfg.features);
+}
+
+/** Persist a single feature flag. */
+export async function setFeatureEnabled(
+  name: FeatureName,
+  enabled: boolean,
+): Promise<{ changed: boolean; backupPath?: string }> {
+  const cfg = await readConfig();
+  const current = cfg.features?.[name];
+  const desired = enabled;
+  if (current === desired) return { changed: false };
+  const next: BrowserOpsConfig = {
+    ...cfg,
+    features: { ...(cfg.features ?? {}), [name]: desired },
+  };
+  const { backupPath } = await writeConfig(next);
+  return { changed: true, ...(backupPath !== undefined ? { backupPath } : {}) };
+}
+
+/** Bulk-apply a partial feature record (for the init wizard). */
+export async function applyFeaturePartial(
+  partial: Partial<Record<FeatureName, boolean>>,
+): Promise<{ changed: boolean }> {
+  const cfg = await readConfig();
+  const merged = { ...(cfg.features ?? {}) };
+  let changed = false;
+  for (const [k, v] of Object.entries(partial)) {
+    if (!isFeatureName(k)) continue;
+    if (typeof v !== "boolean") continue;
+    if (merged[k] !== v) {
+      merged[k] = v;
+      changed = true;
+    }
+  }
+  if (!changed) return { changed: false };
+  const next: BrowserOpsConfig = { ...cfg, features: merged };
+  await writeConfig(next);
+  return { changed: true };
 }

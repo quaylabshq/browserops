@@ -18,8 +18,19 @@ import {
   type ClientId,
   type ClientInfo,
 } from "../installers/index.js";
-import { readConfig, setConfigValue } from "../lib/config.js";
+import {
+  readConfig,
+  setConfigValue,
+  applyFeaturePartial,
+  getFeatureStates,
+} from "../lib/config.js";
 import { installClaudeSkill } from "../installers/skill.js";
+import {
+  FEATURES,
+  FEATURE_METADATA,
+  isFeatureName,
+  type FeatureName,
+} from "@browserops/shared";
 
 export interface InitOpts {
   yes?: boolean;
@@ -29,6 +40,8 @@ export interface InitOpts {
   skill?: boolean;
   client?: string;
   dryRun?: boolean;
+  /** Comma-separated feature names to enable non-interactively. */
+  features?: string;
 }
 
 const ALL_CLIENT_IDS: ClientId[] = [
@@ -72,6 +85,7 @@ export async function runInit(opts: InitOpts = {}): Promise<void> {
 
   await copyExtensionFiles(opts.dryRun ?? false);
   await seedDefaultLauncher(opts.dryRun ?? false);
+  await configureFeatures(opts);
   printSafeModePolicy();
 
   if (opts.mcp === false) {
@@ -273,6 +287,86 @@ function describe(cl: ClientInfo): string {
   if (!cl.detected) return "not detected";
   if (cl.alreadyInstalled) return `already installed → ${cl.configPath}`;
   return cl.configPath;
+}
+
+// ---------------------------------------------------------------------------
+// Feature configuration — both teach and procedures default OFF and are
+// surfaced as opt-in prompts. --features=teach,procedures forces non-
+// interactive enable; --yes accepts the default (no features enabled).
+// ---------------------------------------------------------------------------
+
+async function configureFeatures(opts: InitOpts): Promise<void> {
+  // Explicit --features list wins over interactive prompts.
+  if (opts.features !== undefined) {
+    const explicit = parseFeatureList(opts.features);
+    const partial: Partial<Record<FeatureName, boolean>> = {};
+    for (const name of FEATURES) partial[name] = explicit.has(name);
+    const { changed } = await applyFeaturePartial(partial);
+    if (changed) {
+      const enabledList = [...explicit].join(", ") || "(none)";
+      ok(`features: ${enabledList}`);
+    } else {
+      info(`features: unchanged`);
+    }
+    return;
+  }
+
+  if (opts.yes) {
+    info(
+      `features: keeping defaults (off). Enable later with ${c.cyan("browserops feature enable <name>")}.`,
+    );
+    return;
+  }
+
+  process.stdout.write("\n");
+  process.stdout.write(c.bold("Optional experimental features\n"));
+  process.stdout.write(
+    `  ${dim("Both ship off by default — opt in only if you need them. You can flip these any time with `browserops feature enable/disable <name>`.")}\n`,
+  );
+
+  const states = await getFeatureStates();
+  const choices = states.map((s) => ({
+    title: `${s.name} ${dim("— " + s.description)}`,
+    value: s.name,
+    selected: s.enabled,
+  }));
+
+  const result = await prompts(
+    {
+      type: "multiselect",
+      name: "ids",
+      message: "Enable any?",
+      choices,
+      hint: "space to toggle · return to confirm",
+      instructions: false,
+    },
+    {
+      onCancel: () => {
+        info("feature setup cancelled — keeping current state");
+      },
+    },
+  );
+
+  const chosen = new Set<FeatureName>(
+    (result["ids"] as string[] | undefined ?? []).filter(isFeatureName),
+  );
+  const partial: Partial<Record<FeatureName, boolean>> = {};
+  for (const name of FEATURES) partial[name] = chosen.has(name);
+  await applyFeaturePartial(partial);
+  if (chosen.size === 0) {
+    info(`features: none enabled (default)`);
+  } else {
+    ok(`features: ${[...chosen].join(", ")}`);
+  }
+}
+
+function parseFeatureList(raw: string): Set<FeatureName> {
+  const out = new Set<FeatureName>();
+  for (const tok of raw.split(",").map((s) => s.trim()).filter(Boolean)) {
+    if (isFeatureName(tok)) out.add(tok);
+    else warn(`unknown feature "${tok}" (valid: ${FEATURES.join(", ")})`);
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
