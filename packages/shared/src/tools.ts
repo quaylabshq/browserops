@@ -1407,7 +1407,7 @@ const proceduresSearch: ToolDef = {
   description:
     "Full-text search over the procedure catalogue using pre-tokenized index fields. " +
     "Returns ranked metadata-only matches; retrieve the YAML body with procedures_get. " +
-    'REQUIRED ARGUMENTS: {"query": "<search tokens>"}. Example: {"query": "example login"}.',
+    'REQUIRED ARGUMENTS: {"query": "<search tokens>"}. Example: {"query": "github sign in"}.',
   inputSchema: {
     type: "object",
     additionalProperties: false,

@@ -76,7 +76,7 @@ Only screenshot when a step returns an error or unexpected state.
 When a composite procedure covers the full flow, the sub-agent brief references ONLY the composite name — one `procedures_get`, no re-planning steps.
 
 ```
-Run example.qa_signup. Report the temp email used and the API key string.
+Run gmail.send_email. Report whether the message was sent successfully.
 ```
 
 ## Keyboard chords
