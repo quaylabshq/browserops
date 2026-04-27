@@ -8,3 +8,4 @@ export * from "./procedures.js";
 export * from "./destructive-chords.js";
 export * from "./effects.js";
 export * from "./trace.js";
+export * from "./teach.js";
