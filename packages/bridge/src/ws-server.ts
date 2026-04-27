@@ -30,6 +30,14 @@ export interface WSBridgeOptions {
   logger: Logger;
   onEvent: (name: string, payload: Record<string, unknown>) => void;
   onConnectionChange?: (connected: boolean) => void;
+  /**
+   * Returns the bridge's currently-enabled feature names. Called at every
+   * HelloAck so the extension always sees the live set after a CLI toggle
+   * + daemon-reload, not the snapshot at WSBridge construction time.
+   */
+  getFeatures?: () => readonly string[];
+  /** Returns the resolved gated-domain glob list when the feature is on, undefined otherwise. */
+  getGatedDomains?: () => readonly string[] | undefined;
 }
 
 interface Pending {
@@ -58,6 +66,8 @@ export class WSBridge {
   private readonly logger: Logger;
   private readonly onEvent: (name: string, payload: Record<string, unknown>) => void;
   private readonly onConnectionChange?: (connected: boolean) => void;
+  private readonly getFeatures?: () => readonly string[];
+  private readonly getGatedDomains?: () => readonly string[] | undefined;
 
   private http?: HttpServer;
   private wss?: WebSocketServer;
@@ -81,6 +91,8 @@ export class WSBridge {
     this.logger = opts.logger;
     this.onEvent = opts.onEvent;
     this.onConnectionChange = opts.onConnectionChange;
+    this.getFeatures = opts.getFeatures;
+    this.getGatedDomains = opts.getGatedDomains;
 
     // 6-digit pair code, formatted "XXX-XXX" for readability. Regenerated on
     // every bridge startup — if the first /pair response is lost, the user
@@ -380,6 +392,10 @@ export class WSBridge {
           bridge_version: this.bridgeVersion,
           protocol_version: PROTOCOL_VERSION,
         };
+        const features = this.getFeatures?.();
+        if (features !== undefined) ack.features = [...features];
+        const gatedDomains = this.getGatedDomains?.();
+        if (gatedDomains !== undefined && gatedDomains.length > 0) ack.gated_domains = [...gatedDomains];
         try { ws.send(JSON.stringify(ack)); } catch (err) {
           void this.logger.write({ dir: "system", event: "ack_send_error", error: String(err) });
         }

@@ -19,7 +19,7 @@ export default defineManifest({
   manifest_version: 3,
   name: "BrowserOps",
   description: "Autonomous browser control for MCP-compatible agents.",
-  version: "0.1.0",
+  version: "0.0.4",
   minimum_chrome_version: "120",
   key: EXTENSION_KEY,
   permissions: ["tabs", "scripting", "debugger", "storage", "alarms", "webNavigation", "webRequest"],
@@ -51,7 +51,7 @@ export default defineManifest({
   // Expose the onboarding page so it can be opened directly via
   // chrome.tabs.create(chrome.runtime.getURL("src/onboard/index.html")) and
   // so Chrome serves it with the extension origin (needed for the /pair
-  // fetch to 127.0.0.1:8765 to be allowed by the bridge's origin check).
+  // fetch to 127.0.0.1:57321 to be allowed by the bridge's origin check).
   web_accessible_resources: [
     {
       resources: ["src/onboard/index.html"],

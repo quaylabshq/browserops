@@ -122,9 +122,20 @@ interface ExecuteJsParams {
   args?: readonly unknown[];
 }
 
-function codedError(code: ErrorCode, message: string): Error {
-  const err = new Error(message) as Error & { code: ErrorCode };
+interface ErrorHints {
+  next_action?: string;
+  diagnostic?: Record<string, unknown>;
+}
+
+function codedError(code: ErrorCode, message: string, hints?: ErrorHints): Error {
+  const err = new Error(message) as Error & {
+    code: ErrorCode;
+    next_action?: string;
+    diagnostic?: Record<string, unknown>;
+  };
   err.code = code;
+  if (hints?.next_action !== undefined) err.next_action = hints.next_action;
+  if (hints?.diagnostic !== undefined) err.diagnostic = hints.diagnostic;
   return err;
 }
 
@@ -147,11 +158,32 @@ interface ResolvedRef {
 function resolveRef(refCache: RefCache, tabId: string, ref: number): ResolvedRef {
   const snap = refCache.get(tabId);
   if (snap === undefined) {
-    throw codedError("REF_STALE", `no a11y snapshot for tab ${tabId}; call browser_read first`);
+    throw codedError(
+      "REF_STALE",
+      `no a11y snapshot for tab ${tabId}; call browser_read first`,
+      {
+        next_action:
+          "no a11y snapshot exists — call browser_quick_read or browser_read first to populate refs, then retry the action",
+        diagnostic: { tab_id: tabId, ref, snapshot_present: false },
+      },
+    );
   }
   const entry = snap.entries.get(ref);
   if (entry === undefined) {
-    throw codedError("REF_NOT_FOUND", `ref ${ref} not present in current snapshot for ${tabId}`);
+    throw codedError(
+      "REF_NOT_FOUND",
+      `ref ${ref} not present in current snapshot for ${tabId}`,
+      {
+        next_action:
+          "element ref is stale — call browser_quick_read again to get a fresh ref, do not reuse the old one",
+        diagnostic: {
+          tab_id: tabId,
+          ref,
+          snapshot_url: snap.url,
+          snapshot_size: snap.entries.size,
+        },
+      },
+    );
   }
   return { selector: entry.selector, role: entry.role };
 }
@@ -1803,7 +1835,20 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       if (cdp.isPersistent(chromeId)) {
         const center = await execInTab(chromeId, injectedElementCenter, [selector] as const);
         if (center === null) {
-          throw codedError("REF_STALE", `ref ${params.ref} no longer resolves in tab ${params.tab_id}`);
+          throw codedError(
+            "REF_STALE",
+            `ref ${params.ref} no longer resolves in tab ${params.tab_id}`,
+            {
+              next_action:
+                "element ref is stale (DOM changed since last read) — call browser_quick_read again to get a fresh ref, do not reuse the old one",
+              diagnostic: {
+                ref: params.ref,
+                tab_id: params.tab_id,
+                last_known_selector: selector,
+                stage: "click_cdp_pre_dispatch",
+              },
+            },
+          );
         }
         const dispatch = async () => {
           await cdpClick(cdp, chromeId, center.x, center.y, buttonName, mods);
@@ -2019,6 +2064,7 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       typed: number;
       mode: TypeMode;
       cleared?: boolean;
+      escalated_to_cdp?: true;
       page_effect?: PageEffect;
       warnings?: string[];
     }> => {
@@ -2097,6 +2143,7 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
         typed: number;
         mode: TypeMode;
         cleared?: boolean;
+        escalated_to_cdp?: true;
       };
 
       const dispatchSynthetic = async (): Promise<TypeResult> => {
@@ -2119,7 +2166,22 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
           );
         }
         if (res.found === false) {
-          throw codedError("REF_STALE", `ref ${params.ref} no longer resolves in tab ${params.tab_id}`);
+          throw codedError(
+            "REF_STALE",
+            `ref ${params.ref} no longer resolves in tab ${params.tab_id}`,
+            {
+              next_action:
+                "element ref is stale (DOM changed between read and type) — call browser_quick_read again to get a fresh ref, do not reuse the old one",
+              diagnostic: {
+                ref: params.ref,
+                tab_id: params.tab_id,
+                last_known_selector: selector,
+                role: ref.role,
+                stage: "type_synthetic_dispatch",
+                mode,
+              },
+            },
+          );
         }
         // If the write didn't land, auto-retry with escalating strategies:
         // 1. paste mode (execCommand insertText in one shot)
@@ -2151,9 +2213,30 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
             if (cleared !== undefined) r.cleared = cleared;
             return r;
           }
+          const isContentEditable =
+            looksRichEditor || ref.role === "textbox" && /contenteditable/i.test(selector);
           throw codedError(
             "WRITE_NOT_REFLECTED",
             `typed ${params.text.length} characters via keystroke, paste, and clipboard strategies but field content did not change; try browser_set_cdp enabled:true for trusted events`,
+            {
+              next_action: isContentEditable
+                ? "contenteditable / rich editor detected — switch to browser_execute_js with `el.focus(); document.execCommand('insertText', false, <text>)` instead of retrying browser_type"
+                : "value did not reflect — call browser_quick_read again to confirm element is still focusable, then retry once with clear_first:true; if still failing, enable CDP via browser_set_cdp",
+              diagnostic: {
+                ref: params.ref,
+                tab_id: params.tab_id,
+                selector,
+                role: ref.role,
+                is_contenteditable: isContentEditable,
+                looks_rich_editor: looksRichEditor,
+                expected_value_length: params.text.length,
+                observed_reflected_length: res.reflected,
+                strategies_tried:
+                  mode === "paste"
+                    ? ["paste", "clipboard"]
+                    : ["keystroke", "paste", "clipboard"],
+              },
+            },
           );
         }
         if (params.text.length > 0 && res.reflected >= params.text.length * 2) {
@@ -2167,10 +2250,85 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
         return r;
       };
 
+      // Auto-escalate to CDP when all synthetic strategies fail. Without
+      // this, the agent would see WRITE_NOT_REFLECTED, manually call
+      // browser_set_cdp, and re-issue the type — three round-trips plus
+      // model reasoning latency before CDP kicks in. Doing it in-handler
+      // collapses that to one ~500ms attach + one Input.insertText. See
+      // the comment block under the WRITE_NOT_REFLECTED throw above for
+      // the synthetic-strategy ladder we exhausted before getting here.
+      const dispatchWithRescue = async (): Promise<TypeResult> => {
+        try {
+          return await dispatchSynthetic();
+        } catch (err) {
+          const e = err as Error & {
+            code?: string;
+            next_action?: string;
+            diagnostic?: Record<string, unknown>;
+          };
+          if (e.code !== "WRITE_NOT_REFLECTED") throw err;
+          // CDP rescue: attach the debugger persistently so this and
+          // subsequent ops on the tab use trusted dispatch.
+          try {
+            await cdp.setPersistent(chromeId, true);
+          } catch (attachErr) {
+            const m = (attachErr as Error)?.message ?? String(attachErr);
+            throw codedError(
+              "WRITE_NOT_REFLECTED",
+              `${e.message}; CDP rescue attach failed: ${m}`,
+              {
+                next_action:
+                  "synthetic dispatch failed and chrome.debugger could not attach for CDP rescue — DevTools or another extension may already be attached to this tab; close it and retry",
+                diagnostic: { ...(e.diagnostic ?? {}), cdp_attach_error: m },
+              },
+            );
+          }
+          const center = await execInTab(
+            chromeId,
+            injectedElementCenter,
+            [selector] as const,
+          );
+          if (center === null) {
+            throw codedError(
+              "REF_STALE",
+              `ref ${params.ref} no longer resolves in tab ${params.tab_id}`,
+              {
+                next_action:
+                  "element ref went stale during CDP escalation — call browser_quick_read again",
+                diagnostic: {
+                  ref: params.ref,
+                  tab_id: params.tab_id,
+                  selector,
+                  stage: "type_cdp_rescue",
+                },
+              },
+            );
+          }
+          await cdpClick(
+            cdp, chromeId, center.x, center.y, "left",
+            { ctrl: false, alt: false, shift: false, meta: false },
+          );
+          await cdpType(cdp, chromeId, params.text);
+          if (submit) {
+            await cdpPress(
+              cdp, chromeId, "Enter",
+              { ctrl: false, alt: false, shift: false, meta: false },
+            );
+          }
+          const out: TypeResult = {
+            typed: params.text.length,
+            mode,
+            escalated_to_cdp: true,
+          };
+          if (cleared !== undefined) out.cleared = cleared;
+          return out;
+        }
+      };
+
       if (observeEffects) {
         const { result, effect } = await withEffectObservation(
           { chromeTabId: chromeId, windowMs: 300, networkTracker: network },
-          dispatchSynthetic,
+          dispatchWithRescue,
         );
         const warning = checkEffectExpectation(effect, expectEffect);
         const out: typeof result & { page_effect: PageEffect; warnings?: string[] } = { ...result, page_effect: effect };
@@ -2178,10 +2336,10 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
         return out;
       }
       if (expectEffect !== undefined) {
-        const r = await dispatchSynthetic();
+        const r = await dispatchWithRescue();
         return { ...r, warnings: ["expect_effect set but observe_effects:false — no effect data to verify against"] };
       }
-      return dispatchSynthetic();
+      return dispatchWithRescue();
     },
   );
 

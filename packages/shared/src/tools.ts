@@ -1,4 +1,5 @@
 import type { ErrorCode } from "./errors.js";
+import type { FeatureName } from "./features.js";
 
 /**
  * Minimal structural representation of a JSON Schema draft 2020-12 object
@@ -44,6 +45,12 @@ export interface ToolDef {
   action_weight: 0 | 0.5 | 1;
   risky: "always" | "conditional" | "never";
   errorCodes: readonly ErrorCode[];
+  /**
+   * Optional feature gate. When set, the tool is hidden from tools/list and
+   * tools/call returns FEATURE_DISABLED unless the feature is enabled in
+   * the bridge config. Untagged tools are core and always-on.
+   */
+  feature?: FeatureName;
 }
 
 // ---------------------------------------------------------------------------
@@ -248,6 +255,8 @@ const currentTab: ToolDef = {
       url: { type: "string" },
       title: { type: "string" },
       active: { const: true },
+      gated_domain: { type: "boolean", const: true, description: "Set to true when the destination URL matches a gated domain. Indicates the agent should prefer browser_execute_js for follow-up interactions on this tab." },
+      gated_domain_directive: { type: "string", description: "Human-readable rule the agent should honor when `gated_domain` is true." },
     },
   },
   action_weight: 0,
@@ -355,6 +364,8 @@ const navigate: ToolDef = {
       // Deferred to v2.
       page_effect: pageEffectSchema,
       warnings: warningsOutputSchema,
+      gated_domain: { type: "boolean", const: true, description: "Set to true when the destination URL matches a gated domain. Indicates the agent should prefer browser_execute_js for follow-up interactions on this tab." },
+      gated_domain_directive: { type: "string", description: "Human-readable rule the agent should honor when `gated_domain` is true." },
     },
   },
   action_weight: 1,
@@ -646,7 +657,7 @@ const quickRead: ToolDef = {
 const click: ToolDef = {
   name: "browser_click",
   description:
-    "Click an element identified by ref. Fires pointer/mouse events on the element. Returns `{clicked, page_effect?, warnings?}`.",
+    "Click an element identified by ref. Fires pointer/mouse events on the element. Returns `{clicked, page_effect?, warnings?}`. On gated domains (`gated_domain: true` on navigate / current_tab — Gmail, Slack, Notion, Linear, Discord, …), prefer `browser_execute_js`. Synthetic dispatch on these sites frequently no-ops on rich editors and virtualized DOM; the bridge will warn or escalate to an error when no `page_effect` is observed.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -760,7 +771,7 @@ const clickAt: ToolDef = {
 const clickByText: ToolDef = {
   name: "browser_click_by_text",
   description:
-    "Click the visible element whose accessible name matches the given text. Bypasses the a11y-tree ref mechanism — use this when browser_read didn't surface the element as a ref (common on SPA sites with div-wrapped click handlers), or when the agent knows the exact button label and doesn't want to pay for a full read first. Typically called from an operator sub-agent.",
+    "Click the visible element whose accessible name matches the given text. Bypasses the a11y-tree ref mechanism — use this when browser_read didn't surface the element as a ref (common on SPA sites with div-wrapped click handlers), or when the agent knows the exact button label and doesn't want to pay for a full read first. Typically called from an operator sub-agent. On gated domains (`gated_domain: true` on navigate / current_tab — Gmail, Slack, Notion, Linear, Discord, …), prefer `browser_execute_js`. Synthetic dispatch on these sites frequently no-ops on rich editors and virtualized DOM; the bridge will warn or escalate to an error when no `page_effect` is observed.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -826,7 +837,7 @@ const clickByText: ToolDef = {
 const typeTool: ToolDef = {
   name: "browser_type",
   description:
-    "Type text into an element identified by ref. Two dispatch modes: 'keystroke' (default for short text, fires per-character keydown/beforeinput/input/keyup — what autocompletes and per-keystroke validators need), 'paste' (bulk-assign the value in one shot, use for long text where per-char events are wasteful). Default resolves to 'keystroke' for text <=64 chars, 'paste' otherwise. Returns `{typed, mode, page_effect?, warnings?}`.",
+    "Type text into an element identified by ref. Two dispatch modes: 'keystroke' (default for short text, fires per-character keydown/beforeinput/input/keyup — what autocompletes and per-keystroke validators need), 'paste' (bulk-assign the value in one shot, use for long text where per-char events are wasteful). Default resolves to 'keystroke' for text <=64 chars, 'paste' otherwise. Returns `{typed, mode, page_effect?, warnings?}`. On gated domains (`gated_domain: true` on navigate / current_tab — Gmail, Slack, Notion, Linear, Discord, …), prefer `browser_execute_js`. Synthetic dispatch on these sites frequently no-ops on rich editors and virtualized DOM; the bridge will warn or escalate to an error when no `page_effect` is observed.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -926,7 +937,7 @@ const findAndReplace: ToolDef = {
 const press: ToolDef = {
   name: "browser_press",
   description:
-    "Send a keyboard-only chord to the tab (CDP key names). Does not target a specific ref. Leading entries are treated as modifiers and the final entry as the key — e.g. [\"Primary\",\"KeyA\"] sends select-all. Use `Primary` instead of Meta/Control for portable chords; the extension resolves it to Meta on macOS and Control elsewhere at dispatch time. Returns `{pressed, page_effect?, warnings?}`.",
+    "Send a keyboard-only chord to the tab (CDP key names). Does not target a specific ref. Leading entries are treated as modifiers and the final entry as the key — e.g. [\"Primary\",\"KeyA\"] sends select-all. Use `Primary` instead of Meta/Control for portable chords; the extension resolves it to Meta on macOS and Control elsewhere at dispatch time. Returns `{pressed, page_effect?, warnings?}`. On gated domains (`gated_domain: true` on navigate / current_tab — Gmail, Slack, Notion, Linear, Discord, …), prefer `browser_execute_js`. Synthetic dispatch on these sites frequently no-ops on rich editors and virtualized DOM; the bridge will warn or escalate to an error when no `page_effect` is observed.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -1259,7 +1270,7 @@ const waitForIdle: ToolDef = {
 const executeJs: ToolDef = {
   name: "browser_execute_js",
   description:
-    "Execute JavaScript inside the tab's main world. Always risky; gated on every invocation.",
+    "Execute JavaScript inside the tab's main world. Always risky; gated on every invocation. Preferred path on gated domains where synthetic dispatch is unreliable. CDP is auto-attached on those domains so trusted-input semantics apply.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -1305,7 +1316,7 @@ const setCdp: ToolDef = {
     "When enabled, all input dispatch (click, type, press) routes through trusted CDP " +
     "events instead of synthetic DOM events. Required for canvas apps (Figma, Google Docs, " +
     "Sheets, Canva, Miro) that ignore untrusted events. Call after navigating to the site. " +
-    "Shows a 'controlled by automated software' banner while active.",
+    "Shows a 'controlled by automated software' banner while active. CDP is auto-attached on canvas domains and on gated domains (when the `gated-domains` feature is enabled). This tool is for manual override on other sites.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -1353,6 +1364,7 @@ const entrySchema: JSONSchemaObject = {
 
 const proceduresList: ToolDef = {
   name: "procedures_list",
+  feature: "procedures",
   description:
     "List all stored procedures as metadata-only entries (no YAML bodies). " +
     "Scope to a specific domain or composite procedure. " +
@@ -1404,10 +1416,11 @@ const proceduresList: ToolDef = {
 
 const proceduresSearch: ToolDef = {
   name: "procedures_search",
+  feature: "procedures",
   description:
     "Full-text search over the procedure catalogue using pre-tokenized index fields. " +
     "Returns ranked metadata-only matches; retrieve the YAML body with procedures_get. " +
-    'REQUIRED ARGUMENTS: {"query": "<search tokens>"}. Example: {"query": "example login"}.',
+    'REQUIRED ARGUMENTS: {"query": "<search tokens>"}. Example: {"query": "github sign in"}.',
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -1442,6 +1455,7 @@ const proceduresSearch: ToolDef = {
 
 const proceduresGet: ToolDef = {
   name: "procedures_get",
+  feature: "procedures",
   description:
     "Retrieve the full raw YAML body and metadata for a single procedure by name. " +
     "Errors with PROC_NOT_FOUND if the name does not exist in the index. " +
@@ -1482,6 +1496,7 @@ const proceduresGet: ToolDef = {
 
 const proceduresSave: ToolDef = {
   name: "procedures_save",
+  feature: "procedures",
   description:
     "Validate and persist a procedure YAML. Parses, schema-validates, resolves uses: references, " +
     "then atomically writes to disk and rebuilds the search index. " +
@@ -1515,6 +1530,7 @@ const proceduresSave: ToolDef = {
 
 const proceduresPromote: ToolDef = {
   name: "procedures_promote",
+  feature: "procedures",
   description:
     "Move a sub-procedure from a composite's subs/ folder into the top-level shared/ folder, " +
     "making it independently reusable. Rebuilds the index and rewrites any affected uses: references. " +
@@ -1546,6 +1562,7 @@ const proceduresPromote: ToolDef = {
 
 const proceduresCompile: ToolDef = {
   name: "procedures_compile",
+  feature: "procedures",
   description:
     "Compile a JSONL trace file into a draft procedure YAML. " +
     "Reads the trace, drops read-only and failed-call events, and emits one step per " +
@@ -1604,6 +1621,7 @@ const proceduresCompile: ToolDef = {
 
 const proceduresDelete: ToolDef = {
   name: "procedures_delete",
+  feature: "procedures",
   description:
     "Delete a procedure by name, cascading to sub-procedures for composites. " +
     "Refuses if the procedure is referenced by others unless force: true is set. " +
@@ -1648,6 +1666,7 @@ const stepResultSchema: JSONSchemaObject = {
 
 const proceduresExecute: ToolDef = {
   name: "procedures_execute",
+  feature: "procedures",
   description:
     "Replay a saved procedure step by step with effect verification. " +
     "Loads the procedure by name, substitutes {{var}} input placeholders, " +
@@ -1748,6 +1767,302 @@ const proceduresExecute: ToolDef = {
 } as const;
 
 // ---------------------------------------------------------------------------
+// Teach mode — record / observe / distill user demonstrations
+// ---------------------------------------------------------------------------
+
+const teachStepDescription =
+  "Each step is one of: " +
+  "{ kind: 'click', target, button, modifiers, x?, y? }, " +
+  "{ kind: 'type', target, value, redacted, redaction_reason? }, " +
+  "{ kind: 'key', keys, target? }, " +
+  "{ kind: 'navigate', url, transition? }, " +
+  "{ kind: 'scroll', target?, delta_y }, " +
+  "{ kind: 'narration', text }, " +
+  "{ kind: 'marker', label? }. " +
+  "TeachTargetRef shape: { selector, role?, name?, text?, tag?, input_type?, contenteditable? }.";
+
+const teachEventSchema: JSONSchemaObject = {
+  type: "object",
+  additionalProperties: true,
+  required: ["session_id", "seq", "ts", "tab_id", "url", "step"] as const,
+  properties: {
+    session_id: { type: "string" },
+    seq: { type: "integer", minimum: 1 },
+    ts: { type: "integer", minimum: 0 },
+    tab_id: { type: "string" },
+    url: { type: "string" },
+    step: { type: "object", additionalProperties: true },
+  },
+} as const;
+
+const teachSessionMetaSchema: JSONSchemaObject = {
+  type: "object",
+  additionalProperties: false,
+  required: ["session_id", "started_at", "scope", "event_count"] as const,
+  properties: {
+    session_id: { type: "string" },
+    started_at: { type: "integer", minimum: 0 },
+    stopped_at: { type: "integer", minimum: 0 },
+    scope: { type: "string", enum: ["active_tab", "all_tabs"] as const },
+    narration_hint: { type: "string" },
+    event_count: { type: "integer", minimum: 0 },
+  },
+} as const;
+
+const proceduresTeachStart: ToolDef = {
+  name: "procedures_teach_start",
+  feature: "teach",
+  description:
+    "Start a teach-mode session. The user demonstrates a flow in their real browser; the extension " +
+    "records each click/type/key/navigate/scroll into a TeachEvent stream that the agent can read " +
+    "live via procedures_teach_observe. Capture-time redaction strips passwords and known secret " +
+    "patterns. Idempotent: returns the in-flight session if one is already active. " +
+    'OPTIONAL ARGUMENTS: {"scope": "all_tabs"|"active_tab" (default all_tabs), "narration_hint": "<one-line description>"}.',
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      scope: { type: "string", enum: ["active_tab", "all_tabs"] as const, default: "all_tabs" },
+      narration_hint: { type: "string", maxLength: 200 },
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["session_id", "started_at", "resumed"] as const,
+    properties: {
+      session_id: { type: "string" },
+      started_at: { type: "integer" },
+      resumed: { type: "boolean", description: "true if returned an already-active session." },
+    },
+  },
+  action_weight: 0,
+  risky: "never",
+  errorCodes: [...BASE_CODES, "EXTENSION_DISCONNECTED"] as const,
+} as const;
+
+const proceduresTeachStop: ToolDef = {
+  name: "procedures_teach_stop",
+  feature: "teach",
+  description:
+    "Stop the active teach-mode session and finalize its meta sidecar (sets stopped_at). After stop, " +
+    "procedures_teach_observe returns finished: true once the cursor catches up. Errors with INVALID_STATE " +
+    "if no session is active. Pass session_id only when stopping a specific known session — usually omitted.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      session_id: { type: "string" },
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["session_id", "event_count", "duration_ms"] as const,
+    properties: {
+      session_id: { type: "string" },
+      event_count: { type: "integer", minimum: 0 },
+      duration_ms: { type: "integer", minimum: 0 },
+    },
+  },
+  action_weight: 0,
+  risky: "never",
+  errorCodes: [...BASE_CODES, "INVALID_STATE", "EXTENSION_DISCONNECTED"] as const,
+} as const;
+
+const proceduresTeachObserve: ToolDef = {
+  name: "procedures_teach_observe",
+  feature: "teach",
+  description:
+    "Stream events from a teach session. Returns events with seq > since_seq up to max_batch. If no new " +
+    "events are available and wait_ms > 0 and the session is still live, blocks up to wait_ms for the " +
+    "next event. When finished: true, the session has stopped and you've consumed all events. " +
+    teachStepDescription +
+    ' REQUIRED: {"session_id": "ts_..."}. OPTIONAL: {"since_seq": 0, "wait_ms": 0..30000, "max_batch": 1..500}.',
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["session_id"] as const,
+    properties: {
+      session_id: { type: "string" },
+      since_seq: { type: "integer", minimum: 0, default: 0 },
+      wait_ms: { type: "integer", minimum: 0, maximum: 30000, default: 0 },
+      max_batch: { type: "integer", minimum: 1, maximum: 500, default: 200 },
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["events", "next_seq", "finished"] as const,
+    properties: {
+      events: { type: "array", items: teachEventSchema },
+      next_seq: { type: "integer", minimum: 0 },
+      finished: { type: "boolean" },
+    },
+  },
+  action_weight: 0,
+  risky: "never",
+  errorCodes: [...BASE_CODES] as const,
+} as const;
+
+const proceduresTeachList: ToolDef = {
+  name: "procedures_teach_list",
+  feature: "teach",
+  description:
+    "List known teach sessions on disk, newest first. Useful after the user demonstrates a flow but " +
+    "the agent doesn't know the session_id (e.g., session was started from the popup, not over MCP).",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {},
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["sessions"] as const,
+    properties: {
+      sessions: { type: "array", items: teachSessionMetaSchema },
+    },
+  },
+  action_weight: 0,
+  risky: "never",
+  errorCodes: [...BASE_CODES] as const,
+} as const;
+
+const proceduresTeachMarker: ToolDef = {
+  name: "procedures_teach_marker",
+  feature: "teach",
+  description:
+    "Insert a synthetic split marker into the active teach session. The distiller treats markers as " +
+    "hard leaf boundaries — use this when you want to force a split between two sub-flows the user is " +
+    'demonstrating in one session. OPTIONAL: {"label": "<short hint about what just ended>"}.',
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      label: { type: "string", maxLength: 80 },
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["ok"] as const,
+    properties: { ok: { const: true } },
+  },
+  action_weight: 0,
+  risky: "never",
+  errorCodes: [...BASE_CODES, "INVALID_STATE", "EXTENSION_DISCONNECTED"] as const,
+} as const;
+
+const proceduresTeachDistill: ToolDef = {
+  name: "procedures_teach_distill",
+  feature: "teach",
+  description:
+    "Convert a recorded teach session into one or more draft procedure YAMLs. Splits the timeline into " +
+    "leaves on user markers, tab change, URL host change, idle gap > 4s, and form-submit events; emits a " +
+    "composite that uses each leaf in order when there is more than one. Redacted typing always becomes a " +
+    "required input; non-redacted typing matching email or URL patterns is auto-parameterised; everything " +
+    "else is surfaced as a parameter_candidate the agent can choose to lift. Save each procedure with " +
+    "procedures_save AFTER replaying it — leaves first, composite last. " +
+    'REQUIRED: {"session_id": "ts_..."}. OPTIONAL: {"name", "description"}.',
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["session_id"] as const,
+    properties: {
+      session_id: { type: "string" },
+      name: { type: "string", pattern: procedureNamePattern },
+      description: { type: "string", minLength: 1, maxLength: 200 },
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["procedures", "warnings", "redacted_inputs", "parameter_candidates"] as const,
+    properties: {
+      procedures: {
+        type: "array",
+        description:
+          "Leaves in execution order; composite (if any) is the last entry. " +
+          "Save them in this order via procedures_save.",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["name", "kind", "yaml"] as const,
+          properties: {
+            name: { type: "string" },
+            kind: { type: "string", enum: ["leaf", "composite"] as const },
+            yaml: { type: "string" },
+          },
+        },
+      },
+      warnings: { type: "array", items: { type: "string" } },
+      redacted_inputs: {
+        type: "array",
+        items: { type: "string" },
+        description:
+          "Names of inputs the runner must supply at execution time (created from redacted typing).",
+      },
+      parameter_candidates: {
+        type: "array",
+        description:
+          "Typed values the distiller noticed that look like they should be procedure inputs. " +
+          "Email and URL values are already auto_parameterized; other strings are surfaced for the " +
+          "agent to lift manually if they're meant to vary across runs.",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "seq",
+            "value",
+            "suggested_name",
+            "suggested_type",
+            "auto_parameterized",
+          ] as const,
+          properties: {
+            seq: { type: "integer", minimum: 1 },
+            value: { type: "string" },
+            suggested_name: { type: "string" },
+            suggested_type: { type: "string", enum: ["string"] as const },
+            auto_parameterized: { type: "boolean" },
+            target_field_label: { type: "string" },
+          },
+        },
+      },
+    },
+  },
+  action_weight: 0,
+  risky: "never",
+  errorCodes: [...BASE_CODES, ...PROC_CODES] as const,
+} as const;
+
+const proceduresTeachNarration: ToolDef = {
+  name: "procedures_teach_narration",
+  feature: "teach",
+  description:
+    "Insert a narration step into the active teach session — free-text the agent (or the user, via the " +
+    "popup) wants to attach to the timeline. The distiller uses narration to name leaves, suggest input " +
+    'parameters, and document the flow. REQUIRED: {"text": "<short description>"}.',
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["text"] as const,
+    properties: {
+      text: { type: "string", minLength: 1, maxLength: 400 },
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["ok"] as const,
+    properties: { ok: { const: true } },
+  },
+  action_weight: 0,
+  risky: "never",
+  errorCodes: [...BASE_CODES, "INVALID_STATE", "EXTENSION_DISCONNECTED"] as const,
+} as const;
+
+// ---------------------------------------------------------------------------
 // Public catalogue
 // ---------------------------------------------------------------------------
 
@@ -1786,6 +2101,13 @@ export const TOOL_DEFS: readonly ToolDef[] = [
   proceduresDelete,
   proceduresCompile,
   proceduresExecute,
+  proceduresTeachStart,
+  proceduresTeachStop,
+  proceduresTeachObserve,
+  proceduresTeachList,
+  proceduresTeachMarker,
+  proceduresTeachNarration,
+  proceduresTeachDistill,
 ] as const;
 
 export const TOOL_DEF_MAP: Record<string, ToolDef> = Object.freeze(

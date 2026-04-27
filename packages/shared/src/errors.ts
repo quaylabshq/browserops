@@ -17,6 +17,8 @@ export const ERROR_CODES = [
   "RISKY_ACTION_DENIED",
   "EXTENSION_DISCONNECTED",
   "INVALID_PARAMS",
+  "INVALID_STATE",
+  "FEATURE_DISABLED",
   "INTERNAL",
   // Procedures errors (plan 06)
   "PROC_NOT_FOUND",
@@ -26,6 +28,8 @@ export const ERROR_CODES = [
   "PROC_OWNER_INVALID",
   "PROC_DOMAIN_INVALID",
   "CHAINED_ACTION_FAILED",
+  "REPEATED_FAILURE",
+  "DISPATCH_FAILED_ON_GATED_DOMAIN",
 ] as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[number];

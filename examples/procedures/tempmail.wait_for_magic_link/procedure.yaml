@@ -18,7 +18,7 @@ inputs:
   sender_hint:
     type: string
     required: true
-    description: Substring identifying the target email by sender or subject (e.g. "example"). Call this AFTER triggering the send.
+    description: Substring identifying the target email by sender or subject (e.g. "github"). Call this AFTER triggering the send.
 
 # tempmailo's inbox renders each email as a <li role=button> on the same
 # page. We wait for the hint text to appear, click that li to load the
