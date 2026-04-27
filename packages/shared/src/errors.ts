@@ -18,6 +18,7 @@ export const ERROR_CODES = [
   "EXTENSION_DISCONNECTED",
   "INVALID_PARAMS",
   "INVALID_STATE",
+  "FEATURE_DISABLED",
   "INTERNAL",
   // Procedures errors (plan 06)
   "PROC_NOT_FOUND",

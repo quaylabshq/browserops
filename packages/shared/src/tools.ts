@@ -1,4 +1,5 @@
 import type { ErrorCode } from "./errors.js";
+import type { FeatureName } from "./features.js";
 
 /**
  * Minimal structural representation of a JSON Schema draft 2020-12 object
@@ -44,6 +45,12 @@ export interface ToolDef {
   action_weight: 0 | 0.5 | 1;
   risky: "always" | "conditional" | "never";
   errorCodes: readonly ErrorCode[];
+  /**
+   * Optional feature gate. When set, the tool is hidden from tools/list and
+   * tools/call returns FEATURE_DISABLED unless the feature is enabled in
+   * the bridge config. Untagged tools are core and always-on.
+   */
+  feature?: FeatureName;
 }
 
 // ---------------------------------------------------------------------------
@@ -1353,6 +1360,7 @@ const entrySchema: JSONSchemaObject = {
 
 const proceduresList: ToolDef = {
   name: "procedures_list",
+  feature: "procedures",
   description:
     "List all stored procedures as metadata-only entries (no YAML bodies). " +
     "Scope to a specific domain or composite procedure. " +
@@ -1404,6 +1412,7 @@ const proceduresList: ToolDef = {
 
 const proceduresSearch: ToolDef = {
   name: "procedures_search",
+  feature: "procedures",
   description:
     "Full-text search over the procedure catalogue using pre-tokenized index fields. " +
     "Returns ranked metadata-only matches; retrieve the YAML body with procedures_get. " +
@@ -1442,6 +1451,7 @@ const proceduresSearch: ToolDef = {
 
 const proceduresGet: ToolDef = {
   name: "procedures_get",
+  feature: "procedures",
   description:
     "Retrieve the full raw YAML body and metadata for a single procedure by name. " +
     "Errors with PROC_NOT_FOUND if the name does not exist in the index. " +
@@ -1482,6 +1492,7 @@ const proceduresGet: ToolDef = {
 
 const proceduresSave: ToolDef = {
   name: "procedures_save",
+  feature: "procedures",
   description:
     "Validate and persist a procedure YAML. Parses, schema-validates, resolves uses: references, " +
     "then atomically writes to disk and rebuilds the search index. " +
@@ -1515,6 +1526,7 @@ const proceduresSave: ToolDef = {
 
 const proceduresPromote: ToolDef = {
   name: "procedures_promote",
+  feature: "procedures",
   description:
     "Move a sub-procedure from a composite's subs/ folder into the top-level shared/ folder, " +
     "making it independently reusable. Rebuilds the index and rewrites any affected uses: references. " +
@@ -1546,6 +1558,7 @@ const proceduresPromote: ToolDef = {
 
 const proceduresCompile: ToolDef = {
   name: "procedures_compile",
+  feature: "procedures",
   description:
     "Compile a JSONL trace file into a draft procedure YAML. " +
     "Reads the trace, drops read-only and failed-call events, and emits one step per " +
@@ -1604,6 +1617,7 @@ const proceduresCompile: ToolDef = {
 
 const proceduresDelete: ToolDef = {
   name: "procedures_delete",
+  feature: "procedures",
   description:
     "Delete a procedure by name, cascading to sub-procedures for composites. " +
     "Refuses if the procedure is referenced by others unless force: true is set. " +
@@ -1648,6 +1662,7 @@ const stepResultSchema: JSONSchemaObject = {
 
 const proceduresExecute: ToolDef = {
   name: "procedures_execute",
+  feature: "procedures",
   description:
     "Replay a saved procedure step by step with effect verification. " +
     "Loads the procedure by name, substitutes {{var}} input placeholders, " +
@@ -1792,6 +1807,7 @@ const teachSessionMetaSchema: JSONSchemaObject = {
 
 const proceduresTeachStart: ToolDef = {
   name: "procedures_teach_start",
+  feature: "teach",
   description:
     "Start a teach-mode session. The user demonstrates a flow in their real browser; the extension " +
     "records each click/type/key/navigate/scroll into a TeachEvent stream that the agent can read " +
@@ -1823,6 +1839,7 @@ const proceduresTeachStart: ToolDef = {
 
 const proceduresTeachStop: ToolDef = {
   name: "procedures_teach_stop",
+  feature: "teach",
   description:
     "Stop the active teach-mode session and finalize its meta sidecar (sets stopped_at). After stop, " +
     "procedures_teach_observe returns finished: true once the cursor catches up. Errors with INVALID_STATE " +
@@ -1851,6 +1868,7 @@ const proceduresTeachStop: ToolDef = {
 
 const proceduresTeachObserve: ToolDef = {
   name: "procedures_teach_observe",
+  feature: "teach",
   description:
     "Stream events from a teach session. Returns events with seq > since_seq up to max_batch. If no new " +
     "events are available and wait_ms > 0 and the session is still live, blocks up to wait_ms for the " +
@@ -1885,6 +1903,7 @@ const proceduresTeachObserve: ToolDef = {
 
 const proceduresTeachList: ToolDef = {
   name: "procedures_teach_list",
+  feature: "teach",
   description:
     "List known teach sessions on disk, newest first. Useful after the user demonstrates a flow but " +
     "the agent doesn't know the session_id (e.g., session was started from the popup, not over MCP).",
@@ -1908,6 +1927,7 @@ const proceduresTeachList: ToolDef = {
 
 const proceduresTeachMarker: ToolDef = {
   name: "procedures_teach_marker",
+  feature: "teach",
   description:
     "Insert a synthetic split marker into the active teach session. The distiller treats markers as " +
     "hard leaf boundaries — use this when you want to force a split between two sub-flows the user is " +
@@ -1932,6 +1952,7 @@ const proceduresTeachMarker: ToolDef = {
 
 const proceduresTeachDistill: ToolDef = {
   name: "procedures_teach_distill",
+  feature: "teach",
   description:
     "Convert a recorded teach session into one or more draft procedure YAMLs. Splits the timeline into " +
     "leaves on user markers, tab change, URL host change, idle gap > 4s, and form-submit events; emits a " +
@@ -2013,6 +2034,7 @@ const proceduresTeachDistill: ToolDef = {
 
 const proceduresTeachNarration: ToolDef = {
   name: "procedures_teach_narration",
+  feature: "teach",
   description:
     "Insert a narration step into the active teach session — free-text the agent (or the user, via the " +
     "popup) wants to attach to the timeline. The distiller uses narration to name leaves, suggest input " +
