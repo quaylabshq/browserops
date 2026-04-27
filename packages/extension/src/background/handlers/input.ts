@@ -478,11 +478,11 @@ function injectedTypePaste(
   selector: string,
   text: string,
   submit: boolean,
-): { found: boolean; typed: number; reflected: number } {
+): { found: boolean; typed: number; reflected: number; content_verified: boolean } {
   const root = document.querySelector(selector) as
     | (HTMLElement & { value?: string; form?: HTMLFormElement })
     | null;
-  if (root === null) return { found: false, typed: 0, reflected: 0 };
+  if (root === null) return { found: false, typed: 0, reflected: 0, content_verified: false };
   // Drill into wrapper role="textbox" nodes (Slack Quill, Notion ProseMirror,
   // Linear Lexical, Gmail Draft.js) so we hit the real contenteditable instead
   // of silently no-op'ing a .value assignment on a plain <div>.
@@ -517,7 +517,9 @@ function injectedTypePaste(
 
   if (submit) dispatchEnterAndSubmit(el);
   const after = el.isContentEditable ? (el.textContent ?? "") : (el.value ?? "");
-  return { found: true, typed: text.length, reflected: Math.max(0, after.length - before.length) };
+  const lengthDelta = Math.max(0, after.length - before.length);
+  const contentPresent = text.length > 0 && after.includes(text);
+  return { found: true, typed: text.length, reflected: contentPresent ? text.length : lengthDelta, content_verified: contentPresent };
 }
 
 /**
@@ -534,13 +536,13 @@ function injectedTypeKeystroke(
   text: string,
   submit: boolean,
   delayMs: number,
-): Promise<{ found: boolean; typed: number; reflected: number }> {
-  return new Promise<{ found: boolean; typed: number; reflected: number }>((resolve) => {
+): Promise<{ found: boolean; typed: number; reflected: number; content_verified: boolean }> {
+  return new Promise<{ found: boolean; typed: number; reflected: number; content_verified: boolean }>((resolve) => {
     const root = document.querySelector(selector) as
       | (HTMLElement & { value?: string; form?: HTMLFormElement })
       | null;
     if (root === null) {
-      resolve({ found: false, typed: 0, reflected: 0 });
+      resolve({ found: false, typed: 0, reflected: 0, content_verified: false });
       return;
     }
     // Drill past role="textbox" wrappers into the real editor so we don't fire
@@ -587,10 +589,13 @@ function injectedTypeKeystroke(
       if (index >= text.length) {
         if (submit) dispatchEnterAndSubmit(el);
         const after = el.isContentEditable ? (el.textContent ?? "") : (el.value ?? "");
+        const lengthDelta = Math.max(0, after.length - before.length);
+        const contentPresent = text.length > 0 && after.includes(text);
         resolve({
           found: true,
           typed: text.length,
-          reflected: Math.max(0, after.length - before.length),
+          reflected: contentPresent ? text.length : lengthDelta,
+          content_verified: contentPresent,
         });
         return;
       }
@@ -652,6 +657,66 @@ function injectedTypeKeystroke(
     };
     typeOne();
   });
+}
+
+/**
+ * "clipboard" mode — last-resort fallback for rich editors that ignore synthetic
+ * keystroke and execCommand events. Simulates a paste via ClipboardEvent with a
+ * DataTransfer payload, then falls back to execCommand("insertText").
+ */
+function injectedTypeClipboard(
+  selector: string,
+  text: string,
+  submit: boolean,
+): { found: boolean; typed: number; reflected: number; content_verified: boolean } {
+  const root = document.querySelector(selector) as
+    | (HTMLElement & { value?: string; form?: HTMLFormElement })
+    | null;
+  if (root === null) return { found: false, typed: 0, reflected: 0, content_verified: false };
+  const rootProto = Object.getPrototypeOf(root) as object | null;
+  const rootHasValueSetter = rootProto !== null
+    && Object.getOwnPropertyDescriptor(rootProto, "value")?.set !== undefined;
+  const inner = root.isContentEditable || rootHasValueSetter
+    ? null
+    : root.querySelector<HTMLElement & { value?: string; form?: HTMLFormElement }>(
+        '[contenteditable="true"], [contenteditable=""], .ql-editor, [data-slate-editor="true"], .ProseMirror, .public-DraftEditor-content',
+      );
+  const el = (inner ?? root) as HTMLElement & { value?: string; form?: HTMLFormElement };
+  el.focus();
+
+  const before = el.isContentEditable ? (el.textContent ?? "") : (el.value ?? "");
+
+  // Strategy 1: Synthetic paste event with DataTransfer.
+  try {
+    const dt = new DataTransfer();
+    dt.setData("text/plain", text);
+    const pasteEvent = new ClipboardEvent("paste", {
+      clipboardData: dt,
+      bubbles: true,
+      cancelable: true,
+    });
+    el.dispatchEvent(pasteEvent);
+  } catch {
+    // ClipboardEvent constructor may not support clipboardData in all contexts.
+  }
+
+  let after = el.isContentEditable ? (el.textContent ?? "") : (el.value ?? "");
+  if (after.includes(text)) {
+    if (submit) dispatchEnterAndSubmit(el);
+    return { found: true, typed: text.length, reflected: text.length, content_verified: true };
+  }
+
+  // Strategy 2: execCommand insertText (may work on editors that handle this).
+  if (el.isContentEditable) {
+    document.execCommand("insertText", false, text);
+    after = el.textContent ?? "";
+  }
+
+  if (submit) dispatchEnterAndSubmit(el);
+  after = el.isContentEditable ? (el.textContent ?? "") : (el.value ?? "");
+  const lengthDelta = Math.max(0, after.length - before.length);
+  const contentPresent = text.length > 0 && after.includes(text);
+  return { found: true, typed: text.length, reflected: contentPresent ? text.length : lengthDelta, content_verified: contentPresent };
 }
 
 function dispatchEnterAndSubmit(
@@ -1555,6 +1620,117 @@ function injectedDismissOverlay(targetSelector: string): { dismissed: boolean } 
   return { dismissed: false };
 }
 
+/**
+ * Smarter overlay dismissal that classifies the occluder and tries multiple
+ * strategies. Returns richer info about what was found and what was dismissed.
+ */
+function injectedAutoDismiss(targetSelector: string): {
+  dismissed: boolean;
+  strategy?: string;
+  occluder_type?: string;
+  close_candidates?: Array<{ tag: string; text: string; aria_label?: string }>;
+} {
+  const el = document.querySelector(targetSelector) as HTMLElement | null;
+  if (el === null) return { dismissed: false };
+  const rect = el.getBoundingClientRect();
+  const x = rect.left + rect.width / 2;
+  const y = rect.top + rect.height / 2;
+  const hit = document.elementFromPoint(x, y) as HTMLElement | null;
+  if (hit === null || hit === el || el.contains(hit) || hit.contains(el)) {
+    return { dismissed: false };
+  }
+
+  // Classify the occluder.
+  const classifyOccluder = (node: Element): string => {
+    let current: Element | null = node;
+    for (let i = 0; i < 5 && current !== null; i++) {
+      const role = (current.getAttribute("role") ?? "").toLowerCase();
+      if (role === "dialog" || role === "alertdialog") return "dialog";
+      const cls = (current.getAttribute("class") ?? "").toLowerCase();
+      if (/\b(modal|overlay|popup)\b/.test(cls)) return "dialog";
+      if (/\b(banner|toast|notification|snackbar)\b/.test(cls)) return "banner";
+      if (/\b(consent|cookie|gdpr)\b/.test(cls)) return "consent";
+      const style = window.getComputedStyle(current);
+      if ((style.position === "fixed" || style.position === "sticky") && parseInt(style.zIndex ?? "0", 10) > 100) {
+        return "fixed-overlay";
+      }
+      current = current.parentElement;
+    }
+    return "unknown";
+  };
+  const occluder_type = classifyOccluder(hit);
+
+  const isCloseLike = (el: Element): boolean => {
+    const label = (el.getAttribute("aria-label") ?? "").toLowerCase();
+    if (/\b(close|dismiss)\b/.test(label)) return true;
+    const title = (el.getAttribute("title") ?? "").toLowerCase();
+    if (/\b(close|dismiss)\b/.test(title)) return true;
+    const text = (el.textContent ?? "").replace(/\s+/g, "").toLowerCase();
+    if (text === "×" || text === "✕" || text === "x" || text === "close" || text === "notnow" || text === "dismiss" || text === "gotit") return true;
+    return false;
+  };
+
+  // Strategy 1: ESC.
+  const escInit: KeyboardEventInit = { key: "Escape", code: "Escape", bubbles: true, cancelable: true };
+  document.dispatchEvent(new KeyboardEvent("keydown", escInit));
+  document.dispatchEvent(new KeyboardEvent("keyup", escInit));
+  // Check if ESC worked.
+  const hitAfterEsc = document.elementFromPoint(x, y) as HTMLElement | null;
+  if (hitAfterEsc === el || (hitAfterEsc !== null && (el.contains(hitAfterEsc) || hitAfterEsc.contains(el)))) {
+    return { dismissed: true, strategy: "escape", occluder_type };
+  }
+
+  // Strategy 2: Close button hunt — scan occluder subtree up to 5 ancestor levels.
+  let scope: Element | null = hit;
+  for (let depth = 0; depth < 5 && scope !== null; depth++) {
+    const candidates = scope.querySelectorAll("button, [role='button'], a, [tabindex]");
+    for (const c of Array.from(candidates)) {
+      if (!isCloseLike(c)) continue;
+      (c as HTMLElement).click();
+      // Verify target is now accessible.
+      const hitAfter = document.elementFromPoint(x, y) as HTMLElement | null;
+      if (hitAfter === el || (hitAfter !== null && (el.contains(hitAfter) || hitAfter.contains(el)))) {
+        return { dismissed: true, strategy: "close_button", occluder_type };
+      }
+    }
+    scope = scope.parentElement;
+  }
+
+  // Strategy 3: Click on backdrop (if a semi-transparent overlay behind the dialog).
+  const backdrop = hit.parentElement;
+  if (backdrop !== null) {
+    const style = window.getComputedStyle(backdrop);
+    if (style.position === "fixed" || style.position === "absolute") {
+      backdrop.click();
+      const hitAfter = document.elementFromPoint(x, y) as HTMLElement | null;
+      if (hitAfter === el || (hitAfter !== null && (el.contains(hitAfter) || hitAfter.contains(el)))) {
+        return { dismissed: true, strategy: "backdrop_click", occluder_type };
+      }
+    }
+  }
+
+  // Collect close candidates for suggestion even if we couldn't dismiss.
+  const close_candidates: Array<{ tag: string; text: string; aria_label?: string }> = [];
+  scope = hit;
+  for (let depth = 0; depth < 3 && scope !== null; depth++) {
+    const candidates = scope.querySelectorAll("button, [role='button'], a");
+    for (const c of Array.from(candidates)) {
+      if (isCloseLike(c)) {
+        const entry: { tag: string; text: string; aria_label?: string } = {
+          tag: c.tagName.toLowerCase(),
+          text: (c.textContent ?? "").trim().slice(0, 40),
+        };
+        const al = c.getAttribute("aria-label");
+        if (al) entry.aria_label = al;
+        close_candidates.push(entry);
+      }
+    }
+    scope = scope.parentElement;
+  }
+
+  return { dismissed: false, occluder_type, close_candidates };
+}
+
 function injectedClickAtPoint(
   x: number,
   y: number,
@@ -1645,6 +1821,10 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
 
       // Synthetic path.
       const dismissOverlay = raw["dismiss_overlay"] === true;
+      const autoDismiss = raw["auto_dismiss"] === true;
+      if (dismissOverlay && autoDismiss) {
+        throw codedError("INVALID_PARAMS", "dismiss_overlay and auto_dismiss are mutually exclusive");
+      }
       let res = await execInTab(chromeId, injectedClick, [selector, button, mods] as const);
       if (res.found === false) {
         throw codedError(
@@ -1653,16 +1833,32 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
         );
       }
       let dismissedOverlay = false;
-      if (dismissOverlay && res.occluded === true) {
-        const dismiss = await execInTab(chromeId, injectedDismissOverlay, [selector] as const);
-        if (dismiss.dismissed) {
-          dismissedOverlay = true;
-          res = await execInTab(chromeId, injectedClick, [selector, button, mods] as const);
-          if (res.found === false) {
-            throw codedError(
-              "REF_STALE",
-              `ref ${params.ref} became stale after overlay dismissal in tab ${params.tab_id}`,
-            );
+      let dismissStrategy: string | undefined;
+      if ((dismissOverlay || autoDismiss) && res.occluded === true) {
+        if (autoDismiss) {
+          const dismiss = await execInTab(chromeId, injectedAutoDismiss, [selector] as const);
+          if (dismiss.dismissed) {
+            dismissedOverlay = true;
+            dismissStrategy = dismiss.strategy;
+            res = await execInTab(chromeId, injectedClick, [selector, button, mods] as const);
+            if (res.found === false) {
+              throw codedError(
+                "REF_STALE",
+                `ref ${params.ref} became stale after overlay dismissal in tab ${params.tab_id}`,
+              );
+            }
+          }
+        } else {
+          const dismiss = await execInTab(chromeId, injectedDismissOverlay, [selector] as const);
+          if (dismiss.dismissed) {
+            dismissedOverlay = true;
+            res = await execInTab(chromeId, injectedClick, [selector, button, mods] as const);
+            if (res.found === false) {
+              throw codedError(
+                "REF_STALE",
+                `ref ${params.ref} became stale after overlay dismissal in tab ${params.tab_id}`,
+              );
+            }
           }
         }
       }
@@ -1677,15 +1873,27 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       };
       const buildResult = (): ClickResult => {
         const r: ClickResult = { clicked: true };
-        if (dismissedOverlay) r.dismissed_overlay = true;
+        if (dismissedOverlay) {
+          r.dismissed_overlay = true;
+          if (dismissStrategy !== undefined) {
+            r.suggestion = `overlay dismissed via ${dismissStrategy}`;
+          }
+        }
         if (res.occluded === true) {
           r.occluded = true;
           r.occluder = res.occluder ?? null;
-          if (!dismissOverlay) {
-            r.clicked = false;
-            r.suggestion = "retry with dismiss_overlay: true";
+          r.clicked = false;
+          if (!dismissOverlay && !autoDismiss) {
+            // Provide actionable suggestion based on occluder text.
+            const occText = (res.occluder?.text ?? "").toLowerCase();
+            if (/cookie|consent|gdpr|accept/.test(occText)) {
+              r.suggestion = "cookie/consent overlay detected — retry with auto_dismiss: true";
+            } else if (res.occluder?.role === "dialog" || res.occluder?.role === "alertdialog") {
+              r.suggestion = "dialog overlay detected — retry with auto_dismiss: true";
+            } else {
+              r.suggestion = "retry with dismiss_overlay: true or auto_dismiss: true";
+            }
           } else {
-            r.clicked = false;
             r.suggestion =
               "overlay could not be dismissed; target element may be permanently covered";
           }
@@ -1892,7 +2100,7 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       };
 
       const dispatchSynthetic = async (): Promise<TypeResult> => {
-        let res: { found: boolean; typed: number; reflected: number };
+        let res: { found: boolean; typed: number; reflected: number; content_verified?: boolean };
         if (mode === "paste") {
           res = await execInTab(
             chromeId,
@@ -1913,13 +2121,29 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
         if (res.found === false) {
           throw codedError("REF_STALE", `ref ${params.ref} no longer resolves in tab ${params.tab_id}`);
         }
-        // If the write didn't land, auto-retry with one-shot execCommand —
-        // the synchronous DOM-native path that works on rich editors where
-        // per-char events get intercepted by focus-stealers.
+        // If the write didn't land, auto-retry with escalating strategies:
+        // 1. paste mode (execCommand insertText in one shot)
+        // 2. clipboard fallback (synthetic ClipboardEvent paste)
+        // Rich editors (Slack ProseMirror, Gmail Draft.js, Notion) may ignore
+        // synthetic keystrokes but respond to paste or execCommand.
         if (params.text.length > 0 && res.reflected === 0) {
+          // Strategy 2: paste mode (if we weren't already in paste mode).
+          if (mode !== "paste") {
+            res = await execInTab(
+              chromeId,
+              injectedTypePaste,
+              [selector, params.text, submit] as const,
+            );
+            if (res.found && res.reflected > 0) {
+              const r: TypeResult = { typed: res.reflected, mode: "paste" };
+              if (cleared !== undefined) r.cleared = cleared;
+              return r;
+            }
+          }
+          // Strategy 3: clipboard fallback (synthetic paste event + execCommand).
           res = await execInTab(
             chromeId,
-            injectedTypePaste,
+            injectedTypeClipboard,
             [selector, params.text, submit] as const,
           );
           if (res.found && res.reflected > 0) {
@@ -1929,7 +2153,7 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
           }
           throw codedError(
             "WRITE_NOT_REFLECTED",
-            `typed ${res.typed} characters but field content did not change`,
+            `typed ${params.text.length} characters via keystroke, paste, and clipboard strategies but field content did not change; try browser_set_cdp enabled:true for trusted events`,
           );
         }
         if (params.text.length > 0 && res.reflected >= params.text.length * 2) {
