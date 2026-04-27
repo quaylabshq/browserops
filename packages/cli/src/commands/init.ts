@@ -19,11 +19,14 @@ import {
   type ClientInfo,
 } from "../installers/index.js";
 import { readConfig, setConfigValue } from "../lib/config.js";
+import { installClaudeSkill } from "../installers/skill.js";
 
 export interface InitOpts {
   yes?: boolean;
   /** cac maps `--no-mcp` to `mcp: false`. */
   mcp?: boolean;
+  /** cac maps `--no-skill` to `skill: false`. */
+  skill?: boolean;
   client?: string;
   dryRun?: boolean;
 }
@@ -76,7 +79,42 @@ export async function runInit(opts: InitOpts = {}): Promise<void> {
     await runMcpInstaller(opts);
   }
 
+  if (opts.skill === false) {
+    info("skipping Claude skill install (--no-skill)");
+  } else {
+    await runSkillInstaller(opts.dryRun ?? false);
+  }
+
   printNextSteps(port);
+}
+
+async function runSkillInstaller(dryRun: boolean): Promise<void> {
+  // Only Claude Code has a first-class skills directory today. Detect via the
+  // claude-code installer's signal (claude on PATH) — if missing, skip silently
+  // and rely on install-rules + the bridge MCP prompt for that client.
+  const all = await detectClients();
+  const claudeCode = all.find((c) => c.id === "claude-code");
+  if (!claudeCode || !claudeCode.detected) {
+    info(
+      `skill install skipped — Claude Code not detected. Other clients pick up the skill via the bridge's ${c.cyan("/browserops")} MCP prompt or via ${c.cyan("browserops install-rules")}.`,
+    );
+    return;
+  }
+
+  try {
+    const result = await installClaudeSkill({ scope: "user", dryRun });
+    if (result.changed) {
+      const tail = result.backupPath ? ` ${dim(`(backup: ${result.backupPath})`)}` : "";
+      ok(`Claude skill: ${result.message}${tail}`);
+    } else {
+      info(`Claude skill: ${result.message}`);
+    }
+    process.stdout.write(
+      `  ${dim(`→ invoke in Claude Code via ${c.cyan("/browserops")}; run ${c.cyan("browserops install-skill --scope project")} to also install per-project.`)}\n`,
+    );
+  } catch (e) {
+    warn(`Claude skill install failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
 }
 
 async function seedDefaultLauncher(dryRun: boolean): Promise<void> {

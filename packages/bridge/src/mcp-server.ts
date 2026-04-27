@@ -3,6 +3,8 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
+  ListPromptsRequestSchema,
+  GetPromptRequestSchema,
   McpError,
   ErrorCode as McpErrorCode,
 } from "@modelcontextprotocol/sdk/types.js";
@@ -26,6 +28,7 @@ import type { TabRegistry } from "./tab-registry.js";
 import type { Logger } from "./logger.js";
 import type { TraceWriter } from "./trace-writer.js";
 import { buildProcedureHandlers } from "./procedures/handlers.js";
+import { listPrompts, getPrompt } from "./prompts.js";
 import { checkBreaker, recordResult as recordBreakerResult } from "./circuit-breaker.js";
 
 /**
@@ -289,7 +292,7 @@ export class McpBridgeServer {
 
     this.server = new Server(
       { name: "browserops", version: deps.version },
-      { capabilities: { tools: {} }, instructions: SERVER_INSTRUCTIONS },
+      { capabilities: { tools: {}, prompts: {} }, instructions: SERVER_INSTRUCTIONS },
     );
 
     this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -309,6 +312,13 @@ export class McpBridgeServer {
       // The SDK types the response as a union that includes a task-style
       // variant we don't emit; our shape matches the tool-result arm.
       return result as unknown as { content: Array<{ type: "text"; text: string }> };
+    });
+
+    this.server.setRequestHandler(ListPromptsRequestSchema, async () => listPrompts());
+
+    this.server.setRequestHandler(GetPromptRequestSchema, async (req) => {
+      const args = (req.params.arguments ?? {}) as Record<string, string>;
+      return getPrompt(req.params.name, args);
     });
   }
 

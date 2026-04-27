@@ -27,6 +27,7 @@ import { runLogs } from "./commands/logs.js";
 import { runDoctor } from "./commands/doctor.js";
 import { runUpgrade } from "./commands/upgrade.js";
 import { runInstallRules } from "./commands/install-rules.js";
+import { runInstallSkill } from "./commands/install-skill.js";
 import { runConfig } from "./commands/config.js";
 import { runClaudeLauncher } from "./launchers/claude.js";
 import { runCursorLauncher } from "./launchers/cursor.js";
@@ -45,16 +46,18 @@ const KNOWN_SUBCOMMANDS = new Set([
   "doctor",
   "upgrade",
   "install-rules",
+  "install-skill",
   "config",
 ]);
 
 const cli = cac("browserops");
 
 cli
-  .command("init", "First-run wizard: token, daemon, MCP-client install")
+  .command("init", "First-run wizard: token, daemon, MCP-client install, Claude skill")
   .option("--yes", "Non-interactive: accept all defaults")
   .option("--no-mcp", "Skip MCP-client install")
-  .option("--client <list>", "Comma-separated client list (claude,cursor,zed,continue,windsurf,codex)")
+  .option("--no-skill", "Skip Claude skill install")
+  .option("--client <list>", "Comma-separated client list (claude-code,cursor,zed,continue,windsurf,codex)")
   .option("--dry-run", "Print what would change without writing")
   .action((opts) => runInit(opts));
 
@@ -91,9 +94,16 @@ cli
 
 cli
   .command("install-rules", "Write per-project AGENTS.md rules slots (run inside a project)")
-  .option("--client <list>", "Comma-separated: cursor,windsurf,copilot,continue,zed")
+  .option("--client <list>", "Comma-separated: cursor,windsurf,copilot,continue,codex,zed")
   .option("--dry-run", "Print what would change without writing")
   .action((opts) => runInstallRules(opts));
+
+cli
+  .command("install-skill", "Install canonical browserops skill into Claude Code's skills dir")
+  .option("--scope <scope>", "user (~/.claude/skills/, default) or project (<cwd>/.claude/skills/)")
+  .option("--force", "Overwrite without checking for drift")
+  .option("--dry-run", "Print what would change without writing")
+  .action((opts) => runInstallSkill(opts));
 
 cli
   .command("config [action] [key] [value]", "Read/write persisted CLI config (~/.browserops/config.json)")
