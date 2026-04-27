@@ -26,6 +26,7 @@ import type { TabRegistry } from "./tab-registry.js";
 import type { Logger } from "./logger.js";
 import type { TraceWriter } from "./trace-writer.js";
 import { buildProcedureHandlers } from "./procedures/handlers.js";
+import { checkBreaker, recordResult as recordBreakerResult } from "./circuit-breaker.js";
 
 /**
  * Minimal shape McpBridgeServer needs to talk to the extension. Implemented
@@ -451,10 +452,32 @@ export class McpBridgeServer {
       }
     }
 
-    // 8. Timeout.
+    // 8. Repeated-failure circuit breaker.
+    // Short-circuit identical failing calls within a 30s window so the agent
+    // can't keep re-firing the same wrong action against the live page.
+    const breakerCall = { method: name, params };
+    const breakerCheck = checkBreaker(breakerCall);
+    if (breakerCheck.tripped) {
+      const result = await this.reply(
+        id,
+        name,
+        toolError({
+          code: "REPEATED_FAILURE",
+          message: breakerCheck.error.message,
+          details: {
+            next_action: breakerCheck.error.next_action,
+            diagnostic: breakerCheck.error.diagnostic,
+          },
+        }),
+      );
+      this.emitTrace(id, name, params, startMs, result);
+      return result;
+    }
+
+    // 9. Timeout.
     const timeoutMs = this.timeoutFor(def, params);
 
-    // 9. Call extension (forward cancellation).
+    // 10. Call extension (forward cancellation).
     // Raw input is recorded verbatim — callers who set BROWSEROPS_TRACE=1 have
     // explicitly opted in. Redaction of secrets in params is a future concern.
     try {
@@ -466,12 +489,14 @@ export class McpBridgeServer {
       );
 
       const result = await this.reply(id, name, toolOk(extResult));
+      recordBreakerResult(breakerCall, { ok: true });
       this.emitTrace(id, name, params, startMs, result);
       return result;
     } catch (err) {
       const code = extractErrorCode(err);
       const message = err instanceof Error ? err.message : String(err);
       const result = await this.reply(id, name, toolError({ code, message }));
+      recordBreakerResult(breakerCall, { ok: false, error_code: code });
       this.emitTrace(id, name, params, startMs, result);
       return result;
     }
