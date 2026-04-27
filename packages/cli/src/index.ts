@@ -29,6 +29,7 @@ import { runUpgrade } from "./commands/upgrade.js";
 import { runInstallRules } from "./commands/install-rules.js";
 import { runInstallSkill } from "./commands/install-skill.js";
 import { runConfig } from "./commands/config.js";
+import { runFeature } from "./commands/feature.js";
 import { runClaudeLauncher } from "./launchers/claude.js";
 import { runCursorLauncher } from "./launchers/cursor.js";
 import { runCodexLauncher } from "./launchers/codex.js";
@@ -48,6 +49,7 @@ const KNOWN_SUBCOMMANDS = new Set([
   "install-rules",
   "install-skill",
   "config",
+  "feature",
 ]);
 
 const cli = cac("browserops");
@@ -58,6 +60,7 @@ cli
   .option("--no-mcp", "Skip MCP-client install")
   .option("--no-skill", "Skip Claude skill install")
   .option("--client <list>", "Comma-separated client list (claude-code,cursor,zed,continue,windsurf,codex)")
+  .option("--features <list>", "Comma-separated experimental features to enable (teach,procedures)")
   .option("--dry-run", "Print what would change without writing")
   .action((opts) => runInit(opts));
 
@@ -110,6 +113,13 @@ cli
   .action((action: string | undefined, key: string | undefined, value: string | undefined) =>
     runConfig(action, key, value),
   );
+
+cli
+  .command(
+    "feature [action] [name]",
+    "List, enable, or disable gated experimental features (teach, procedures)",
+  )
+  .action((action: string | undefined, name: string | undefined) => runFeature(action, name));
 
 // Top-level launcher flags. cac surfaces these as --claude, --cursor, --codex
 // on the root command (i.e. `browserops --claude "task"`).
