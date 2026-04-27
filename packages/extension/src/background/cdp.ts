@@ -21,7 +21,13 @@ interface AttachState {
   detachTimer: ReturnType<typeof setTimeout> | null;
 }
 
-/** Domains where all input must go through CDP (canvas-rendered UIs). */
+/** Domains where all input must go through CDP (canvas-rendered UIs).
+ *  Keep this list narrow: only sites whose primary surface is a <canvas>
+ *  element, where synthetic DOM events have no reachable target. Chat and
+ *  rich-editor sites (Slack, Notion, Linear, Discord, Gmail) work with
+ *  synthetic dispatch and use the auto-escalation rescue path on the rare
+ *  failure — adding them here would force the "controlled by automation"
+ *  banner unnecessarily. */
 const AUTO_CDP_DOMAINS: readonly RegExp[] = [
   /^docs\.google\.com$/,
   /^sheets\.google\.com$/,
@@ -30,6 +36,10 @@ const AUTO_CDP_DOMAINS: readonly RegExp[] = [
   /^miro\.com$/,
   /(\.|^)whimsical\.com$/,
   /^figjam\.com$/,
+  /(\.|^)lucid\.app$/,
+  /(\.|^)lucidchart\.com$/,
+  /^app\.diagrams\.net$/,
+  /(\.|^)tldraw\.com$/,
 ];
 
 export class CdpManager {
