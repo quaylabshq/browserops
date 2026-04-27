@@ -29,9 +29,6 @@ importers:
 
   packages/bridge:
     dependencies:
-      '@browserops/shared':
-        specifier: workspace:*
-        version: link:../shared
       '@modelcontextprotocol/sdk':
         specifier: ^1.13.0
         version: 1.29.0(zod@4.3.6)
@@ -48,6 +45,9 @@ importers:
         specifier: ^2.5.0
         version: 2.8.3
     devDependencies:
+      '@browserops/shared':
+        specifier: workspace:*
+        version: link:../shared
       '@types/node':
         specifier: ^20.14.0
         version: 20.19.39
@@ -72,9 +72,6 @@ importers:
       '@browserops/bridge':
         specifier: workspace:*
         version: link:../bridge
-      '@browserops/shared':
-        specifier: workspace:*
-        version: link:../shared
       cac:
         specifier: ^6.7.14
         version: 6.7.14
@@ -88,6 +85,9 @@ importers:
         specifier: ^2.4.2
         version: 2.4.2
     devDependencies:
+      '@browserops/shared':
+        specifier: workspace:*
+        version: link:../shared
       '@types/node':
         specifier: ^20.14.0
         version: 20.19.39
