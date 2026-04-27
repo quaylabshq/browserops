@@ -18,6 +18,7 @@ import {
   type ClientId,
   type ClientInfo,
 } from "../installers/index.js";
+import { readConfig, setConfigValue } from "../lib/config.js";
 
 export interface InitOpts {
   yes?: boolean;
@@ -67,6 +68,7 @@ export async function runInit(opts: InitOpts = {}): Promise<void> {
   }
 
   await copyExtensionFiles(opts.dryRun ?? false);
+  await seedDefaultLauncher(opts.dryRun ?? false);
 
   if (opts.mcp === false) {
     info("skipping MCP-client install (--no-mcp)");
@@ -75,6 +77,20 @@ export async function runInit(opts: InitOpts = {}): Promise<void> {
   }
 
   printNextSteps(port);
+}
+
+async function seedDefaultLauncher(dryRun: boolean): Promise<void> {
+  const cfg = await readConfig();
+  if (cfg.default_launcher) {
+    info(`default_launcher: ${cfg.default_launcher} (already set)`);
+    return;
+  }
+  if (dryRun) {
+    info("would set default_launcher = claude");
+    return;
+  }
+  await setConfigValue("default_launcher", "claude");
+  ok(`default_launcher: claude  ${dim('(change with: browserops config set default_launcher cursor)')}`);
 }
 
 // ---------------------------------------------------------------------------

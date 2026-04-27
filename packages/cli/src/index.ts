@@ -8,11 +8,13 @@
  *   doctor         diagnose install
  *   upgrade        bump CLI + bridge + extension files, prompt to reload extension
  *   install-rules  per-project rules-slot installer (Cursor/Windsurf/Copilot)
+ *   config         get/set persisted preferences (e.g. default_launcher)
  *
- * Top-level launchers (no subcommand):
- *   browserops --claude "task"   ensure-running + exec claude
- *   browserops --cursor "task"   ensure-running + exec cursor
- *   browserops --codex  "task"   ensure-running + exec codex
+ * Top-level launchers:
+ *   browserops --claude "task"          force-route to claude
+ *   browserops --cursor "task"          force-route to cursor
+ *   browserops --codex  "task"          force-route to codex
+ *   browserops "task"                   route via configured default_launcher
  */
 import cac from "cac";
 import { CLI_VERSION } from "./lib/version.js";
@@ -25,10 +27,26 @@ import { runLogs } from "./commands/logs.js";
 import { runDoctor } from "./commands/doctor.js";
 import { runUpgrade } from "./commands/upgrade.js";
 import { runInstallRules } from "./commands/install-rules.js";
+import { runConfig } from "./commands/config.js";
 import { runClaudeLauncher } from "./launchers/claude.js";
 import { runCursorLauncher } from "./launchers/cursor.js";
 import { runCodexLauncher } from "./launchers/codex.js";
-import { err } from "./lib/ui.js";
+import { dispatchLauncher } from "./launchers/dispatch.js";
+import { getDefaultLauncher } from "./lib/config.js";
+import { err, info, dim } from "./lib/ui.js";
+
+const KNOWN_SUBCOMMANDS = new Set([
+  "init",
+  "start",
+  "stop",
+  "restart",
+  "status",
+  "logs",
+  "doctor",
+  "upgrade",
+  "install-rules",
+  "config",
+]);
 
 const cli = cac("browserops");
 
@@ -77,6 +95,12 @@ cli
   .option("--dry-run", "Print what would change without writing")
   .action((opts) => runInstallRules(opts));
 
+cli
+  .command("config [action] [key] [value]", "Read/write persisted CLI config (~/.browserops/config.json)")
+  .action((action: string | undefined, key: string | undefined, value: string | undefined) =>
+    runConfig(action, key, value),
+  );
+
 // Top-level launcher flags. cac surfaces these as --claude, --cursor, --codex
 // on the root command (i.e. `browserops --claude "task"`).
 cli
@@ -90,11 +114,15 @@ cli.version(CLI_VERSION);
 async function main(): Promise<void> {
   const parsed = cli.parse(process.argv, { run: false });
   const opts = parsed.options as Record<string, unknown>;
+  // Use the raw first arg (process.argv[2]) — once cac matches a subcommand
+  // it strips the command name from parsed.args, so inspecting parsed.args[0]
+  // would see the next positional ("set" / "get") instead.
+  const rawFirst = process.argv[2];
+  const isSubcommand = typeof rawFirst === "string" && KNOWN_SUBCOMMANDS.has(rawFirst);
 
-  // Top-level launcher flags take precedence over the help screen but only
-  // when there's no subcommand on the line.
-  const sub = parsed.args[0];
-  if (!sub) {
+  // --claude/--cursor/--codex force-route, regardless of whether a positional
+  // is also present. They take precedence over default-launcher routing.
+  if (!isSubcommand) {
     if (typeof opts["claude"] === "string") {
       await runClaudeLauncher(opts["claude"] as string);
       return;
@@ -109,8 +137,31 @@ async function main(): Promise<void> {
     }
   }
 
-  // Otherwise: dispatch to subcommand action via cac.
-  await cli.runMatchedCommand();
+  if (isSubcommand) {
+    await cli.runMatchedCommand();
+    return;
+  }
+
+  // No subcommand, no launcher flag: if the user passed positional text,
+  // treat it as a task and route via the configured default launcher.
+  const task = parsed.args.map(String).join(" ").trim();
+  if (task) {
+    const { id, configured } = await getDefaultLauncher();
+    if (configured) {
+      info(dim(`routing to ${id}`));
+    } else {
+      info(
+        dim(
+          `routing to ${id} (default — set with: browserops config set default_launcher cursor)`,
+        ),
+      );
+    }
+    await dispatchLauncher(id, task);
+    return;
+  }
+
+  // Bare invocation: show help.
+  cli.outputHelp();
 }
 
 main().catch((e: unknown) => {
