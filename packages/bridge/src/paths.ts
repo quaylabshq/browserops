@@ -27,3 +27,7 @@ export function riskyDomainsPath(): string {
 export function controlSocketPath(): string {
   return join(stateDir(), CONTROL_SOCKET_FILENAME);
 }
+
+export function configPath(): string {
+  return join(stateDir(), "config.json");
+}
