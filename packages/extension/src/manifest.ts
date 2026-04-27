@@ -19,7 +19,7 @@ export default defineManifest({
   manifest_version: 3,
   name: "BrowserOps",
   description: "Autonomous browser control for MCP-compatible agents.",
-  version: "0.1.0",
+  version: "0.0.1",
   minimum_chrome_version: "120",
   key: EXTENSION_KEY,
   permissions: ["tabs", "scripting", "debugger", "storage", "alarms", "webNavigation", "webRequest"],

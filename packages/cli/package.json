@@ -1,6 +1,6 @@
 {
   "name": "browserops",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "type": "module",
   "description": "browserops CLI — install, run, and orchestrate the browserops bridge from the terminal",
   "bin": {
