@@ -9,6 +9,8 @@ import { defineConfig } from "tsup";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const examplesDir = path.resolve(here, "..", "..", "examples", "procedures");
 const seedDir = path.resolve(here, "dist", "seed");
+const skillSrc = path.resolve(here, "..", "..", "skills", "browserops.md");
+const skillDest = path.resolve(seedDir, "skill.md");
 
 async function copyExamplesIntoDist(): Promise<void> {
   try {
@@ -18,6 +20,18 @@ async function copyExamplesIntoDist(): Promise<void> {
   }
   await fs.rm(seedDir, { recursive: true, force: true });
   await fs.cp(examplesDir, seedDir, { recursive: true });
+}
+
+async function copySkillIntoDist(): Promise<void> {
+  try {
+    await fs.access(skillSrc);
+  } catch {
+    process.stderr.write(
+      `[tsup] warn: skills/browserops.md not found at ${skillSrc} — skill prompt will fall back to dev-layout resolution\n`,
+    );
+    return;
+  }
+  await fs.copyFile(skillSrc, skillDest);
 }
 
 export default defineConfig({
@@ -32,5 +46,6 @@ export default defineConfig({
   noExternal: ["@browserops/shared"],
   onSuccess: async () => {
     await copyExamplesIntoDist();
+    await copySkillIntoDist();
   },
 });

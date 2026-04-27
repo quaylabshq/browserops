@@ -7,6 +7,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..", "..");
 const extensionDist = path.resolve(repoRoot, "packages", "extension", "dist");
 const agentsMd = path.resolve(repoRoot, "AGENTS.md");
+const skillMd = path.resolve(repoRoot, "skills", "browserops.md");
 const assetsDir = path.resolve(here, "dist", "assets");
 
 async function copyAssetsIntoDist(): Promise<void> {
@@ -30,6 +31,17 @@ async function copyAssetsIntoDist(): Promise<void> {
     await fs.cp(agentsMd, path.resolve(assetsDir, "AGENTS.md"));
   } catch {
     // AGENTS.md missing — install-rules will warn at runtime
+  }
+
+  // Bundle the canonical skill so `browserops install-skill` can drop it into
+  // ~/.claude/skills/browserops/ (and anywhere else with a skill-dir convention).
+  try {
+    await fs.access(skillMd);
+    const skillTarget = path.resolve(assetsDir, "skills", "browserops");
+    await fs.mkdir(skillTarget, { recursive: true });
+    await fs.cp(skillMd, path.resolve(skillTarget, "SKILL.md"));
+  } catch {
+    // skill missing — install-skill will warn at runtime
   }
 }
 

@@ -154,6 +154,45 @@ async function installContinue(
   return { changed: true, path, message: `wrote ${path}` };
 }
 
+// --- codex ---
+// Codex CLI auto-discovers AGENTS.md from the project root (cwd). Use the
+// same sentinel-block approach as windsurf/copilot so re-runs replace the
+// browserops block in place rather than appending duplicates.
+async function installCodex(
+  content: string,
+  cwd: string,
+  dryRun: boolean,
+): Promise<TargetResult> {
+  const path = join(cwd, "AGENTS.md");
+  const block = `${SENTINEL_START}\n${content}\n${SENTINEL_END}`;
+  const existing = await readFileSafe(path);
+
+  let newContent: string;
+  if (existing === null) {
+    newContent = `# Project agent rules\n\n${block}\n`;
+  } else if (existing.includes(SENTINEL_START)) {
+    newContent = existing.replace(
+      new RegExp(`${escapeRegex(SENTINEL_START)}[\\s\\S]*?${escapeRegex(SENTINEL_END)}`),
+      block,
+    );
+    if (newContent === existing) {
+      return { changed: false, path, message: "already up to date" };
+    }
+  } else {
+    newContent = `${existing}\n\n${block}\n`;
+  }
+
+  if (dryRun) {
+    return { changed: true, path, message: `would write ${path}` };
+  }
+
+  if (existsSync(path)) {
+    await backup(path);
+  }
+  await atomicWrite(path, newContent);
+  return { changed: true, path, message: `wrote ${path}` };
+}
+
 // --- zed (no-op: manual only) ---
 async function installZed(
   _content: string,
@@ -168,7 +207,7 @@ function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-const ALL_TARGETS = ["cursor", "windsurf", "copilot", "continue", "zed"] as const;
+const ALL_TARGETS = ["cursor", "windsurf", "copilot", "continue", "codex", "zed"] as const;
 type TargetName = (typeof ALL_TARGETS)[number];
 
 const INSTALLERS: Record<
@@ -179,6 +218,7 @@ const INSTALLERS: Record<
   windsurf: installWindsurf,
   copilot: installCopilot,
   continue: installContinue,
+  codex: installCodex,
   zed: installZed,
 };
 
