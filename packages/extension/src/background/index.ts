@@ -62,6 +62,8 @@ const teachRecorder = new TeachRecorder({
   resolveTabId: (chromeTabId: number) => chromeIdToTabId.get(chromeTabId),
   emit: (ev) => wsClient?.sendEvent("teach_event", ev),
   onStatusChanged: () => {
+    currentRecording = teachRecorder.isActive();
+    applyBadge();
     chrome.runtime.sendMessage({ type: "teach_status_changed" }).catch(() => {});
   },
 });
@@ -97,6 +99,10 @@ let currentDisabled = false;
 // gated mode via the popup checkbox. Source of truth is the popup-controlled
 // `requireApproval` session key (inverted) — see the storage listener below.
 let currentAutoApprove = true;
+// Teach mode capture state — when on, the badge shows REC regardless of
+// connection status. This is a privacy signal: the user must always know
+// when clicks/typing are being captured.
+let currentRecording = false;
 
 // The user's "Disable" intent is stored in chrome.storage.local so it persists
 // across both SW restarts and browser restarts. The extension stays off until
@@ -104,6 +110,13 @@ let currentAutoApprove = true;
 const DISABLED_KEY = "disabled";
 
 function applyBadge(): void {
+  // Recording trumps every other badge state — the user must see capture is
+  // on, even if disabled or disconnected (capture works locally regardless).
+  if (currentRecording) {
+    chrome.action.setBadgeText({ text: "REC" }).catch(() => {});
+    chrome.action.setBadgeBackgroundColor({ color: "#c1121f" }).catch(() => {});
+    return;
+  }
   if (currentDisabled) {
     chrome.action.setBadgeText({ text: "—" }).catch(() => {});
     chrome.action.setBadgeBackgroundColor({ color: "#888888" }).catch(() => {});
@@ -361,16 +374,9 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
     sendResponse({ ok: true });
     return false;
   }
-  if (tag === "teach_start") {
-    void (async () => {
-      const mm = m as { scope?: unknown; narration_hint?: unknown };
-      const scope = mm.scope === "active_tab" ? "active_tab" : "all_tabs";
-      const hint = typeof mm.narration_hint === "string" ? mm.narration_hint : undefined;
-      const r = await teachRecorder.start(scope, hint);
-      sendResponse(r);
-    })();
-    return true;
-  }
+  // Popup-driven teach surface: only stop + status. Activation, markers,
+  // and narration are agent-driven through the procedures_teach_* MCP tools,
+  // which reach the recorder via the router (handlers/teach.ts).
   if (tag === "teach_stop") {
     void (async () => {
       const r = await teachRecorder.stop();
@@ -380,22 +386,6 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
   }
   if (tag === "teach_status") {
     sendResponse(teachRecorder.status());
-    return false;
-  }
-  if (tag === "teach_marker") {
-    const mm = m as { label?: unknown };
-    teachRecorder.recordMarker(typeof mm.label === "string" ? mm.label : undefined);
-    sendResponse({ ok: true });
-    return false;
-  }
-  if (tag === "teach_narration") {
-    const mm = m as { text?: unknown };
-    if (typeof mm.text !== "string" || mm.text === "") {
-      sendResponse({ ok: false });
-      return false;
-    }
-    teachRecorder.recordNarration(mm.text);
-    sendResponse({ ok: true });
     return false;
   }
   if (tag === "kill_switch") {
@@ -441,5 +431,8 @@ void (async () => {
     }
   });
   await teachRecorder.rehydrate();
+  // Sync the recording flag if the SW was killed mid-session and revived.
+  currentRecording = teachRecorder.isActive();
+  applyBadge();
   await startClient();
 })();
