@@ -10,3 +10,4 @@ export * from "./effects.js";
 export * from "./trace.js";
 export * from "./teach.js";
 export * from "./features.js";
+export * from "./gated-domains.js";
