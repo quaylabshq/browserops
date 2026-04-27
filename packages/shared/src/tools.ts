@@ -1930,6 +1930,46 @@ const proceduresTeachMarker: ToolDef = {
   errorCodes: [...BASE_CODES, "INVALID_STATE", "EXTENSION_DISCONNECTED"] as const,
 } as const;
 
+const proceduresTeachDistill: ToolDef = {
+  name: "procedures_teach_distill",
+  description:
+    "Convert a recorded teach session into a draft procedure YAML. Single-leaf MVP: every interaction " +
+    "(click / type / key / navigate) becomes one step in one leaf; scroll, narration, and marker events " +
+    "are dropped; multi-tab sessions are flattened onto the dominant tab with a warning. Redacted typing " +
+    "events become required string inputs (password / otp_code / secret). The returned YAML is a draft — " +
+    'replay it before calling procedures_save. REQUIRED: {"session_id": "ts_..."}. ' +
+    'OPTIONAL: {"name": "<procedure name>", "description": "<one-liner>"}.',
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["session_id"] as const,
+    properties: {
+      session_id: { type: "string" },
+      name: { type: "string", pattern: procedureNamePattern },
+      description: { type: "string", minLength: 1, maxLength: 200 },
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["yaml", "warnings", "redacted_inputs"] as const,
+    properties: {
+      yaml: { type: "string" },
+      warnings: { type: "array", items: { type: "string" } },
+      redacted_inputs: {
+        type: "array",
+        items: { type: "string" },
+        description:
+          "Names of procedure inputs that were created from redacted typing events. " +
+          "The runner must supply values for these at execution time.",
+      },
+    },
+  },
+  action_weight: 0,
+  risky: "never",
+  errorCodes: [...BASE_CODES, ...PROC_CODES] as const,
+} as const;
+
 const proceduresTeachNarration: ToolDef = {
   name: "procedures_teach_narration",
   description:
@@ -2000,6 +2040,7 @@ export const TOOL_DEFS: readonly ToolDef[] = [
   proceduresTeachList,
   proceduresTeachMarker,
   proceduresTeachNarration,
+  proceduresTeachDistill,
 ] as const;
 
 export const TOOL_DEF_MAP: Record<string, ToolDef> = Object.freeze(

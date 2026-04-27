@@ -14,6 +14,7 @@ import type { TeachSessionMeta } from "@browserops/shared";
 import type { WSBridgeLike } from "../mcp-server.js";
 import { CodedError } from "../procedures/store.js";
 import type { TeachSessionStore } from "./session-store.js";
+import { distillSession } from "./distill.js";
 
 const TEACH_CALL_TIMEOUT_MS = 10_000;
 
@@ -37,6 +38,12 @@ export interface TeachObserveResult {
 
 export interface TeachListResult {
   sessions: TeachSessionMeta[];
+}
+
+export interface TeachDistillResult {
+  yaml: string;
+  warnings: string[];
+  redacted_inputs: string[];
 }
 
 export function buildTeachHandlers(
@@ -139,6 +146,26 @@ export function buildTeachHandlers(
     return { ok: true };
   }
 
+  async function handleDistill(
+    raw: Record<string, unknown>,
+  ): Promise<TeachDistillResult> {
+    const sessionId = raw["session_id"];
+    if (typeof sessionId !== "string" || sessionId === "") {
+      throw new CodedError("INVALID_PARAMS", "session_id:string required");
+    }
+    const opts: { name?: string; description?: string } = {};
+    const nameRaw = raw["name"];
+    if (typeof nameRaw === "string" && nameRaw !== "") opts.name = nameRaw;
+    const descRaw = raw["description"];
+    if (typeof descRaw === "string" && descRaw !== "") opts.description = descRaw;
+    const result = await distillSession(sessionId, store, opts);
+    return {
+      yaml: result.yaml,
+      warnings: result.warnings,
+      redacted_inputs: result.redacted_inputs,
+    };
+  }
+
   return {
     procedures_teach_start: handleStart,
     procedures_teach_stop: handleStop,
@@ -146,5 +173,6 @@ export function buildTeachHandlers(
     procedures_teach_list: handleList,
     procedures_teach_marker: handleMarker,
     procedures_teach_narration: handleNarration,
+    procedures_teach_distill: handleDistill,
   };
 }
