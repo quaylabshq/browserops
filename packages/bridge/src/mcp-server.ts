@@ -19,6 +19,7 @@ import {
   NAVIGATE_TIMEOUT_MS,
   WAIT_FOR_TIMEOUT_CAP_MS,
   type ErrorCode,
+  type FeatureName,
   isErrorCode,
   type TraceEvent,
 } from "@browserops/shared";
@@ -123,6 +124,12 @@ export interface McpBridgeDeps {
   version: string;
   /** Disk-backed teach-mode session store (procedures_teach_* handlers read/write here). */
   teachStore: TeachSessionStore;
+  /**
+   * Set of currently-enabled gated features. Tools whose def.feature is set
+   * but absent from this set are hidden from tools/list and rejected at
+   * tools/call with FEATURE_DISABLED.
+   */
+  enabledFeatures: ReadonlySet<FeatureName>;
   /** Optional trace writer. When provided, the router will emit a TraceEvent after each tool result. */
   traceWriter?: TraceWriter;
 }
@@ -299,7 +306,9 @@ export class McpBridgeServer {
     );
 
     this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
-      tools: TOOL_DEFS.map((d) => ({
+      tools: TOOL_DEFS.filter(
+        (d) => d.feature === undefined || this.deps.enabledFeatures.has(d.feature),
+      ).map((d) => ({
         name: d.name,
         description: d.description,
         // Some tool-use APIs (Anthropic's among them) reject top-level
@@ -362,6 +371,25 @@ export class McpBridgeServer {
     const def = TOOL_DEF_MAP[name];
     if (!def) {
       throw new McpError(McpErrorCode.MethodNotFound, `unknown tool: ${name}`);
+    }
+
+    // 2b. Feature gate. Tools whose feature flag is set but disabled are
+    // hidden from tools/list; this branch handles a client that calls them
+    // anyway (cached catalogue, naming convention, etc.).
+    if (def.feature !== undefined && !this.deps.enabledFeatures.has(def.feature)) {
+      const result = await this.reply(
+        id,
+        name,
+        toolError({
+          code: "FEATURE_DISABLED",
+          message:
+            `tool "${name}" requires the "${def.feature}" feature, which is currently off. ` +
+            `Enable it with: browserops feature enable ${def.feature}`,
+          details: { feature: def.feature },
+        }),
+      );
+      this.emitTrace(id, name, params, startMs, result);
+      return result;
     }
 
     // 3. Validate params (no rate-limit consumption on invalid input).
