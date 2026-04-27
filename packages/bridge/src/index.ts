@@ -23,6 +23,8 @@ import { ensureIndex } from "./procedures/index-builder.js";
 import { proceduresRoot } from "./procedures/paths.js";
 import { seedBundledProcedures } from "./procedures/seed.js";
 import { runInit } from "./cli-init.js";
+import { TeachSessionStore } from "./teach/session-store.js";
+import type { TeachEvent } from "@browserops/shared";
 
 const VERSION = "0.0.4";
 
@@ -63,6 +65,7 @@ async function main(): Promise<void> {
   const riskyMatcher = await loadRiskyDomainMatcher();
   const tabs = new TabRegistry();
   const rateLimiter = new RateLimiter(RATE_LIMIT_PER_TAB_PER_MIN, globalCap);
+  const teachStore = new TeachSessionStore();
   const sockPath = controlSocketPath();
 
   // ---------------------------------------------------------------------
@@ -210,6 +213,18 @@ async function main(): Promise<void> {
       bridgeVersion: VERSION,
       logger,
       onEvent: (name, payload) => {
+        if (name === "teach_event") {
+          const ev = payload as unknown as TeachEvent;
+          teachStore.appendEvent(ev).catch((err: unknown) => {
+            void logger.write({
+              dir: "system",
+              event: "teach_append_failed",
+              error: err instanceof Error ? err.message : String(err),
+            });
+          });
+          if (controlServer) controlServer.broadcastEvent(name, payload);
+          return;
+        }
         const minted = handleEvent(name, payload, tabs, rateLimiter, logger);
         if (minted) {
           // Close the loop with the extension: it's polling its chromeIdToTabId
