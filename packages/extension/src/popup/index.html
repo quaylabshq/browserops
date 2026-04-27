@@ -59,6 +59,33 @@
         </div>
       </div>
 
+      <div id="teach-pane" class="section teach">
+        <div class="section__title">Teach mode</div>
+        <div id="teach-idle" class="teach-state active">
+          <div class="option-desc">
+            Demonstrate a flow. The agent watches and turns it into a procedure.
+            Passwords and secrets are redacted at capture.
+          </div>
+          <input id="teach-hint" class="teach-input" type="text" maxlength="120"
+                 placeholder="What are you about to do? (optional)" />
+          <button id="teach-start" type="button" class="btn btn--block">Start teaching</button>
+        </div>
+        <div id="teach-active" class="teach-state">
+          <div class="teach-active-row">
+            <span class="pill pill--rec" aria-live="polite">REC</span>
+            <span id="teach-counter" class="teach-counter">0 events</span>
+          </div>
+          <div id="teach-id" class="teach-id"></div>
+          <input id="teach-note" class="teach-input" type="text" maxlength="200"
+                 placeholder="Add a note for the agent…" />
+          <div class="teach-actions">
+            <button id="teach-add-note" type="button" class="btn btn--ghost">Add note</button>
+            <button id="teach-marker" type="button" class="btn btn--ghost">Mark split</button>
+          </div>
+          <button id="teach-stop" type="button" class="btn btn--block btn--danger">Stop teaching</button>
+        </div>
+      </div>
+
       <div class="footer">
         <button id="kill" type="button" class="btn btn--block">Connect</button>
       </div>
