@@ -1,4 +1,4 @@
-import { isErrorCode, type ErrorCode, type Request, type Response } from "@browserops/shared";
+import { isErrorCode, type ErrorCode, type FeatureName, type Request, type Response } from "@browserops/shared";
 import type { EventName, EventMap } from "@browserops/shared";
 import type { RefCache } from "./ref-cache.js";
 
@@ -10,14 +10,39 @@ export interface Context {
   // TODO: inject debugger-session manager in a later PR.
 }
 
+export interface RegisterOptions {
+  /**
+   * Optional feature gate. When set, the handler is rejected at dispatch
+   * time with FEATURE_DISABLED if the feature is absent from the live
+   * features set (sourced from chrome.storage.local.features, populated
+   * by the bridge's HelloAck on every connect).
+   */
+  feature?: FeatureName;
+}
+
 export class Router {
   private readonly handlers = new Map<string, Handler>();
+  private readonly featureByMethod = new Map<string, FeatureName>();
+  /** Live feature set provider; defaults to allow-all (treats all gates as on). */
+  private getFeatures: () => ReadonlySet<FeatureName> = () =>
+    new Set<FeatureName>(["teach", "procedures"]);
 
-  register(method: string, handler: Handler): void {
+  register(method: string, handler: Handler, opts?: RegisterOptions): void {
     if (this.handlers.has(method)) {
       console.warn(`[router] overwriting existing handler for ${method}`);
     }
     this.handlers.set(method, handler);
+    if (opts?.feature !== undefined) this.featureByMethod.set(method, opts.feature);
+    else this.featureByMethod.delete(method);
+  }
+
+  /**
+   * Set the source for the live feature set. The dispatch gate calls this
+   * on every request, so the SW can keep the source in sync with
+   * chrome.storage.local.features without re-registering handlers.
+   */
+  setFeatureSource(getFeatures: () => ReadonlySet<FeatureName>): void {
+    this.getFeatures = getFeatures;
   }
 
   async dispatch(req: Request, ctx: Context): Promise<Response> {
@@ -28,6 +53,19 @@ export class Router {
         id: req.id,
         ok: false,
         error: { code: "INTERNAL", message: `no handler for method: ${req.method}` },
+      };
+    }
+    const required = this.featureByMethod.get(req.method);
+    if (required !== undefined && !this.getFeatures().has(required)) {
+      return {
+        type: "response",
+        id: req.id,
+        ok: false,
+        error: {
+          code: "FEATURE_DISABLED",
+          message: `method "${req.method}" requires feature "${required}", which is currently off`,
+          details: { feature: required },
+        },
       };
     }
     try {
