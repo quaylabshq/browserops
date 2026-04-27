@@ -34,6 +34,8 @@ import {
 import { handleCompile } from "./compile.js";
 import { makeExecuteHandler } from "./execute.js";
 import type { WSBridgeLike } from "../mcp-server.js";
+import { buildTeachHandlers } from "../teach/handlers.js";
+import type { TeachSessionStore } from "../teach/session-store.js";
 import {
   ensureIndex,
   buildIndex,
@@ -720,16 +722,20 @@ export const PROCEDURE_HANDLERS: Record<string, HandlerFn> = {
 };
 
 /**
- * Build and register the procedures_execute handler, which requires a
- * wsBridge reference to dispatch tool calls to the extension.
+ * Build and register the procedures_execute handler plus the procedures_teach_*
+ * family. Both require a wsBridge reference; the teach handlers also read and
+ * write a session store on disk.
  *
- * Called once during McpBridgeServer construction. Returns a new handler map
- * that includes procedures_execute bound to the provided wsBridge.
+ * Called once during McpBridgeServer construction.
  */
-export function buildProcedureHandlers(wsBridge: WSBridgeLike): Record<string, HandlerFn> {
+export function buildProcedureHandlers(
+  wsBridge: WSBridgeLike,
+  teachStore: TeachSessionStore,
+): Record<string, HandlerFn> {
   return {
     ...PROCEDURE_HANDLERS,
     "procedures_execute": makeExecuteHandler(wsBridge),
+    ...buildTeachHandlers(wsBridge, teachStore),
   };
 }
 

@@ -1,8 +1,8 @@
-import type { ErrorCode } from "@browserops/shared";
+import { CONTROL_SOCKET_FILENAME, type ErrorCode } from "@browserops/shared";
 
 export const CONTROL_PROTOCOL_VERSION = 1;
 
-export const CONTROL_SOCKET_FILENAME = "bridge.sock";
+export { CONTROL_SOCKET_FILENAME };
 
 export interface ControlHello {
   type: "hello";

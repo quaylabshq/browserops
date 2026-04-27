@@ -18,6 +18,8 @@ const safetyTool = $<HTMLDivElement>("safety-tool");
 const safetyReason = $<HTMLDivElement>("safety-reason");
 const safetyAllow = $<HTMLButtonElement>("safety-allow");
 const safetyDeny = $<HTMLButtonElement>("safety-deny");
+const teachActiveBar = $<HTMLDivElement>("teach-active-bar");
+const teachStopBtn = $<HTMLButtonElement>("teach-stop");
 
 interface PendingSafetyPrompt {
   tool: string;
@@ -68,11 +70,32 @@ function renderSafety(prompt: PendingSafetyPrompt | null): void {
   mainPane.classList.add("hidden");
 }
 
+interface TeachStatus {
+  active: boolean;
+}
+
+function renderTeach(status: TeachStatus): void {
+  teachActiveBar.classList.toggle("active", status.active === true);
+}
+
+async function refreshTeach(): Promise<void> {
+  try {
+    const status = (await chrome.runtime.sendMessage({ type: "teach_status" })) as
+      | TeachStatus
+      | undefined;
+    if (status === undefined || status === null) return;
+    renderTeach(status);
+  } catch {
+    /* SW asleep — next poll will catch up. */
+  }
+}
+
 async function refresh(): Promise<void> {
   const [local, session] = await Promise.all([
     chrome.storage.local.get(["connected", "token"]),
     chrome.storage.session.get(["pendingSafetyPrompt", "requireApproval", "autoApprove"]),
   ]);
+  void refreshTeach();
 
   // Migration: if old autoApprove key exists, translate to new requireApproval key
   if (session["autoApprove"] !== undefined && session["requireApproval"] === undefined) {
@@ -156,8 +179,28 @@ runSetupBtn.addEventListener("click", () => {
   window.close();
 });
 
+// Emergency stop only — start / marker / narration are agent-driven through
+// the procedures_teach_* MCP tools. The popup is the escape valve for when
+// the agent is gone or stuck.
+teachStopBtn.addEventListener("click", () => {
+  teachStopBtn.disabled = true;
+  void chrome.runtime
+    .sendMessage({ type: "teach_stop" })
+    .catch(() => {})
+    .finally(() => {
+      teachStopBtn.disabled = false;
+      void refreshTeach();
+    });
+});
+
 chrome.storage.session.onChanged.addListener((changes) => {
   if ("pendingSafetyPrompt" in changes) void refresh();
+  if ("teach_session" in changes) void refreshTeach();
+});
+
+chrome.runtime.onMessage.addListener((msg: unknown) => {
+  if (typeof msg !== "object" || msg === null) return;
+  if ((msg as { type?: unknown }).type === "teach_status_changed") void refreshTeach();
 });
 
 void refresh();

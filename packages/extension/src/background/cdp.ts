@@ -13,6 +13,8 @@
  * CDP_ATTACH_FAILED and surface to the user.
  */
 
+import { matchGatedDomain } from "@browserops/shared";
+
 const PROTOCOL_VERSION = "1.3";
 const IDLE_DETACH_MS = 5_000;
 
@@ -21,7 +23,13 @@ interface AttachState {
   detachTimer: ReturnType<typeof setTimeout> | null;
 }
 
-/** Domains where all input must go through CDP (canvas-rendered UIs). */
+/** Domains where all input must go through CDP (canvas-rendered UIs).
+ *  Keep this list narrow: only sites whose primary surface is a <canvas>
+ *  element, where synthetic DOM events have no reachable target. Chat and
+ *  rich-editor sites (Slack, Notion, Linear, Discord, Gmail) work with
+ *  synthetic dispatch and use the auto-escalation rescue path on the rare
+ *  failure — adding them here would force the "controlled by automation"
+ *  banner unnecessarily. */
 const AUTO_CDP_DOMAINS: readonly RegExp[] = [
   /^docs\.google\.com$/,
   /^sheets\.google\.com$/,
@@ -30,12 +38,18 @@ const AUTO_CDP_DOMAINS: readonly RegExp[] = [
   /^miro\.com$/,
   /(\.|^)whimsical\.com$/,
   /^figjam\.com$/,
+  /(\.|^)lucid\.app$/,
+  /(\.|^)lucidchart\.com$/,
+  /^app\.diagrams\.net$/,
+  /(\.|^)tldraw\.com$/,
 ];
 
 export class CdpManager {
   private readonly attached = new Map<number, AttachState>();
   private readonly external = new Set<number>();
   private readonly persistent = new Set<number>();
+  /** Tabs made persistent specifically by autoAttachIfGated (for targeted detach). */
+  private readonly gatedPersistent = new Set<number>();
 
   constructor() {
     // External detach (user clicked the "Cancel" banner, DevTools opened,
@@ -47,6 +61,7 @@ export class CdpManager {
       if (reason !== "target_closed") this.external.add(id);
       this.attached.delete(id);
       this.persistent.delete(id);
+      this.gatedPersistent.delete(id);
     });
   }
 
@@ -105,6 +120,21 @@ export class CdpManager {
   /** Remove persistent flag without detaching (for tab removal). */
   clearPersistent(chromeTabId: number): void {
     this.persistent.delete(chromeTabId);
+    this.gatedPersistent.delete(chromeTabId);
+  }
+
+  /** Auto-enable persistent CDP if the URL matches a gated-domain pattern.
+   *  Call after navigation completes. Detaches only when WE attached for gated reasons. */
+  async autoAttachIfGated(chromeTabId: number, url: string, patterns: readonly string[]): Promise<void> {
+    const match = matchGatedDomain(url, patterns);
+    if (match && !this.persistent.has(chromeTabId)) {
+      this.gatedPersistent.add(chromeTabId);
+      await this.setPersistent(chromeTabId, true).catch(() => { /* ignore attach failures */ });
+    } else if (!match && this.gatedPersistent.has(chromeTabId)) {
+      // Navigated away — detach only what we attached for gated reasons.
+      this.gatedPersistent.delete(chromeTabId);
+      await this.setPersistent(chromeTabId, false);
+    }
   }
 
   /** Auto-enable persistent CDP if the URL is a known canvas domain.

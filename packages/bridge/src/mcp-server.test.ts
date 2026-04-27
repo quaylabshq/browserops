@@ -18,6 +18,7 @@ import type { Safety } from "./safety.js";
 import type { Logger } from "./logger.js";
 import type { TraceWriter } from "./trace-writer.js";
 import type { TraceEvent } from "@browserops/shared";
+import { TeachSessionStore } from "./teach/session-store.js";
 
 // ---------------------------------------------------------------------------
 // Minimal mock factory helpers
@@ -83,6 +84,12 @@ function makeDeps(overrides: Partial<McpBridgeDeps> = {}): McpBridgeDeps {
     tabs: new TabRegistry(),
     logger: makeLogger(),
     version: "0.0.0-test",
+    teachStore: new TeachSessionStore(),
+    // Test default: every gated feature on, so existing tool-call tests
+    // (which call browser_* + procedures_* tools) keep working without
+    // needing to reason about the feature gate per case. Gate-specific
+    // tests pass an explicit empty / scoped set in their overrides.
+    enabledFeatures: new Set(["teach", "procedures"]),
     ...overrides,
   };
 }
@@ -285,6 +292,43 @@ describe("McpBridgeServer — TraceEvent emission", () => {
     await callTool(deps, "browser_navigate", inputParams, "req-input");
 
     expect(calls[0]?.input).toEqual(inputParams);
+  });
+});
+
+describe("McpBridgeServer — feature gates", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function errorCodeOf(result: unknown): string | undefined {
+    const r = result as { content?: Array<{ text?: string }>; isError?: boolean };
+    if (r.isError !== true) return undefined;
+    const text = r.content?.[0]?.text ?? "";
+    try {
+      const parsed = JSON.parse(text) as { code?: string };
+      return parsed.code;
+    } catch {
+      return undefined;
+    }
+  }
+
+  it("returns FEATURE_DISABLED when calling a procedures_* tool with procedures off", async () => {
+    const deps = makeDeps({ enabledFeatures: new Set([]) });
+    const result = await callTool(deps, "procedures_list", {});
+    expect(errorCodeOf(result)).toBe("FEATURE_DISABLED");
+  });
+
+  it("returns FEATURE_DISABLED when calling a procedures_teach_* tool with teach off", async () => {
+    const deps = makeDeps({ enabledFeatures: new Set(["procedures"]) });
+    const result = await callTool(deps, "procedures_teach_list", {});
+    expect(errorCodeOf(result)).toBe("FEATURE_DISABLED");
+  });
+
+  it("permits a procedures_* tool when procedures is enabled", async () => {
+    const deps = makeDeps({ enabledFeatures: new Set(["procedures"]) });
+    const result = await callTool(deps, "procedures_list", {});
+    // Real handler runs; whatever it returns isn't FEATURE_DISABLED.
+    expect(errorCodeOf(result)).not.toBe("FEATURE_DISABLED");
   });
 });
 

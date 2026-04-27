@@ -1,4 +1,5 @@
-import { NAVIGATE_TIMEOUT_MS, WAIT_FOR_TIMEOUT_CAP_MS, type ErrorCode, type PageEffect } from "@browserops/shared";
+import { NAVIGATE_TIMEOUT_MS, WAIT_FOR_TIMEOUT_CAP_MS, matchGatedDomain, GATED_DOMAIN_DIRECTIVE, type ErrorCode, type PageEffect } from "@browserops/shared";
+import { getGatedDomainPatterns } from "../gated-state.js";
 import { checkEffectExpectation } from "./effects.js";
 import type { Router } from "../router.js";
 import type { RefCache } from "../ref-cache.js";
@@ -18,6 +19,12 @@ const WAIT_FOR_POLL_MAX_MS = 5000;
 
 function makeError(code: ErrorCode, message: string): Error {
   return Object.assign(new Error(message), { code });
+}
+
+/** Returns gated_domain fields when url matches current patterns; empty object otherwise. */
+function buildGatedFields(url: string): { gated_domain?: true; gated_domain_directive?: string } {
+  if (!matchGatedDomain(url, getGatedDomainPatterns())) return {};
+  return { gated_domain: true, gated_domain_directive: GATED_DOMAIN_DIRECTIVE };
 }
 
 function resolveChromeId(tabIdMap: Map<string, number>, tabId: unknown): number {
@@ -129,17 +136,21 @@ export function registerNavigationHandlers(router: Router, opts: NavigationOpts)
       }
       const finalUrl = await readTabUrl(chromeId);
 
-      // Auto-enable/disable persistent CDP for canvas domains.
+      // Auto-enable/disable persistent CDP for canvas and gated domains.
       void cdp.autoAttachIfCanvas(chromeId, finalUrl);
+      void cdp.autoAttachIfGated(chromeId, finalUrl, getGatedDomainPatterns());
+
+      const gatedFields = buildGatedFields(finalUrl);
 
       if (!observeEffects || netBefore === null) {
         if (expectEffect !== undefined) {
           return {
             final_url: finalUrl,
+            ...gatedFields,
             warnings: ["expect_effect set but observe_effects:false — no effect data to verify against"],
           };
         }
-        return { final_url: finalUrl };
+        return { final_url: finalUrl, ...gatedFields };
       }
 
       // 300ms post-load settle window to capture JS rendering and late network activity.
@@ -165,9 +176,10 @@ export function registerNavigationHandlers(router: Router, opts: NavigationOpts)
       };
 
       const warning = checkEffectExpectation(effect, expectEffect);
-      const out: { final_url: string; page_effect: PageEffect; warnings?: string[] } = {
+      const out: { final_url: string; page_effect: PageEffect; warnings?: string[]; gated_domain?: true; gated_domain_directive?: string } = {
         final_url: finalUrl,
         page_effect: effect,
+        ...gatedFields,
       };
       if (warning !== null) out.warnings = [warning];
       return out;
