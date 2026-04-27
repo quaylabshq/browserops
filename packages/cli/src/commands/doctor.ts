@@ -4,6 +4,7 @@ import { createConnection } from "node:net";
 import { execFile } from "node:child_process";
 import { join } from "node:path";
 import { isBridgeAlive } from "../lib/daemon.js";
+import { getSafeMode } from "../lib/config.js";
 import { STATE_DIR, tokenPath, bundledAssetsDir } from "../lib/paths.js";
 import { DEFAULT_WS_PORT, ENV } from "@browserops/shared";
 import { ok, err, info, warn } from "../lib/ui.js";
@@ -35,7 +36,7 @@ export async function runDoctor(): Promise<void> {
 
 async function runAllChecks(): Promise<Check[]> {
   const port = Number(process.env[ENV.PORT] ?? DEFAULT_WS_PORT);
-  const [nodeCheck, stateDirCheck, tokenCheck, portCheck, socketCheck, extensionCheck, ...clientChecks] =
+  const [nodeCheck, stateDirCheck, tokenCheck, portCheck, socketCheck, extensionCheck, postureCheck, ...clientChecks] =
     await Promise.all([
       checkNode(),
       checkStateDir(),
@@ -43,10 +44,28 @@ async function runAllChecks(): Promise<Check[]> {
       checkPort(port),
       checkSocket(),
       checkExtension(),
+      checkPermissionPosture(),
       ...checkClients(),
     ]);
 
-  return [nodeCheck, stateDirCheck, tokenCheck, portCheck, socketCheck, extensionCheck, ...clientChecks];
+  return [nodeCheck, stateDirCheck, tokenCheck, portCheck, socketCheck, extensionCheck, postureCheck, ...clientChecks];
+}
+
+async function checkPermissionPosture(): Promise<Check> {
+  const safeMode = await getSafeMode();
+  if (safeMode) {
+    return {
+      ok: true,
+      informational: true,
+      label: "Safe mode: ON  — claude/codex run with their normal approval prompts",
+    };
+  }
+  return {
+    ok: true,
+    informational: true,
+    label:
+      "Safe mode: OFF — claude → --dangerously-skip-permissions, codex → exec --full-auto, cursor → set Settings → Agent → Auto-Run",
+  };
 }
 
 function checkNode(): Check {

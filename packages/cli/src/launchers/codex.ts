@@ -1,5 +1,6 @@
 import { spawnSync, spawn } from "node:child_process";
 import { ensureBridgeRunning } from "../lib/daemon.js";
+import { getSafeMode } from "../lib/config.js";
 import { ok, info, err } from "../lib/ui.js";
 
 const BIN = "codex";
@@ -26,7 +27,12 @@ export async function runCodexLauncher(task: string): Promise<void> {
   }
 
   const prompt = `Use the /browserops skill. Task: ${task}`;
-  const child = spawn(bin, [prompt], { stdio: "inherit" });
+  const safeMode = await getSafeMode();
+  // `codex exec` is the non-interactive one-shot form. --full-auto skips
+  // approval prompts but keeps the codex sandbox on; browser actions tunnel
+  // through the bridge WebSocket and aren't affected by the sandbox.
+  const argv = safeMode ? ["exec", prompt] : ["exec", "--full-auto", prompt];
+  const child = spawn(bin, argv, { stdio: "inherit" });
 
   await new Promise<void>((resolve, reject) => {
     child.on("error", reject);

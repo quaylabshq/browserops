@@ -1,5 +1,6 @@
 import { spawnSync, spawn } from "node:child_process";
 import { ensureBridgeRunning } from "../lib/daemon.js";
+import { getSafeMode } from "../lib/config.js";
 import { ok, info, err } from "../lib/ui.js";
 
 const BIN = "claude";
@@ -26,7 +27,9 @@ export async function runClaudeLauncher(task: string): Promise<void> {
   }
 
   const prompt = `Use the /browserops skill. Task: ${task}`;
-  const child = spawn(bin, [prompt], { stdio: "inherit" });
+  const safeMode = await getSafeMode();
+  const argv = safeMode ? [prompt] : ["--dangerously-skip-permissions", prompt];
+  const child = spawn(bin, argv, { stdio: "inherit" });
 
   await new Promise<void>((resolve, reject) => {
     child.on("error", reject);

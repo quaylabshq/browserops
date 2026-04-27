@@ -43,10 +43,14 @@ Flags:
 From the terminal — `browserops` ensures the bridge is running and hands off to your editor with the task pre-loaded:
 
 ```bash
-browserops --claude "summarize the open tabs"
-browserops --cursor "scrape the table on this page"
-browserops --codex  "fill in the signup form with my profile"
+# Universal first run — works for everyone
+browserops "open hacker news and read me the top story"
+
+# The capability demo — shows the live-profile advantage
+browserops "check my gmail and summarize my last 3 emails"
 ```
+
+A bare `browserops "task"` routes through your configured default launcher (set during `init`; change with `browserops config set default_launcher codex`). Force a specific launcher with `--claude`, `--codex`, or `--cursor`.
 
 Or open the editor you registered in Step 2 and just talk to it — `browserops` is wired in as an MCP server, so any prompt that could use the browser will pick it up.
 
@@ -72,6 +76,10 @@ browserops install-rules
 
 ## Approval mode
 
+There are **two independent gates**: one inside browserops (which browser actions need confirmation), and one inside the launcher you spawn (whether the agent itself pauses for per-action approval).
+
+### Browser-side: browserops auto-approve
+
 browserops runs in **auto-approve mode by default**: risky actions (`browser_execute_js`, click/type on sensitive domains, procedures marked `risky: true`) proceed without prompting.
 
 To require manual approval instead, use any of these:
@@ -81,6 +89,24 @@ To require manual approval instead, use any of these:
 Destructive keyboard chords (`Primary+W`, `Primary+Q`, `Primary+T`, `Primary+N`, `Primary+Shift+N`, `Alt+F4`) and navigations to `javascript:`, `file://`, or `chrome://` URLs are refused regardless of mode.
 
 Audit trail: every auto-approved action is written to the trace file when `BROWSEROPS_TRACE=1` is set.
+
+### Launcher-side: safe mode
+
+When you run `browserops "task"`, the CLI spawns your default launcher with permission prompts skipped so the agent can complete the task without you babysitting:
+
+| Launcher | What we pass |
+|---|---|
+| Claude Code | `claude --dangerously-skip-permissions` |
+| Codex CLI | `codex exec --full-auto` (skips approvals, keeps the codex sandbox on) |
+| Cursor | no CLI flag exists — set Cursor → **Settings → Agent → Auto-Run** to "Allow" |
+
+Flip on safe mode any time to restore the launcher's own per-action prompts:
+
+```bash
+browserops config set safe_mode true
+```
+
+The browser-side gate above is independent and unaffected.
 
 ## Connecting your MCP client
 
