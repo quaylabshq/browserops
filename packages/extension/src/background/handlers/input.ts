@@ -2064,6 +2064,7 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       typed: number;
       mode: TypeMode;
       cleared?: boolean;
+      escalated_to_cdp?: true;
       page_effect?: PageEffect;
       warnings?: string[];
     }> => {
@@ -2142,6 +2143,7 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
         typed: number;
         mode: TypeMode;
         cleared?: boolean;
+        escalated_to_cdp?: true;
       };
 
       const dispatchSynthetic = async (): Promise<TypeResult> => {
@@ -2248,10 +2250,85 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
         return r;
       };
 
+      // Auto-escalate to CDP when all synthetic strategies fail. Without
+      // this, the agent would see WRITE_NOT_REFLECTED, manually call
+      // browser_set_cdp, and re-issue the type — three round-trips plus
+      // model reasoning latency before CDP kicks in. Doing it in-handler
+      // collapses that to one ~500ms attach + one Input.insertText. See
+      // the comment block under the WRITE_NOT_REFLECTED throw above for
+      // the synthetic-strategy ladder we exhausted before getting here.
+      const dispatchWithRescue = async (): Promise<TypeResult> => {
+        try {
+          return await dispatchSynthetic();
+        } catch (err) {
+          const e = err as Error & {
+            code?: string;
+            next_action?: string;
+            diagnostic?: Record<string, unknown>;
+          };
+          if (e.code !== "WRITE_NOT_REFLECTED") throw err;
+          // CDP rescue: attach the debugger persistently so this and
+          // subsequent ops on the tab use trusted dispatch.
+          try {
+            await cdp.setPersistent(chromeId, true);
+          } catch (attachErr) {
+            const m = (attachErr as Error)?.message ?? String(attachErr);
+            throw codedError(
+              "WRITE_NOT_REFLECTED",
+              `${e.message}; CDP rescue attach failed: ${m}`,
+              {
+                next_action:
+                  "synthetic dispatch failed and chrome.debugger could not attach for CDP rescue — DevTools or another extension may already be attached to this tab; close it and retry",
+                diagnostic: { ...(e.diagnostic ?? {}), cdp_attach_error: m },
+              },
+            );
+          }
+          const center = await execInTab(
+            chromeId,
+            injectedElementCenter,
+            [selector] as const,
+          );
+          if (center === null) {
+            throw codedError(
+              "REF_STALE",
+              `ref ${params.ref} no longer resolves in tab ${params.tab_id}`,
+              {
+                next_action:
+                  "element ref went stale during CDP escalation — call browser_quick_read again",
+                diagnostic: {
+                  ref: params.ref,
+                  tab_id: params.tab_id,
+                  selector,
+                  stage: "type_cdp_rescue",
+                },
+              },
+            );
+          }
+          await cdpClick(
+            cdp, chromeId, center.x, center.y, "left",
+            { ctrl: false, alt: false, shift: false, meta: false },
+          );
+          await cdpType(cdp, chromeId, params.text);
+          if (submit) {
+            await cdpPress(
+              cdp, chromeId, "Enter",
+              { ctrl: false, alt: false, shift: false, meta: false },
+            );
+          }
+          const out: TypeResult = {
+            typed: params.text.length,
+            mode,
+            escalated_to_cdp: true,
+          };
+          if (cleared !== undefined) out.cleared = cleared;
+          return out;
+        }
+      };
+
       if (observeEffects) {
         const { result, effect } = await withEffectObservation(
           { chromeTabId: chromeId, windowMs: 300, networkTracker: network },
-          dispatchSynthetic,
+          dispatchWithRescue,
         );
         const warning = checkEffectExpectation(effect, expectEffect);
         const out: typeof result & { page_effect: PageEffect; warnings?: string[] } = { ...result, page_effect: effect };
@@ -2259,10 +2336,10 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
         return out;
       }
       if (expectEffect !== undefined) {
-        const r = await dispatchSynthetic();
+        const r = await dispatchWithRescue();
         return { ...r, warnings: ["expect_effect set but observe_effects:false — no effect data to verify against"] };
       }
-      return dispatchSynthetic();
+      return dispatchWithRescue();
     },
   );
 
