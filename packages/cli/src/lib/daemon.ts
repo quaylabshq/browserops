@@ -13,9 +13,53 @@
 import { spawn } from "node:child_process";
 import { createConnection } from "node:net";
 import * as fs from "node:fs/promises";
-import { existsSync, openSync } from "node:fs";
+import { existsSync, openSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, isAbsolute, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { controlSocketPath, daemonLogPath, pidPath, STATE_DIR } from "./paths.js";
+
+interface BridgeInvocation {
+  command: string;
+  args: string[];
+}
+
+/**
+ * Resolve how to invoke the bridge.
+ *
+ * 1. If the caller passed an explicit path, use it directly.
+ * 2. Else try to resolve `@browserops/bridge/package.json` via Node's module
+ *    resolution and spawn `node <pkg-dir>/<bin.browserops-bridge>`. This works
+ *    in both the workspace (pnpm-linked into the CLI package's node_modules)
+ *    and a global npm install (the CLI's own dep tree).
+ * 3. Else fall back to `browserops-bridge` on $PATH (the global-install case
+ *    when the npm bin shim is what found us in the first place).
+ */
+function resolveBridgeBin(explicit?: string): BridgeInvocation {
+  if (explicit) {
+    return { command: explicit, args: [] };
+  }
+
+  try {
+    const req = createRequire(import.meta.url);
+    const pkgJsonPath = req.resolve("@browserops/bridge/package.json");
+    const pkgDir = dirname(pkgJsonPath);
+    const pkg = JSON.parse(readFileSync(pkgJsonPath, "utf8")) as {
+      bin?: Record<string, string> | string;
+    };
+    let rel: string | undefined;
+    if (typeof pkg.bin === "string") rel = pkg.bin;
+    else if (pkg.bin && typeof pkg.bin === "object") rel = pkg.bin["browserops-bridge"];
+    if (rel) {
+      const abs = isAbsolute(rel) ? rel : resolve(pkgDir, rel);
+      return { command: process.execPath, args: [abs] };
+    }
+  } catch {
+    // package not resolvable (rare); fall through to PATH
+  }
+
+  return { command: "browserops-bridge", args: [] };
+}
 
 export type DaemonStatus =
   | { running: false }
@@ -76,7 +120,7 @@ export async function spawnBridge(opts: {
   timeoutMs?: number;
 }): Promise<{ pid: number }> {
   await fs.mkdir(STATE_DIR, { recursive: true });
-  const bin = opts.bridgeBin ?? "browserops-bridge";
+  const { command, args } = resolveBridgeBin(opts.bridgeBin);
   const timeoutMs = opts.timeoutMs ?? 5_000;
 
   // Open the daemon log file directly so the spawned process can inherit
@@ -84,7 +128,7 @@ export async function spawnBridge(opts: {
   // up and stall the bridge.
   const logFd = openSync(daemonLogPath(), "a");
 
-  const child = spawn(bin, [], {
+  const child = spawn(command, args, {
     detached: true,
     stdio: ["ignore", logFd, logFd],
     env: { ...process.env, ...(opts.env ?? {}) },
