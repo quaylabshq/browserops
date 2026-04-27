@@ -287,7 +287,7 @@ Teach mode lets you demonstrate a flow once in your real browser while your agen
 
 ## Gated domains
 
-> **Experimental — off by default.** Enable with `browserops feature enable gated-domains` (then `browserops restart`), or pick it during `browserops init`.
+> **Experimental — on by default.** Disable with `browserops feature disable gated-domains` (then `browserops restart`) if you'd rather avoid Chrome's "controlled by automation" banner on the listed domains.
 
 Auto-attaches CDP ("debug mode") on navigation to rich-editor and SPA domains (Gmail, Slack, Notion, Linear, Discord, Figma) so that synthetic input dispatch works reliably without site-specific checks. When enabled, `browser_navigate` and `browser_current_tab` results include `gated_domain: true`, and the bridge nudges toward `browser_execute_js` when clicks/typing/key presses show zero observable page change. Default domains: `mail.google.com`, `app.gmail.com`, `*.slack.com`, `*.notion.so`, `linear.app`, `discord.com`, `*.discord.com`, `*.figma.com`. Extend with `~/.browserops/gated-domains.json` (JSON array of glob patterns; same format as `~/.browserops/risky-domains.json`). Note: Chrome displays a "controlled by automation" banner while this feature is active.
 
