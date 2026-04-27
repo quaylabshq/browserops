@@ -33,13 +33,19 @@ One-shot wizard. Mints an auth token, starts the bridge daemon on `127.0.0.1:573
 From the terminal — `browserops` ensures the bridge is running and hands off to your editor with the task pre-loaded:
 
 ```bash
-browserops "check my linear and test my tasks for this week"
+# Universal first run — works for anyone
+browserops "open hacker news and read me the top story"
+
+# The capability demo — shows what a real, logged-in profile lets the agent do
+browserops "check my gmail and summarize my last 3 emails"
+
+# Force a specific launcher
 browserops --claude "summarize my open tabs"
-browserops --cursor "scrape the table on this page"
-browserops --codex  "open hacker news and read the top story"
+browserops --codex  "scrape the table on this page"
+browserops --cursor "fill in the signup form with my profile"
 ```
 
-A bare `browserops "task"` routes through your configured default launcher (set during init; change with `browserops config set default_launcher cursor`).
+A bare `browserops "task"` routes through your configured default launcher (set during init; change with `browserops config set default_launcher codex`).
 
 Or just open the editor you registered in step 1 — `browserops` is now wired in as an MCP server, so any browser-related task picks it up automatically.
 
@@ -91,7 +97,19 @@ Once registered as an MCP server, prompt-aware clients (Claude Code, Cursor, Con
 
 ## Approval mode
 
-Auto-approve is the default. Risky actions (`browser_execute_js`, sensitive domains, procedures marked `risky: true`) run without prompting. Switch to gate mode with `BROWSEROPS_APPROVAL=gate browserops start`, or check the toggle in the extension popup. Destructive keyboard chords (`Cmd+W`, `Cmd+Q`, `Cmd+T`, `Cmd+N`, `Cmd+Shift+N`, `Alt+F4`) and navigations to `javascript:`, `file://`, or `chrome://` URLs are always refused regardless of mode.
+Two independent gates:
+
+**Browser-side** — auto-approve is the default. Risky actions (`browser_execute_js`, sensitive domains, procedures marked `risky: true`) run without prompting. Switch to gate mode with `BROWSEROPS_APPROVAL=gate browserops start`, or check the toggle in the extension popup. Destructive keyboard chords (`Cmd+W`, `Cmd+Q`, `Cmd+T`, `Cmd+N`, `Cmd+Shift+N`, `Alt+F4`) and navigations to `javascript:`, `file://`, or `chrome://` URLs are always refused regardless of mode.
+
+**Launcher-side** — when you run `browserops "task"`, by default the CLI spawns the launcher with its permission prompts skipped so the agent can finish without pausing on every tool call:
+
+| Launcher | What we pass |
+|---|---|
+| Claude Code | `claude --dangerously-skip-permissions` |
+| Codex CLI | `codex exec --full-auto` (skips approvals, keeps the codex sandbox on) |
+| Cursor | no CLI flag — set **Settings → Agent → Auto-Run** to "Allow" inside Cursor |
+
+Restore the launcher's own per-action prompts with `browserops config set safe_mode true`. Browser-side gating (above) is unaffected.
 
 ## Procedure memory
 

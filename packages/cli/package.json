@@ -1,6 +1,6 @@
 {
   "name": "browserops",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "type": "module",
   "description": "Drive your real Chrome browser from any MCP-compatible AI client (Claude Code, Cursor, Codex, Continue, Windsurf). CLI + MCP server with procedure memory.",
   "keywords": [
