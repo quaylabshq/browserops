@@ -1,3 +1,4 @@
+import { DEFAULT_WS_PORT } from "@browserops/shared";
 export {};
 
 const $ = <T extends HTMLElement>(id: string): T => {
@@ -39,7 +40,7 @@ interface PairResponse {
 
 let pendingPair: PairResponse | null = null;
 let pendingHost = "127.0.0.1";
-let pendingPort = 8765;
+let pendingPort = DEFAULT_WS_PORT;
 
 async function attemptPair(host: string, port: number): Promise<void> {
   show("loading");
@@ -117,7 +118,7 @@ cancelBtn.addEventListener("click", () => {
 retryBtn.addEventListener("click", () => {
   const hostVal = advHost.value.trim() || "127.0.0.1";
   const portVal = Number.parseInt(advPort.value, 10);
-  const port = Number.isFinite(portVal) && portVal > 0 ? portVal : 8765;
+  const port = Number.isFinite(portVal) && portVal > 0 ? portVal : DEFAULT_WS_PORT;
   void attemptPair(hostVal, port);
 });
 
@@ -127,4 +128,4 @@ function openOptions(): void {
 openOptionsBtn.addEventListener("click", openOptions);
 openOptionsBtn2.addEventListener("click", openOptions);
 
-void attemptPair("127.0.0.1", 8765);
+void attemptPair("127.0.0.1", DEFAULT_WS_PORT);

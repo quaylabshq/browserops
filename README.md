@@ -6,66 +6,76 @@ An MCP server that drives your live Chrome browser. Any MCP-compatible client (C
 
 - macOS or Linux (Windows via WSL)
 - Node.js ≥ 20.10
-- pnpm ≥ 9
 - Chrome ≥ 120
-- An MCP-compatible client (see [Connecting your MCP client](#connecting-your-mcp-client) below)
 
 ## Quick start
 
-### 1. Clone and set up
+### 1. Install
 
 ```bash
-git clone https://github.com/<org>/browserops.git
-cd browserops
-pnpm setup
+npm i -g browserops
 ```
 
-`pnpm setup` runs install + build + `browserops-bridge init` in one shot. The init step generates `~/.browserops/token`, seeds the bundled procedure examples into `~/browserops/procedures/shared/`, and prints copy-paste MCP client config snippets for Claude Code, Cursor, Zed, and Continue. Pick the snippet for the client you use and add it to that client's MCP config.
+You can also use `pnpm add -g browserops` or run ad-hoc with `npx browserops`.
 
-### 2. Start the bridge
+### 2. Initialize
 
 ```bash
-pnpm start
+browserops init
 ```
 
-Leave this running in a dedicated terminal. The bridge is what the Chrome extension connects to over WebSocket — without it running, the extension shows **disconnected** and the popup buttons have nothing to talk to. `pnpm start` rebuilds first and then launches the bridge in the foreground; use `pnpm start:fast` to skip the rebuild when you haven't changed code.
+This is a one-shot wizard. It mints `~/.browserops/token`, seeds bundled procedure examples into `~/browserops/procedures/shared/`, starts the bridge daemon on `127.0.0.1:57321`, copies the unpacked Chrome extension to `~/.browserops/extension/`, then detects your installed MCP clients (Claude Code, Cursor, Zed, Continue, Windsurf, Codex) and offers to register `browserops` in each of their configs. Re-running it is safe and idempotent.
 
-(MCP clients like Claude Code and Cursor also spawn their own bridge instance over stdio when they call a `browser_*` tool. That coexists with the one you started here — the first process to bind `:8765` owns the WebSocket and later ones proxy through a local control socket.)
+Flags:
+- `--yes` — non-interactive (accept all detected clients)
+- `--no-mcp` — skip MCP-client install
+- `--client claude-code,cursor` — explicit subset
+- `--dry-run` — print diffs, don't write
 
-### 3. Load the extension in Chrome
+### 3. Pair the Chrome extension
 
-1. Open `chrome://extensions`.
-2. Toggle **Developer mode** on (top right).
-3. Click **Load unpacked** and select `packages/extension/dist/` from this repo (produced by `pnpm setup`).
-4. An onboarding tab opens automatically, showing a 6-digit **pair code**.
-5. Match it against the `pair code XXX-XXX` line the bridge printed to stderr, then click **Confirm & connect**.
+1. Open `chrome://extensions`, toggle **Developer mode** on (top right).
+2. Click **Load unpacked** and select `~/.browserops/extension/` (the path was copied to your clipboard by `init`).
+3. An onboarding tab opens automatically — click **Confirm & connect**. Chrome's toolbar icon turns green within a second.
 
-Chrome's extension icon turns green within a second. If you missed the onboarding tab, open the popup and click **Run setup**. Prefer the old copy-paste flow? Open the extension's options page and paste `~/.browserops/token` there.
+### 4. Use it
 
-### 4. Load the agent instructions
+From the terminal — `browserops` ensures the bridge is running and hands off to your editor with the task pre-loaded:
 
-**This step is required.** The repo ships `AGENTS.md` with rules that tell your agent how to use browserops correctly. Without it your agent will re-plan steps that are already encoded in procedures, take unnecessary screenshots, and produce broken YAML.
+```bash
+browserops --claude "summarize the open tabs"
+browserops --cursor "scrape the table on this page"
+browserops --codex  "fill in the signup form with my profile"
+```
 
-- **Claude Code** and **OpenAI Codex**: already done — they auto-discover `CLAUDE.md` / `AGENTS.md` in the repo root.
-- **Every other client**: see [Agent instructions](#agent-instructions) below for where to paste the file.
+Or open the editor you registered in Step 2 and just talk to it — `browserops` is wired in as an MCP server, so any prompt that could use the browser will pick it up.
 
-### 5. Use it
+### Daily lifecycle
 
-Open your MCP client (already configured with the snippet from Step 1) and try:
+```bash
+browserops status      # PID, port, uptime, last errors
+browserops start       # bring the daemon up (no-op if already running)
+browserops stop
+browserops restart
+browserops logs -f     # tail ~/.browserops/log.jsonl
+browserops doctor      # diagnose Node / port / token / extension / clients
+browserops upgrade     # bump the global install + refresh extension files
+```
 
-> What tabs do I have open?
+### Per-project rules (optional)
 
-> Open a new tab to news.ycombinator.com and read the top story.
+Two clients auto-discover the agent rules: Claude Code reads `CLAUDE.md`, Codex CLI reads `AGENTS.md`. Other clients (Cursor, Windsurf, Copilot, Continue) need a one-time copy into a per-project rules slot — run inside any project where you want browserops to be agent-aware:
 
-> Take a screenshot of this tab.
+```bash
+browserops install-rules
+```
 
 ## Approval mode
 
 browserops runs in **auto-approve mode by default**: risky actions (`browser_execute_js`, click/type on sensitive domains, procedures marked `risky: true`) proceed without prompting.
 
 To require manual approval instead, use any of these:
-- `pnpm start --approval=gate`
-- `BROWSEROPS_APPROVAL=gate pnpm start`
+- `BROWSEROPS_APPROVAL=gate browserops start`
 - Check **Require approval for risky actions** in the extension popup.
 
 Destructive keyboard chords (`Primary+W`, `Primary+Q`, `Primary+T`, `Primary+N`, `Primary+Shift+N`, `Alt+F4`) and navigations to `javascript:`, `file://`, or `chrome://` URLs are refused regardless of mode.
@@ -74,77 +84,49 @@ Audit trail: every auto-approved action is written to the trace file when `BROWS
 
 ## Connecting your MCP client
 
-`pnpm setup` prints a snippet per client (re-run `node packages/bridge/dist/index.js init` any time you want them reprinted). The reference snippets below are kept for clarity if you'd rather configure by hand. The bridge is a plain stdio MCP server — any client that can spawn one can use it.
-
-Command (from a clone):
-
-```
-node <path-to-repo>/packages/bridge/dist/index.js
-```
-
-Pick your client below.
+`browserops init` registers the bridge in every detected client automatically. The snippets below are for manual or non-detected setups — paste them into your client's MCP config. The bridge is a plain stdio MCP server (`browserops-bridge` on PATH after `npm i -g browserops`); any client that can spawn one can use it.
 
 ### Claude Code
 
 ```bash
-claude mcp add browserops --scope user -- node "$PWD/packages/bridge/dist/index.js"
+claude mcp add browserops --scope user -- browserops-bridge
 ```
 
-Verify:
-
-```bash
-claude mcp list
-```
+Verify with `claude mcp list`.
 
 ### Cursor
 
-Add to `~/.cursor/mcp.json` (global) or `.cursor/mcp.json` (project):
+`~/.cursor/mcp.json`:
 
 ```json
 {
   "mcpServers": {
-    "browserops": {
-      "command": "node",
-      "args": ["/absolute/path/to/browser-exp/packages/bridge/dist/index.js"]
-    }
+    "browserops": { "command": "browserops-bridge" }
   }
 }
 ```
 
-Then enable **browserops** under Cursor Settings → MCP.
-
 ### Zed
 
-Add to `~/.config/zed/settings.json`:
+`~/.config/zed/settings.json`:
 
 ```json
 {
   "context_servers": {
-    "browserops": {
-      "command": {
-        "path": "node",
-        "args": ["/absolute/path/to/browser-exp/packages/bridge/dist/index.js"]
-      }
-    }
+    "browserops": { "command": { "path": "browserops-bridge", "args": [] } }
   }
 }
 ```
 
 ### Continue (VS Code / JetBrains)
 
-Add to your Continue `config.json` under `experimental.modelContextProtocolServers`:
+`~/.continue/config.json` under `experimental.modelContextProtocolServers`:
 
 ```json
 {
   "experimental": {
     "modelContextProtocolServers": [
-      {
-        "transport": {
-          "type": "stdio",
-          "command": "node",
-          "args": ["/absolute/path/to/browser-exp/packages/bridge/dist/index.js"]
-        }
-      }
+      { "transport": { "type": "stdio", "command": "browserops-bridge" } }
     ]
   }
 }
@@ -152,32 +134,33 @@ Add to your Continue `config.json` under `experimental.modelContextProtocolServe
 
 ### Windsurf / Codeium
 
-Add to `~/.codeium/windsurf/mcp_config.json`:
+`~/.codeium/windsurf/mcp_config.json`:
 
 ```json
 {
   "mcpServers": {
-    "browserops": {
-      "command": "node",
-      "args": ["/absolute/path/to/browser-exp/packages/bridge/dist/index.js"]
-    }
+    "browserops": { "command": "browserops-bridge" }
   }
 }
 ```
 
+### Codex CLI
+
+`~/.codex/config.toml`:
+
+```toml
+[mcp_servers.browserops]
+command = "browserops-bridge"
+args = []
+```
+
 ### Custom / SDK-based agents
 
-The bridge speaks MCP over stdio using `@modelcontextprotocol/sdk`. Any client built on the official Python, TypeScript, Java, or C# SDKs can connect with:
-
-- `command`: `node`
-- `args`: `["/absolute/path/to/browser-exp/packages/bridge/dist/index.js"]`
-- no env vars required (token + extension ID are handled through `~/.browserops/`)
-
-The bridge also runs fine as `npx browserops-bridge` when the `@browserops/bridge` package is published.
+Any client built on the official MCP SDKs can connect with `command: "browserops-bridge"`, no args, no env vars (token + extension ID are handled through `~/.browserops/`).
 
 ### Setting environment variables
 
-All clients support an `env` block next to `command` / `args`. For example, to bind a non-default port, put:
+All clients support an `env` block next to `command`. For example, to bind a non-default port, put:
 
 ```json
 "env": { "BROWSEROPS_PORT": "9876" }
@@ -187,7 +170,7 @@ Then mirror the same port in the extension's options page.
 
 ## Agent instructions
 
-**`AGENTS.md` is required every time you run browserops.** It contains the orchestration rules your agent must follow: procedure-first search before planning, when to use sub-agents, keyboard chord syntax, and procedure authoring rules. Without it, agents re-plan steps that are already encoded in procedures, take unnecessary screenshots, skip the `procedures_search` call, and produce invalid YAML. Load it once per client setup and it will be injected automatically on every session.
+**`AGENTS.md` is required every time you run browserops.** It contains the orchestration rules your agent must follow: procedure-first search before planning, when to use sub-agents, keyboard chord syntax, and procedure authoring rules. Without it, agents re-plan steps that are already encoded in procedures, take unnecessary screenshots, skip the `procedures_search` call, and produce invalid YAML.
 
 Two clients auto-discover it with no setup:
 
@@ -196,19 +179,23 @@ Two clients auto-discover it with no setup:
 | **Claude Code** | Reads `CLAUDE.md` (symlink → `AGENTS.md`) from the repo root automatically |
 | **OpenAI Codex CLI** | Reads `AGENTS.md` from the repo root automatically |
 
-All other clients need a one-time copy into their rules / system-prompt slot:
+All other clients need a per-project copy into their rules slot. Run from inside the project:
 
-| Client | Where to add |
+```bash
+browserops install-rules
+```
+
+This writes the appropriate file for each detected client:
+
+| Client | Slot |
 |---|---|
-| **Cursor** | Create `.cursor/rules/browserops.mdc`. Add frontmatter `---\nalwaysApply: true\n---` at the top, then paste `AGENTS.md` below it. |
-| **Windsurf / Codeium** | Append `AGENTS.md` to `.windsurfrules` in the repo root (create it if absent). |
-| **GitHub Copilot** | Append `AGENTS.md` to `.github/copilot-instructions.md` (create it if absent). |
-| **Continue** | Add the content to the `customInstructions` field in `.continue/config.json`. |
-| **Zed** | Open Settings → Assistant → System prompt and paste the content. |
-| **Amp** | Add a `.amp/instructions.md` file in the repo root with the content. |
-| **Custom SDK agent** | Pass the full content as the system prompt when constructing the agent. |
+| **Cursor** | `.cursor/rules/browserops.mdc` (frontmatter + AGENTS.md) |
+| **Windsurf / Codeium** | block in `.windsurfrules` |
+| **GitHub Copilot** | block in `.github/copilot-instructions.md` |
+| **Continue** | `customInstructions` in `.continue/config.json` |
+| **Zed** | manual paste into Settings → Assistant → System prompt |
 
-The file is client-agnostic — the same text works in every slot listed above.
+Re-running `install-rules` is idempotent — it replaces the existing block in place via sentinel comments rather than appending duplicates.
 
 ## Available tools (v1)
 
@@ -259,7 +246,19 @@ Authoring checklist:
 
 ## Develop locally
 
-The Quick Start already clones and builds. `pnpm setup` = `pnpm install && pnpm build && node packages/bridge/dist/index.js init`; if you'd rather run the steps individually (or just rerun `init` to reprint the MCP snippets), they work standalone. The build produces `packages/bridge/dist/index.js` (the MCP server, shebanged) and `packages/extension/dist/` (the unpacked extension).
+If you want to hack on browserops itself rather than just use it:
+
+```bash
+git clone https://github.com/quaylabshq/browserops.git
+cd browserops
+pnpm setup
+```
+
+`pnpm setup` = `pnpm install && pnpm build && node packages/cli/dist/index.js init` (same wizard as the published `browserops init`, just driven from your clone). The build produces:
+
+- `packages/cli/dist/index.js`        — the `browserops` CLI binary
+- `packages/bridge/dist/index.js`     — the `browserops-bridge` MCP server binary
+- `packages/extension/dist/`          — the unpacked Chrome extension
 
 ## Dev loop
 
@@ -267,13 +266,14 @@ The Quick Start already clones and builds. `pnpm setup` = `pnpm install && pnpm 
 pnpm dev
 ```
 
-Starts three watchers in one terminal:
+Starts four watchers in one terminal:
 
 - `@browserops/shared` — `tsc -b --watch`, emits types on save
 - `@browserops/bridge` — `tsx watch`, hot-restarts on save
 - `@browserops/extension` — `vite build --watch`, rewrites `dist/` on save (crxjs auto-reloads the extension in Chrome)
+- `browserops` (CLI) — `tsx watch`, hot-restarts on save
 
-Edit shared protocol types in `packages/shared/src/`, implement handlers in `packages/extension/src/background/handlers/`, or tweak the bridge dispatch pipeline in `packages/bridge/src/mcp-server.ts`.
+Edit shared protocol types in `packages/shared/src/`, implement handlers in `packages/extension/src/background/handlers/`, tweak the bridge dispatch pipeline in `packages/bridge/src/mcp-server.ts`, or extend the CLI in `packages/cli/src/`.
 
 ## Tests
 
@@ -289,7 +289,7 @@ Currently ~220 unit tests total across shared (envelope guards, tool catalogue i
 | Var | Default | Purpose |
 |---|---|---|
 | `BROWSEROPS_HOST` | `127.0.0.1` | WebSocket bind host (never `0.0.0.0` — enforced at startup) |
-| `BROWSEROPS_PORT` | `8765` | WebSocket port |
+| `BROWSEROPS_PORT` | `57321` | WebSocket port |
 | `BROWSEROPS_EXTENSION_ID` | empty = any | Origin allowlist; pin this to your extension id in production |
 | `BROWSEROPS_GLOBAL_CAP` | `60` | Global rate-limit cap per minute |
 | `BROWSEROPS_LOG_LEVEL` | `normal` | `normal` truncates strings > 200 chars; `audit` logs full payloads |
@@ -298,8 +298,10 @@ Currently ~220 unit tests total across shared (envelope guards, tool catalogue i
 
 ## Troubleshooting
 
+`browserops doctor` checks Node version, port availability, token presence, control-socket reachability, bundled-extension state, and which client binaries are on PATH. Start there.
+
 **Extension shows "disconnected" after the client is running.**
-Check `~/.browserops/log.jsonl` — look for `{"dir":"system","event":"boot"}`. If absent, the bridge didn't launch. Run the client's MCP-list command (e.g. `claude mcp list`, Cursor's MCP settings page) to confirm it's registered and the command path resolves.
+Check `~/.browserops/log.jsonl` — look for `{"dir":"system","event":"boot"}`. If absent, the bridge didn't launch. Try `browserops status` (is the daemon up?) and `browserops doctor`. If the bridge is up but the extension can't reach it, confirm port and host in the extension's options page match the bridge.
 
 **"Bad token" close (code 4001) in the log.**
 Token mismatch — usually because `~/.browserops/token` was regenerated since the extension last paired. Easiest fix: restart the bridge (so it mints a fresh pair code), open the extension popup → **Run setup**, and confirm. Or paste the current token into the options page manually.
@@ -310,11 +312,11 @@ The bridge mints `tab_id`s only for tabs the extension observed being created. R
 **"full_page requires CDP attach (deferred to v2)".**
 Use `full_page: false` (default). Full-page capture ships with the v2 CDP work.
 
-**Port conflict on 8765.**
+**Port conflict on 57321.**
 Set `BROWSEROPS_PORT=9876` in your MCP config's `env` block, and put the same in the extension's options page.
 
 **Multiple MCP clients at once.**
-The bridge supports a primary/secondary role split: the first process to bind `:8765` owns the WebSocket to the extension, and subsequent bridge processes (e.g. a second client in another editor) proxy through a local control socket. No config change needed — just register the same command in both clients.
+The bridge supports a primary/secondary role split: the first process to bind `:57321` owns the WebSocket to the extension, and subsequent bridge processes (e.g. a second client in another editor) proxy through a local control socket. No config change needed — just register the same command in both clients.
 
 ## Project layout
 
@@ -322,7 +324,15 @@ The bridge supports a primary/secondary role split: the first process to bind `:
 browserops/
 ├── packages/
 │   ├── shared/        # protocol types, error codes, tool catalogue
-│   ├── bridge/        # MCP + WebSocket server (single Node process)
-│   └── extension/     # MV3 extension (background SW, options, popup)
+│   ├── bridge/        # @browserops/bridge — MCP + WebSocket server
+│   ├── extension/     # MV3 extension (background SW, options, popup)
+│   └── cli/           # browserops — CLI orchestrator (init, daemon, launchers)
 └── examples/          # seed procedures you can copy into ~/browserops/procedures
 ```
+
+## Published packages
+
+| Package | Purpose |
+|---|---|
+| [`browserops`](https://www.npmjs.com/package/browserops) | CLI orchestrator. Provides `browserops init`, `--claude/--cursor/--codex`, lifecycle commands. Depends on `@browserops/bridge`. |
+| [`@browserops/bridge`](https://www.npmjs.com/package/@browserops/bridge) | The MCP stdio server (`browserops-bridge` binary). What MCP clients spawn. |

@@ -11,7 +11,7 @@ MCP client (Claude Code / Cursor / Zed / …)
       │ stdio MCP (JSON-RPC)
       ▼
 packages/bridge  — Node process: MCP server + WebSocket server + rate limiter + risky-action gate + procedure memory
-      │ WebSocket on 127.0.0.1:8765, token-authed
+      │ WebSocket on 127.0.0.1:57321, token-authed
       ▼
 packages/extension  — Chrome MV3 extension: background service worker + content scripts + popup + options
       │ chrome.tabs / chrome.scripting / chrome.debugger

@@ -2,7 +2,7 @@
  * WebSocket transport defaults.
  */
 export const DEFAULT_WS_HOST = "127.0.0.1";
-export const DEFAULT_WS_PORT = 8765;
+export const DEFAULT_WS_PORT = 57321;
 
 /**
  * Max WebSocket frame size. 16 MiB gives headroom for full-page 4K screenshots.

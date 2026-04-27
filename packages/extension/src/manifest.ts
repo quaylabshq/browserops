@@ -51,7 +51,7 @@ export default defineManifest({
   // Expose the onboarding page so it can be opened directly via
   // chrome.tabs.create(chrome.runtime.getURL("src/onboard/index.html")) and
   // so Chrome serves it with the extension origin (needed for the /pair
-  // fetch to 127.0.0.1:8765 to be allowed by the bridge's origin check).
+  // fetch to 127.0.0.1:57321 to be allowed by the bridge's origin check).
   web_accessible_resources: [
     {
       resources: ["src/onboard/index.html"],
