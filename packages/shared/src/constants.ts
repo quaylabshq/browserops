@@ -40,6 +40,7 @@ export const STATE_DIR_NAME = ".browserops";
 export const TOKEN_FILENAME = "token";
 export const LOG_FILENAME = "log.jsonl";
 export const RISKY_DOMAINS_FILENAME = "risky-domains.json";
+export const CONTROL_SOCKET_FILENAME = "bridge.sock";
 
 /**
  * Environment variable names read by the bridge.

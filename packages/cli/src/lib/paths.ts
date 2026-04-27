@@ -1,14 +1,20 @@
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  CONTROL_SOCKET_FILENAME,
+  LOG_FILENAME,
+  STATE_DIR_NAME,
+  TOKEN_FILENAME,
+} from "@browserops/shared";
 
-export const STATE_DIR = join(homedir(), ".browserops");
+export const STATE_DIR = join(homedir(), STATE_DIR_NAME);
 
-export const tokenPath = (): string => join(STATE_DIR, "token");
-export const logPath = (): string => join(STATE_DIR, "log.jsonl");
+export const tokenPath = (): string => join(STATE_DIR, TOKEN_FILENAME);
+export const logPath = (): string => join(STATE_DIR, LOG_FILENAME);
 export const daemonLogPath = (): string => join(STATE_DIR, "daemon.log");
 export const pidPath = (): string => join(STATE_DIR, "bridge.pid");
-export const controlSocketPath = (): string => join(STATE_DIR, "control.sock");
+export const controlSocketPath = (): string => join(STATE_DIR, CONTROL_SOCKET_FILENAME);
 export const configPath = (): string => join(STATE_DIR, "config.json");
 export const extensionInstallDir = (): string => join(STATE_DIR, "extension");
 
