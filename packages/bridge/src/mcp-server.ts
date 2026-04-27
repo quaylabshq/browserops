@@ -22,12 +22,15 @@ import {
   type FeatureName,
   isErrorCode,
   type TraceEvent,
+  type PageEffect,
+  hostnameOf,
 } from "@browserops/shared";
 import type { RateLimiter } from "./rate-limiter.js";
 import type { Safety, TabInfo } from "./safety.js";
 import type { TabRegistry } from "./tab-registry.js";
 import type { Logger } from "./logger.js";
 import type { TraceWriter } from "./trace-writer.js";
+import type { GatedDomainMatcher } from "./gated-domains.js";
 import { buildProcedureHandlers } from "./procedures/handlers.js";
 import { listPrompts, getPrompt } from "./prompts.js";
 import { checkBreaker, recordResult as recordBreakerResult } from "./circuit-breaker.js";
@@ -132,6 +135,8 @@ export interface McpBridgeDeps {
   enabledFeatures: ReadonlySet<FeatureName>;
   /** Optional trace writer. When provided, the router will emit a TraceEvent after each tool result. */
   traceWriter?: TraceWriter;
+  /** Gated-domain matcher. Advisor warnings and page_effect escalation fire when the feature is on. */
+  gatedMatcher: GatedDomainMatcher;
 }
 
 interface ToolErrorPayload {
@@ -525,7 +530,14 @@ export class McpBridgeServer {
         extra.signal,
       );
 
-      const result = await this.reply(id, name, toolOk(extResult));
+      const advisedResult = this.applyGatedAdvisor(name, tab?.url, extResult);
+      if (advisedResult.isError) {
+        const result = await this.reply(id, name, advisedResult);
+        recordBreakerResult(breakerCall, { ok: false, error_code: "DISPATCH_FAILED_ON_GATED_DOMAIN" });
+        this.emitTrace(id, name, params, startMs, result);
+        return result;
+      }
+      const result = await this.reply(id, name, advisedResult);
       recordBreakerResult(breakerCall, { ok: true });
       this.emitTrace(id, name, params, startMs, result);
       return result;
@@ -582,6 +594,52 @@ export class McpBridgeServer {
       result: traceResult,
     };
     tw.append(event);
+  }
+
+  /**
+   * When gated-domains is enabled and the tab URL matches, prepend an in-band
+   * advisory warning and — for click tools — escalate a zero page_effect to
+   * an error so the agent pivots to browser_execute_js.
+   */
+  private applyGatedAdvisor(toolName: string, tabUrl: string | undefined, extResult: unknown): ToolCallResult {
+    const ADVISED_TOOLS = new Set(["browser_click", "browser_click_by_text", "browser_type", "browser_press"]);
+    const CLICK_TOOLS = new Set(["browser_click", "browser_click_by_text"]);
+
+    if (
+      !this.deps.enabledFeatures.has("gated-domains") ||
+      !tabUrl ||
+      !this.deps.gatedMatcher.matches(tabUrl) ||
+      !ADVISED_TOOLS.has(toolName)
+    ) {
+      return toolOk(extResult);
+    }
+
+    const hostname = hostnameOf(tabUrl) ?? tabUrl;
+    const warning =
+      `⚠ Gated domain (${hostname}) — prefer browser_execute_js for follow-up steps. ` +
+      `Synthetic dispatch on rich editors / virtualized DOM may silently no-op.`;
+
+    // For click tools: escalate zero page_effect to an error.
+    if (CLICK_TOOLS.has(toolName) && extResult && typeof extResult === "object") {
+      const r = extResult as Record<string, unknown>;
+      const effect = r["page_effect"] as PageEffect | undefined;
+      if (effect && effectIsNone(effect)) {
+        return toolError({
+          code: "DISPATCH_FAILED_ON_GATED_DOMAIN",
+          message:
+            `synthetic ${toolName} produced no observable page_effect on gated domain ${hostname}. ` +
+            `Use browser_execute_js with a DOM selector instead, e.g. document.querySelector(...).click().`,
+        });
+      }
+    }
+
+    // Prepend warning to result; preserve existing warnings array if present.
+    if (extResult && typeof extResult === "object") {
+      const r = extResult as Record<string, unknown>;
+      const existing = Array.isArray(r["warnings"]) ? (r["warnings"] as string[]) : [];
+      return toolOk({ ...r, warnings: [warning, ...existing] });
+    }
+    return toolOk(extResult);
   }
 
   private timeoutFor(def: ToolDef, params: Record<string, unknown>): number {
@@ -682,4 +740,16 @@ function stripTopLevelUnions(schema: unknown): unknown {
     out[k] = v;
   }
   return out;
+}
+
+/** Conservative "no observable effect" predicate. Network noise is intentionally ignored. */
+function effectIsNone(effect: PageEffect): boolean {
+  return (
+    effect.dom.added === 0 &&
+    effect.dom.removed === 0 &&
+    effect.dom.attr_changes === 0 &&
+    effect.dom.text_changes === 0 &&
+    effect.url.changed === false &&
+    effect.focus.changed === false
+  );
 }

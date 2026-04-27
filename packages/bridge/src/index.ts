@@ -15,6 +15,7 @@ import { controlSocketPath } from "./paths.js";
 import { RateLimiter } from "./rate-limiter.js";
 import { RemoteWSBridge } from "./remote-ws-bridge.js";
 import { loadRiskyDomainMatcher } from "./risky-domains.js";
+import { loadGatedDomainMatcher } from "./gated-domains.js";
 import { Safety } from "./safety.js";
 import { TabRegistry, type TabRecord } from "./tab-registry.js";
 import { loadOrCreateToken } from "./token.js";
@@ -63,7 +64,10 @@ async function main(): Promise<void> {
     10,
   );
 
-  const riskyMatcher = await loadRiskyDomainMatcher();
+  const [riskyMatcher, gatedMatcher] = await Promise.all([
+    loadRiskyDomainMatcher(),
+    loadGatedDomainMatcher(),
+  ]);
   const tabs = new TabRegistry();
   const rateLimiter = new RateLimiter(RATE_LIMIT_PER_TAB_PER_MIN, globalCap);
   const teachStore = new TeachSessionStore();
@@ -166,6 +170,7 @@ async function main(): Promise<void> {
     teachStore,
     enabledFeatures: featuresHolder.current,
     traceWriter,
+    gatedMatcher,
   });
 
   process.stderr.write(
@@ -287,6 +292,8 @@ async function main(): Promise<void> {
         if (controlServer) controlServer.broadcastConn(connected);
       },
       getFeatures: () => [...featuresHolder.current],
+      getGatedDomains: () =>
+        featuresHolder.current.has("gated-domains") ? [...gatedMatcher.patterns] : undefined,
     });
     try {
       await bridge.start();
