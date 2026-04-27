@@ -19,7 +19,7 @@ import { dirname, isAbsolute, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { controlSocketPath, daemonLogPath, pidPath, STATE_DIR } from "./paths.js";
 
-interface BridgeInvocation {
+export interface BridgeInvocation {
   command: string;
   args: string[];
 }
@@ -35,7 +35,7 @@ interface BridgeInvocation {
  * 3. Else fall back to `browserops-bridge` on $PATH (the global-install case
  *    when the npm bin shim is what found us in the first place).
  */
-function resolveBridgeBin(explicit?: string): BridgeInvocation {
+export function resolveBridgeBin(explicit?: string): BridgeInvocation {
   if (explicit) {
     return { command: explicit, args: [] };
   }
