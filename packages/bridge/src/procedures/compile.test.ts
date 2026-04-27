@@ -153,7 +153,6 @@ describe("DEFAULT_SKIP_TOOLS", () => {
     const expected = [
       "browser_read",
       "browser_list_tabs",
-      "browser_pinned_tab",
       "browser_current_tab",
       "browser_query_selector",
       "browser_describe_ref",

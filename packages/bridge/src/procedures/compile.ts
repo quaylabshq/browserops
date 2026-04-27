@@ -26,7 +26,6 @@ import { CodedError } from "./store.js";
 export const DEFAULT_SKIP_TOOLS: ReadonlySet<string> = new Set([
   "browser_read",
   "browser_list_tabs",
-  "browser_pinned_tab",
   "browser_current_tab",
   "browser_query_selector",
   "browser_describe_ref",
