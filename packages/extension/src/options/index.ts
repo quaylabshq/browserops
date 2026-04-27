@@ -1,3 +1,4 @@
+import { DEFAULT_WS_PORT } from "@browserops/shared";
 export {};
 
 const $ = <T extends HTMLElement>(id: string): T => {
@@ -14,10 +15,10 @@ const statusPill = $<HTMLSpanElement>("status");
 const saved = $<HTMLSpanElement>("saved");
 
 async function loadValues(): Promise<void> {
-  const s = await chrome.storage.local.get({ token: "", host: "127.0.0.1", port: 8765 });
+  const s = await chrome.storage.local.get({ token: "", host: "127.0.0.1", port: DEFAULT_WS_PORT });
   tokenInput.value = typeof s["token"] === "string" ? s["token"] : "";
   hostInput.value = typeof s["host"] === "string" ? s["host"] : "127.0.0.1";
-  portInput.value = String(typeof s["port"] === "number" ? s["port"] : 8765);
+  portInput.value = String(typeof s["port"] === "number" ? s["port"] : DEFAULT_WS_PORT);
 }
 
 function renderStatus(connected: boolean): void {
@@ -37,7 +38,7 @@ form.addEventListener("submit", (e) => {
   const next = {
     token: tokenInput.value.trim(),
     host: hostInput.value.trim() || "127.0.0.1",
-    port: Number.isFinite(port) && port > 0 ? port : 8765,
+    port: Number.isFinite(port) && port > 0 ? port : DEFAULT_WS_PORT,
   };
   void chrome.storage.local.set(next).then(() => {
     saved.classList.add("show");

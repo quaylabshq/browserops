@@ -1,0 +1,41 @@
+{
+  "name": "browserops",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "browserops CLI — install, run, and orchestrate the browserops bridge from the terminal",
+  "bin": {
+    "browserops": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "typecheck": "tsc -b --noEmit",
+    "clean": "rm -rf dist *.tsbuildinfo",
+    "test": "vitest run --passWithNoTests",
+    "prepublishOnly": "pnpm build"
+  },
+  "dependencies": {
+    "@browserops/bridge": "workspace:*",
+    "@browserops/shared": "workspace:*",
+    "cac": "^6.7.14",
+    "jsonc-parser": "^3.3.1",
+    "picocolors": "^1.1.1",
+    "prompts": "^2.4.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/prompts": "^2.4.9",
+    "tsup": "^8.3.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.4.0",
+    "vitest": "^2.0.0"
+  }
+}
