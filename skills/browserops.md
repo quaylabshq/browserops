@@ -52,7 +52,7 @@ The whole point of browserops is that the observation runtime (Section 3) catche
 - Two interpretations are both plausible AND have meaningfully different side effects you can't undo (email to person A vs. person B — *not* "open A's page vs. B's page").
 - The task is irreversible and your best guess might not match user intent (money transfer, destructive delete, public post to the wrong account).
 
-Everything else — "use amazon india", "try a mouse click", "check my inbox", "send delivery info task" — is **interpretable**. Pick the most likely reading, state it in ≤ 1 line so the user can redirect ("Interpreting as: open amazon.in in pinned tab, attempt to update delivery address via ref-based click; escalating to coordinate click if needed."), and proceed. If you're wrong, `page_effect` will tell you faster than a clarification round-trip would have.
+Everything else — "use amazon india", "try a mouse click", "check my inbox", "send delivery info task" — is **interpretable**. Pick the most likely reading, state it in ≤ 1 line so the user can redirect ("Interpreting as: open amazon.in in the current tab, attempt to update delivery address via ref-based click; escalating to coordinate click if needed."), and proceed. If you're wrong, `page_effect` will tell you faster than a clarification round-trip would have.
 
 Three-part clarification dumps like:
 > 1. Did you mean to test that mouse click works…?
@@ -65,9 +65,7 @@ Three-part clarification dumps like:
 
 1. **Search procedures.** Call `procedures_search` with tokens from the user's ask. If score ≥ 0.5, use that procedure; don't re-plan steps already encoded.
 2. **Find the tab. Stay autonomous — don't stop to ask if you can recover yourself.**
-   - `browser_pinned_tab` first. That is the user's explicit "work here" tab.
-   - `NO_PINNED_TAB` → fall through silently: try `browser_current_tab`; if that also returns nothing usable, call `browser_new_tab` and proceed on the fresh tab.
-   - Only surface the "click 'Use this tab' in the popup" suggestion to the user if *every* fallback above has failed (no current tab, new-tab creation denied, etc.) — not as the first move.
+   - `browser_current_tab` first. If that returns nothing usable, call `browser_new_tab` and proceed on the fresh tab.
    - For cross-tab work, `browser_list_tabs` and pick explicitly by title/url.
 3. **If the task is complex, plan before decomposing.** This step exists because agents reliably follow the full discipline (list → delegate → verify) on simple tasks, and reliably skip it on complex ones. The mechanism is cognitive load: on a complex task, the task state crowds out the skill rules in working memory. The fix is to externalize planning into its own sub-agent so the main context only ever sees the finished plan, not the deliberation.
 
@@ -83,7 +81,7 @@ Three-part clarification dumps like:
 
    **Parallelize planning + easy execution.** If a request has both easy and tricky pieces, don't serialize: fire them in one turn.
    - List item: `0a. Spawn planner sub-agent (sonnet) — plan the Figma invoice flow [details]. Return plan, ≤15 lines.`
-   - List item: `0b. Spawn sub-agent (haiku) — open Slack pinned tab, return current channel name.` *(runs in parallel with 0a)*
+   - List item: `0b. Spawn sub-agent (haiku) — open Slack in a tab, return current channel name.` *(runs in parallel with 0a)*
    - Dispatch both sub-agents in a single turn (your host supports this — multiple Agent calls in one message). While the planner thinks, the easy piece finishes.
    - Parallelism rule of thumb: **sub-agents may run in parallel iff they operate on different tabs**. Two sub-agents hitting the same tab race and corrupt page state. Same-tab subtasks must serialize.
 
@@ -275,7 +273,6 @@ Keyed by the symptom you observe, not the root cause. Root causes differ; fixes 
 | Typing produced "DDoouubblleedd" text | Do NOT retry with same params | Remove any manually-forced `mode:"trusted"`; let the registry handle it |
 | `Enter` on chat composer does nothing | Retry once (trusted path often takes one warm-up on unknown sites) | Verify focus is actually on the composer with `page_effect.focus.after_selector`; re-focus if not |
 | `browser_navigate` "succeeds" but page shows old content | Follow with `browser_wait_for` on a new-route element | SPA may have dropped your navigation; try a hard reload once |
-| `NO_PINNED_TAB` | Ask user to click "Use this tab" in popup | Fall back to `browser_current_tab` with a warning |
 | `USER_DECLINED` on risky action | Do not silently retry | Surface the decline to the user; they chose for a reason |
 | Procedure fails at step N | Read the procedure YAML; diagnose the specific leaf | Do not "fix" by skipping the step or inlining a workaround — file the procedure bug |
 
