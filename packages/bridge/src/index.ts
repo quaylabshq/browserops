@@ -24,7 +24,7 @@ import { proceduresRoot } from "./procedures/paths.js";
 import { seedBundledProcedures } from "./procedures/seed.js";
 import { runInit } from "./cli-init.js";
 
-const VERSION = "0.0.2";
+const VERSION = "0.0.3";
 
 async function main(): Promise<void> {
   installProcessErrorHandlers();
