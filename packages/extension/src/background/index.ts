@@ -1,4 +1,12 @@
-import { CloseCode, DEFAULT_WS_HOST, DEFAULT_WS_PORT, type Request, type Response } from "@browserops/shared";
+import {
+  CloseCode,
+  DEFAULT_WS_HOST,
+  DEFAULT_WS_PORT,
+  isFeatureName,
+  type FeatureName,
+  type Request,
+  type Response,
+} from "@browserops/shared";
 import type { EventName, EventMap } from "@browserops/shared";
 import { WsClient } from "./ws-client.js";
 import { Router, type Context } from "./router.js";
@@ -35,6 +43,29 @@ const cdp = new CdpManager();
 const network = new NetworkTracker();
 let wsClient: WsClient | null = null;
 
+// Live feature set sourced from chrome.storage.local.features. Populated on
+// SW boot and updated on every HelloAck so the router's gate sees the latest
+// state. Both teach and procedures default to OFF — explicit user opt-in.
+const enabledFeatures = new Set<FeatureName>();
+router.setFeatureSource(() => enabledFeatures);
+
+const FEATURES_STORAGE_KEY = "features";
+
+async function loadFeaturesFromStorage(): Promise<void> {
+  const s = await chrome.storage.local.get(FEATURES_STORAGE_KEY);
+  enabledFeatures.clear();
+  const raw = s[FEATURES_STORAGE_KEY];
+  if (!Array.isArray(raw)) return;
+  for (const name of raw) if (isFeatureName(name)) enabledFeatures.add(name);
+}
+
+async function persistFeatures(features: string[]): Promise<void> {
+  const filtered = features.filter(isFeatureName);
+  enabledFeatures.clear();
+  for (const name of filtered) enabledFeatures.add(name);
+  await chrome.storage.local.set({ [FEATURES_STORAGE_KEY]: filtered });
+}
+
 const ctx: Context = {
   emitEvent: <N extends EventName>(name: N, payload: EventMap[N]) => {
     wsClient?.sendEvent(name, payload);
@@ -58,6 +89,13 @@ registerReadHandler(router, { tabIdMap: tabIdToChromeId, refCache });
 registerInputHandlers(router, { tabIdMap: tabIdToChromeId, refCache, cdp, network });
 registerSafetyHandler(router, { restoreBadge: () => setBadge(currentConnected) });
 
+// TeachRecorder is always instantiated — its lifetime cost is one Map
+// allocation. The router's feature gate prevents teach_* methods from
+// reaching its handlers when teach is off; teach_event from the content
+// script can't fire either because the recorder.start() entry point is
+// gated. Keeping it always-instantiated avoids recreate-on-toggle
+// complexity and means a feature flip takes effect on next HelloAck
+// without restarting the SW.
 const teachRecorder = new TeachRecorder({
   resolveTabId: (chromeTabId: number) => chromeIdToTabId.get(chromeTabId),
   emit: (ev) => wsClient?.sendEvent("teach_event", ev),
@@ -233,6 +271,9 @@ async function startClient(): Promise<void> {
     extensionVersion: EXTENSION_VERSION,
     onRequest: (req: Request): Promise<Response> => router.dispatch(req, ctx),
     onConnectionChange,
+    onFeatures: (features) => {
+      void persistFeatures(features);
+    },
     onFatalClose: (code) => {
       if (code === CloseCode.SUPERSEDED) {
         // Another extension instance took the bridge connection. Treat this as
@@ -430,7 +471,14 @@ void (async () => {
       return undefined;
     }
   });
+  await loadFeaturesFromStorage();
   await teachRecorder.rehydrate();
+  // If teach was disabled while a session was persisted to storage, stop
+  // the rehydrated session — otherwise the REC bar would be stuck showing
+  // without a working Stop button (the router gate would reject teach_stop).
+  if (!enabledFeatures.has("teach") && teachRecorder.isActive()) {
+    await teachRecorder.stop();
+  }
   // Sync the recording flag if the SW was killed mid-session and revived.
   currentRecording = teachRecorder.isActive();
   applyBadge();
