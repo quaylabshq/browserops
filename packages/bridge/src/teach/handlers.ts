@@ -41,9 +41,17 @@ export interface TeachListResult {
 }
 
 export interface TeachDistillResult {
-  yaml: string;
+  procedures: Array<{ name: string; kind: "leaf" | "composite"; yaml: string }>;
   warnings: string[];
   redacted_inputs: string[];
+  parameter_candidates: Array<{
+    seq: number;
+    value: string;
+    suggested_name: string;
+    suggested_type: "string";
+    auto_parameterized: boolean;
+    target_field_label?: string;
+  }>;
 }
 
 export function buildTeachHandlers(
@@ -160,9 +168,14 @@ export function buildTeachHandlers(
     if (typeof descRaw === "string" && descRaw !== "") opts.description = descRaw;
     const result = await distillSession(sessionId, store, opts);
     return {
-      yaml: result.yaml,
+      procedures: result.procedures.map((p) => ({
+        name: p.name,
+        kind: p.kind,
+        yaml: p.yaml,
+      })),
       warnings: result.warnings,
       redacted_inputs: result.redacted_inputs,
+      parameter_candidates: result.parameter_candidates,
     };
   }
 
