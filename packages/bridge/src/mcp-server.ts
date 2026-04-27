@@ -30,6 +30,7 @@ import type { TraceWriter } from "./trace-writer.js";
 import { buildProcedureHandlers } from "./procedures/handlers.js";
 import { listPrompts, getPrompt } from "./prompts.js";
 import { checkBreaker, recordResult as recordBreakerResult } from "./circuit-breaker.js";
+import type { TeachSessionStore } from "./teach/session-store.js";
 
 /**
  * Minimal shape McpBridgeServer needs to talk to the extension. Implemented
@@ -120,6 +121,8 @@ export interface McpBridgeDeps {
   tabs: TabRegistry;
   logger: Logger;
   version: string;
+  /** Disk-backed teach-mode session store (procedures_teach_* handlers read/write here). */
+  teachStore: TeachSessionStore;
   /** Optional trace writer. When provided, the router will emit a TraceEvent after each tool result. */
   traceWriter?: TraceWriter;
 }
@@ -282,7 +285,7 @@ export class McpBridgeServer {
 
   constructor(deps: McpBridgeDeps) {
     this.deps = deps;
-    this.procedureHandlers = buildProcedureHandlers(deps.wsBridge);
+    this.procedureHandlers = buildProcedureHandlers(deps.wsBridge, deps.teachStore);
 
     const ajv = new Ajv({ allErrors: true, strict: false, useDefaults: true });
     addFormats(ajv);

@@ -1748,6 +1748,214 @@ const proceduresExecute: ToolDef = {
 } as const;
 
 // ---------------------------------------------------------------------------
+// Teach mode — record / observe / distill user demonstrations
+// ---------------------------------------------------------------------------
+
+const teachStepDescription =
+  "Each step is one of: " +
+  "{ kind: 'click', target, button, modifiers, x?, y? }, " +
+  "{ kind: 'type', target, value, redacted, redaction_reason? }, " +
+  "{ kind: 'key', keys, target? }, " +
+  "{ kind: 'navigate', url, transition? }, " +
+  "{ kind: 'scroll', target?, delta_y }, " +
+  "{ kind: 'narration', text }, " +
+  "{ kind: 'marker', label? }. " +
+  "TeachTargetRef shape: { selector, role?, name?, text?, tag?, input_type?, contenteditable? }.";
+
+const teachEventSchema: JSONSchemaObject = {
+  type: "object",
+  additionalProperties: true,
+  required: ["session_id", "seq", "ts", "tab_id", "url", "step"] as const,
+  properties: {
+    session_id: { type: "string" },
+    seq: { type: "integer", minimum: 1 },
+    ts: { type: "integer", minimum: 0 },
+    tab_id: { type: "string" },
+    url: { type: "string" },
+    step: { type: "object", additionalProperties: true },
+  },
+} as const;
+
+const teachSessionMetaSchema: JSONSchemaObject = {
+  type: "object",
+  additionalProperties: false,
+  required: ["session_id", "started_at", "scope", "event_count"] as const,
+  properties: {
+    session_id: { type: "string" },
+    started_at: { type: "integer", minimum: 0 },
+    stopped_at: { type: "integer", minimum: 0 },
+    scope: { type: "string", enum: ["active_tab", "all_tabs"] as const },
+    narration_hint: { type: "string" },
+    event_count: { type: "integer", minimum: 0 },
+  },
+} as const;
+
+const proceduresTeachStart: ToolDef = {
+  name: "procedures_teach_start",
+  description:
+    "Start a teach-mode session. The user demonstrates a flow in their real browser; the extension " +
+    "records each click/type/key/navigate/scroll into a TeachEvent stream that the agent can read " +
+    "live via procedures_teach_observe. Capture-time redaction strips passwords and known secret " +
+    "patterns. Idempotent: returns the in-flight session if one is already active. " +
+    'OPTIONAL ARGUMENTS: {"scope": "all_tabs"|"active_tab" (default all_tabs), "narration_hint": "<one-line description>"}.',
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      scope: { type: "string", enum: ["active_tab", "all_tabs"] as const, default: "all_tabs" },
+      narration_hint: { type: "string", maxLength: 200 },
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["session_id", "started_at", "resumed"] as const,
+    properties: {
+      session_id: { type: "string" },
+      started_at: { type: "integer" },
+      resumed: { type: "boolean", description: "true if returned an already-active session." },
+    },
+  },
+  action_weight: 0,
+  risky: "never",
+  errorCodes: [...BASE_CODES, "EXTENSION_DISCONNECTED"] as const,
+} as const;
+
+const proceduresTeachStop: ToolDef = {
+  name: "procedures_teach_stop",
+  description:
+    "Stop the active teach-mode session and finalize its meta sidecar (sets stopped_at). After stop, " +
+    "procedures_teach_observe returns finished: true once the cursor catches up. Errors with INVALID_STATE " +
+    "if no session is active. Pass session_id only when stopping a specific known session — usually omitted.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      session_id: { type: "string" },
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["session_id", "event_count", "duration_ms"] as const,
+    properties: {
+      session_id: { type: "string" },
+      event_count: { type: "integer", minimum: 0 },
+      duration_ms: { type: "integer", minimum: 0 },
+    },
+  },
+  action_weight: 0,
+  risky: "never",
+  errorCodes: [...BASE_CODES, "INVALID_STATE", "EXTENSION_DISCONNECTED"] as const,
+} as const;
+
+const proceduresTeachObserve: ToolDef = {
+  name: "procedures_teach_observe",
+  description:
+    "Stream events from a teach session. Returns events with seq > since_seq up to max_batch. If no new " +
+    "events are available and wait_ms > 0 and the session is still live, blocks up to wait_ms for the " +
+    "next event. When finished: true, the session has stopped and you've consumed all events. " +
+    teachStepDescription +
+    ' REQUIRED: {"session_id": "ts_..."}. OPTIONAL: {"since_seq": 0, "wait_ms": 0..30000, "max_batch": 1..500}.',
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["session_id"] as const,
+    properties: {
+      session_id: { type: "string" },
+      since_seq: { type: "integer", minimum: 0, default: 0 },
+      wait_ms: { type: "integer", minimum: 0, maximum: 30000, default: 0 },
+      max_batch: { type: "integer", minimum: 1, maximum: 500, default: 200 },
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["events", "next_seq", "finished"] as const,
+    properties: {
+      events: { type: "array", items: teachEventSchema },
+      next_seq: { type: "integer", minimum: 0 },
+      finished: { type: "boolean" },
+    },
+  },
+  action_weight: 0,
+  risky: "never",
+  errorCodes: [...BASE_CODES] as const,
+} as const;
+
+const proceduresTeachList: ToolDef = {
+  name: "procedures_teach_list",
+  description:
+    "List known teach sessions on disk, newest first. Useful after the user demonstrates a flow but " +
+    "the agent doesn't know the session_id (e.g., session was started from the popup, not over MCP).",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {},
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["sessions"] as const,
+    properties: {
+      sessions: { type: "array", items: teachSessionMetaSchema },
+    },
+  },
+  action_weight: 0,
+  risky: "never",
+  errorCodes: [...BASE_CODES] as const,
+} as const;
+
+const proceduresTeachMarker: ToolDef = {
+  name: "procedures_teach_marker",
+  description:
+    "Insert a synthetic split marker into the active teach session. The distiller treats markers as " +
+    "hard leaf boundaries — use this when you want to force a split between two sub-flows the user is " +
+    'demonstrating in one session. OPTIONAL: {"label": "<short hint about what just ended>"}.',
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      label: { type: "string", maxLength: 80 },
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["ok"] as const,
+    properties: { ok: { const: true } },
+  },
+  action_weight: 0,
+  risky: "never",
+  errorCodes: [...BASE_CODES, "INVALID_STATE", "EXTENSION_DISCONNECTED"] as const,
+} as const;
+
+const proceduresTeachNarration: ToolDef = {
+  name: "procedures_teach_narration",
+  description:
+    "Insert a narration step into the active teach session — free-text the agent (or the user, via the " +
+    "popup) wants to attach to the timeline. The distiller uses narration to name leaves, suggest input " +
+    'parameters, and document the flow. REQUIRED: {"text": "<short description>"}.',
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["text"] as const,
+    properties: {
+      text: { type: "string", minLength: 1, maxLength: 400 },
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["ok"] as const,
+    properties: { ok: { const: true } },
+  },
+  action_weight: 0,
+  risky: "never",
+  errorCodes: [...BASE_CODES, "INVALID_STATE", "EXTENSION_DISCONNECTED"] as const,
+} as const;
+
+// ---------------------------------------------------------------------------
 // Public catalogue
 // ---------------------------------------------------------------------------
 
@@ -1786,6 +1994,12 @@ export const TOOL_DEFS: readonly ToolDef[] = [
   proceduresDelete,
   proceduresCompile,
   proceduresExecute,
+  proceduresTeachStart,
+  proceduresTeachStop,
+  proceduresTeachObserve,
+  proceduresTeachList,
+  proceduresTeachMarker,
+  proceduresTeachNarration,
 ] as const;
 
 export const TOOL_DEF_MAP: Record<string, ToolDef> = Object.freeze(
