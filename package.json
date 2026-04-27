@@ -22,7 +22,9 @@
     "test:integration": "pnpm --filter @browserops/bridge test:integration",
     "test:smoke": "pnpm --filter @browserops/extension test:smoke",
     "clean": "pnpm -r clean && rm -rf node_modules",
-    "bump": "node scripts/bump-version.mjs"
+    "bump": "node scripts/bump-version.mjs",
+    "release": "pnpm -r publish --access public --no-git-checks",
+    "release:dry": "pnpm -r publish --access public --no-git-checks --dry-run"
   },
   "devDependencies": {
     "@typescript-eslint/eslint-plugin": "^8.0.0",
