@@ -18,6 +18,16 @@ const safetyTool = $<HTMLDivElement>("safety-tool");
 const safetyReason = $<HTMLDivElement>("safety-reason");
 const safetyAllow = $<HTMLButtonElement>("safety-allow");
 const safetyDeny = $<HTMLButtonElement>("safety-deny");
+const teachIdle = $<HTMLDivElement>("teach-idle");
+const teachActive = $<HTMLDivElement>("teach-active");
+const teachHint = $<HTMLInputElement>("teach-hint");
+const teachStartBtn = $<HTMLButtonElement>("teach-start");
+const teachStopBtn = $<HTMLButtonElement>("teach-stop");
+const teachCounter = $<HTMLSpanElement>("teach-counter");
+const teachId = $<HTMLDivElement>("teach-id");
+const teachNote = $<HTMLInputElement>("teach-note");
+const teachAddNoteBtn = $<HTMLButtonElement>("teach-add-note");
+const teachMarkerBtn = $<HTMLButtonElement>("teach-marker");
 
 interface PendingSafetyPrompt {
   tool: string;
@@ -68,11 +78,43 @@ function renderSafety(prompt: PendingSafetyPrompt | null): void {
   mainPane.classList.add("hidden");
 }
 
+interface TeachStatus {
+  active: boolean;
+  session_id?: string;
+  event_count?: number;
+  started_at?: number;
+  narration_hint?: string;
+}
+
+function renderTeach(status: TeachStatus): void {
+  const isActive = status.active === true;
+  teachIdle.classList.toggle("active", !isActive);
+  teachActive.classList.toggle("active", isActive);
+  if (isActive) {
+    const n = typeof status.event_count === "number" ? status.event_count : 0;
+    teachCounter.textContent = `${n} event${n === 1 ? "" : "s"}`;
+    teachId.textContent = status.session_id ?? "";
+  }
+}
+
+async function refreshTeach(): Promise<void> {
+  try {
+    const status = (await chrome.runtime.sendMessage({ type: "teach_status" })) as
+      | TeachStatus
+      | undefined;
+    if (status === undefined || status === null) return;
+    renderTeach(status);
+  } catch {
+    /* SW asleep — next poll will catch up. */
+  }
+}
+
 async function refresh(): Promise<void> {
   const [local, session] = await Promise.all([
     chrome.storage.local.get(["connected", "token"]),
     chrome.storage.session.get(["pendingSafetyPrompt", "requireApproval", "autoApprove"]),
   ]);
+  void refreshTeach();
 
   // Migration: if old autoApprove key exists, translate to new requireApproval key
   if (session["autoApprove"] !== undefined && session["requireApproval"] === undefined) {
@@ -156,8 +198,70 @@ runSetupBtn.addEventListener("click", () => {
   window.close();
 });
 
+teachStartBtn.addEventListener("click", () => {
+  teachStartBtn.disabled = true;
+  const hint = teachHint.value.trim();
+  void chrome.runtime
+    .sendMessage({
+      type: "teach_start",
+      scope: "all_tabs",
+      narration_hint: hint !== "" ? hint : undefined,
+    })
+    .catch(() => {})
+    .finally(() => {
+      teachStartBtn.disabled = false;
+      teachHint.value = "";
+      void refreshTeach();
+    });
+});
+
+teachStopBtn.addEventListener("click", () => {
+  teachStopBtn.disabled = true;
+  void chrome.runtime
+    .sendMessage({ type: "teach_stop" })
+    .catch(() => {})
+    .finally(() => {
+      teachStopBtn.disabled = false;
+      void refreshTeach();
+    });
+});
+
+teachAddNoteBtn.addEventListener("click", () => {
+  const text = teachNote.value.trim();
+  if (text === "") return;
+  void chrome.runtime
+    .sendMessage({ type: "teach_narration", text })
+    .catch(() => {})
+    .finally(() => {
+      teachNote.value = "";
+      void refreshTeach();
+    });
+});
+
+teachNote.addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter") {
+    ev.preventDefault();
+    teachAddNoteBtn.click();
+  }
+});
+
+teachMarkerBtn.addEventListener("click", () => {
+  void chrome.runtime
+    .sendMessage({ type: "teach_marker" })
+    .catch(() => {})
+    .finally(() => {
+      void refreshTeach();
+    });
+});
+
 chrome.storage.session.onChanged.addListener((changes) => {
   if ("pendingSafetyPrompt" in changes) void refresh();
+  if ("teach_session" in changes) void refreshTeach();
+});
+
+chrome.runtime.onMessage.addListener((msg: unknown) => {
+  if (typeof msg !== "object" || msg === null) return;
+  if ((msg as { type?: unknown }).type === "teach_status_changed") void refreshTeach();
 });
 
 void refresh();
