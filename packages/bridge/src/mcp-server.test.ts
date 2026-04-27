@@ -18,6 +18,7 @@ import type { Safety } from "./safety.js";
 import type { Logger } from "./logger.js";
 import type { TraceWriter } from "./trace-writer.js";
 import type { TraceEvent } from "@browserops/shared";
+import { TeachSessionStore } from "./teach/session-store.js";
 
 // ---------------------------------------------------------------------------
 // Minimal mock factory helpers
@@ -83,6 +84,7 @@ function makeDeps(overrides: Partial<McpBridgeDeps> = {}): McpBridgeDeps {
     tabs: new TabRegistry(),
     logger: makeLogger(),
     version: "0.0.0-test",
+    teachStore: new TeachSessionStore(),
     ...overrides,
   };
 }

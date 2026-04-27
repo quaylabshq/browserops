@@ -135,6 +135,7 @@ async function main(): Promise<void> {
     tabs,
     logger,
     version: VERSION,
+    teachStore,
     traceWriter,
   });
 
