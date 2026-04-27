@@ -182,7 +182,13 @@ async function main(): Promise<void> {
 
   process.on("SIGINT", () => shutdown("SIGINT"));
   process.on("SIGTERM", () => shutdown("SIGTERM"));
-  process.stdin.on("end", () => shutdown("stdin_closed"));
+  // Tear down on stdin EOF only when the bridge is acting as an MCP stdio
+  // server for a parent client. When BROWSEROPS_DAEMON=1, the CLI orchestrator
+  // spawned us with stdio:ignore (i.e. /dev/null on stdin) — the immediate EOF
+  // would otherwise kill the daemon a millisecond after it bound the port.
+  if (process.env["BROWSEROPS_DAEMON"] !== "1") {
+    process.stdin.on("end", () => shutdown("stdin_closed"));
+  }
   process.on("beforeExit", () => {
     void traceWriter.close();
   });
