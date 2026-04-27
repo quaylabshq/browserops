@@ -304,30 +304,6 @@ const closeTab: ToolDef = {
   errorCodes: [...BASE_CODES, ...TAB_CODES, ...MUTATING_CODES] as const,
 } as const;
 
-const pinnedTab: ToolDef = {
-  name: "browser_pinned_tab",
-  description:
-    "Return the user-selected \"home base\" tab (set via the extension popup \"Use this tab\" button). Call this FIRST when the user refers to \"this tab\" or is working on a specific page they already have open — thread the returned tab_id through the rest of the turn instead of opening a new tab. Errors with NO_PINNED_TAB if the user has not pinned one. Typically called from a navigator sub-agent.",
-  inputSchema: {
-    type: "object",
-    additionalProperties: false,
-    properties: {},
-  },
-  outputSchema: {
-    type: "object",
-    additionalProperties: false,
-    required: ["tab_id", "url", "title"] as const,
-    properties: {
-      tab_id: tabIdSchema,
-      url: { type: "string" },
-      title: { type: "string" },
-    },
-  },
-  action_weight: 0,
-  risky: "never",
-  errorCodes: [...BASE_CODES, "NO_PINNED_TAB"] as const,
-} as const;
-
 const switchTab: ToolDef = {
   name: "browser_switch_tab",
   description: "Make the given tab active and focus its window.",
@@ -1778,7 +1754,6 @@ const proceduresExecute: ToolDef = {
 export const TOOL_DEFS: readonly ToolDef[] = [
   listTabs,
   currentTab,
-  pinnedTab,
   newTab,
   closeTab,
   switchTab,
