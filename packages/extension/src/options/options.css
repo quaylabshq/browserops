@@ -1,0 +1,233 @@
+@import "tailwindcss";
+
+/* Inter Display — body + UI */
+@font-face {
+  font-family: "Inter Display";
+  src: url("../assets/fonts/InterDisplay-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Inter Display";
+  src: url("../assets/fonts/InterDisplay-Medium.ttf") format("truetype");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Inter Display";
+  src: url("../assets/fonts/InterDisplay-SemiBold.ttf") format("truetype");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* Commit Mono — code, refs, technical strings */
+@font-face {
+  font-family: "Commit Mono";
+  src: url("../assets/fonts/CommitMono-400-Regular.otf") format("opentype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Commit Mono";
+  src: url("../assets/fonts/CommitMono-700-Regular.otf") format("opentype");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@theme {
+  --font-sans: "Inter Display", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "Commit Mono", ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
+
+  --color-ink:        #19181B;
+  --color-ink-60:     rgba(25, 24, 27, 0.6);
+  --color-ink-45:     rgba(25, 24, 27, 0.45);
+  --color-ink-30:     rgba(25, 24, 27, 0.3);
+  --color-ink-12:     rgba(25, 24, 27, 0.12);
+  --color-ink-08:     rgba(25, 24, 27, 0.08);
+  --color-ink-06:     rgba(25, 24, 27, 0.06);
+  --color-ink-04:     rgba(25, 24, 27, 0.04);
+
+  --color-brand:      #2E5EC4;
+  --color-brand-deep: #2347A6;
+  --color-brand-12:   rgba(46, 94, 196, 0.12);
+  --color-brand-08:   rgba(46, 94, 196, 0.08);
+
+  --color-brand-cream:    #EAF6D2;
+  --color-brand-cream-50: rgba(234, 246, 210, 0.5);
+
+  --color-surface:    #ffffff;
+  --color-surface-2:  #fafafa;
+  --color-bg:         #eaeaef;
+
+  --color-success:        #15803d;
+  --color-success-bg:     #f0fdf4;
+  --color-success-border: #bbf7d0;
+  --color-success-ink:    #166534;
+}
+
+/* Page base — full-width canvas with the brand bg */
+html, body {
+  margin: 0;
+  padding: 0;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.45;
+  color: var(--color-ink);
+  background: var(--color-bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+body { padding: 48px 32px; }
+
+main {
+  max-width: 480px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* Header — brand wordmark over a faint sub-line */
+.head { display: flex; flex-direction: column; gap: 6px; }
+.brand { display: block; height: 22px; }
+.brand svg { display: block; height: 100%; width: auto; }
+.head__sub {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-ink-45);
+}
+
+/* Card surface — white panel with soft 1 px border */
+.card {
+  background: var(--color-surface);
+  border-radius: 10px;
+  padding: 16px;
+  box-shadow: inset 0 0 0 1px var(--color-ink-06);
+}
+
+/* Status row */
+.status-row { display: flex; align-items: center; gap: 10px; }
+.status-row .muted {
+  color: var(--color-ink-60);
+  font-weight: 500;
+}
+
+/* Pill */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  background: var(--color-ink-06);
+  color: var(--color-ink-60);
+  white-space: nowrap;
+}
+.pill--on {
+  background: var(--color-success-bg);
+  color: var(--color-success-ink);
+  box-shadow: inset 0 0 0 1px var(--color-success-border);
+}
+.pill--off {
+  background: var(--color-ink-04);
+  color: var(--color-ink-45);
+}
+
+/* Form */
+.form { display: grid; gap: 14px; }
+.form__row { display: flex; gap: 10px; }
+.form__row > label { flex: 1; }
+.form__actions { display: flex; align-items: center; gap: 12px; margin-top: 4px; }
+
+.label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-ink-45);
+}
+
+.input {
+  height: 32px;
+  padding: 0 10px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-ink);
+  background: var(--color-surface);
+  border: 0;
+  border-radius: 6px;
+  box-shadow: inset 0 0 0 1px var(--color-ink-08);
+  outline: 0;
+  transition: box-shadow 80ms ease;
+}
+.input:focus-visible {
+  box-shadow: inset 0 0 0 1px var(--color-brand), 0 0 0 3px var(--color-brand-08);
+}
+.input::placeholder { color: var(--color-ink-30); }
+
+/* Button — brand blue primary */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 32px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  background: var(--color-brand);
+  color: var(--color-surface);
+  transition: background 80ms ease, transform 80ms ease, box-shadow 80ms ease;
+}
+.btn:hover         { background: var(--color-brand-deep); }
+.btn:active        { transform: scale(0.98); }
+.btn:focus-visible { outline: 0; box-shadow: 0 0 0 3px var(--color-brand-08); }
+.btn:disabled      { opacity: 0.5; cursor: not-allowed; }
+
+/* "saved" confirmation chip */
+.saved {
+  font-size: 11px;
+  color: var(--color-success-ink);
+  opacity: 0;
+  transition: opacity 150ms ease;
+}
+.saved.show { opacity: 1; }
+
+/* Help text + inline mono code */
+.help {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-ink-45);
+  line-height: 1.5;
+}
+.help strong {
+  color: var(--color-ink);
+  font-weight: 500;
+}
+.help code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: var(--color-ink-04);
+  padding: 1px 5px;
+  border-radius: 4px;
+  color: var(--color-ink);
+}
+
+.muted { color: var(--color-ink-45); font-weight: 500; }
