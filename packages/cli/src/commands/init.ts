@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { spawn } from "node:child_process";
 import prompts from "prompts";
 import { DEFAULT_WS_PORT, ENV } from "@browserops/shared";
-import { ensureBridgeRunning, isBridgeAlive } from "../lib/daemon.js";
+import { ensureBridgeRunning, isBridgeAlive, resolveBridgeBin } from "../lib/daemon.js";
 import {
   STATE_DIR,
   bundledAssetsDir,
@@ -189,7 +189,19 @@ async function runMcpInstaller(opts: InitOpts): Promise<void> {
     return;
   }
 
-  const spec = { command: "browserops-bridge", args: [] as string[] };
+  // Resolve the bridge to an absolute `node <bridge-dist>/index.js` invocation
+  // when possible. Bare `browserops-bridge` only works if the binary is on
+  // $PATH, but a global `npm i -g browserops` does NOT expose the transitive
+  // `@browserops/bridge` bin — only the top-level package's bins get linked.
+  // Writing the resolved path makes the MCP entry work without further setup.
+  const invocation = resolveBridgeBin();
+  if (invocation.command === "browserops-bridge") {
+    warn(
+      "could not resolve @browserops/bridge — writing bare `browserops-bridge`. " +
+      "If your MCP client cannot find it, install browserops globally or pass --client.",
+    );
+  }
+  const spec = { command: invocation.command, args: invocation.args };
 
   for (const id of chosen) {
     const inst = INSTALLERS[id];

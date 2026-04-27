@@ -131,7 +131,12 @@ async function detectContinue(): Promise<ClientInfo> {
           if (typeof s !== "object" || s === null) return false;
           const transport = (s as Record<string, unknown>)["transport"] as Record<string, unknown> | undefined;
           const cmd = transport?.["command"];
-          return typeof cmd === "string" && (cmd.includes("browserops-bridge") || cmd === "browserops-bridge");
+          if (typeof cmd === "string" && cmd.includes("browserops-bridge")) return true;
+          const args = transport?.["args"];
+          if (Array.isArray(args)) {
+            return args.some((a) => typeof a === "string" && a.includes("browserops"));
+          }
+          return false;
         });
       }
     }
