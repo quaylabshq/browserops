@@ -263,6 +263,18 @@ Authoring checklist:
 - Split setup, onboarding, and final extraction into separate procedures when they are distinct screens or branches.
 - If the UI changes, fix the leaf first, then update the composite.
 
+## Teach mode
+
+Teach mode lets you demonstrate a flow once in your real browser while your agent watches live, then turns the recording into a reusable procedure. The whole workflow is agent-driven — there is no "record" button in the popup.
+
+**How to use it.** Just tell your agent something like *"I don't think you have a procedure for this — watch what I do."* The agent calls the bridge's teach tools, you demonstrate the flow normally (clicking through pages, typing into fields, navigating between tabs — capture is **all-tabs** by default, not just the one in front of you), and the agent observes the timeline live as you work. When you're done, say *"that's the flow"* and the agent stops the session, replays it to confirm it works, and saves it as a procedure.
+
+**Privacy: redaction is at capture, not afterthought.** The content script blanks any password, OTP, or secret-pattern field at capture time before the value ever leaves the page. Redacted fields surface as inputs the agent will ask you for at run time, not constants baked into the saved procedure. Default secret patterns: `sk-*`, `AKIA*`, `ghp_*`, `xox*-*`, JWTs.
+
+**The recording indicator.** While a session is active the toolbar badge shows red `REC` text and the popup gains a one-row red bar with an emergency Stop button. The badge is on regardless of whether the bridge is connected — capture is local to the extension; you'll always see when it's on.
+
+**Storage.** Each session is two files in `~/browserops/teach-sessions/`: `<session_id>.jsonl` (one event per line) and `<session_id>.meta.json` (sidecar with start/stop times and event count). Override the location with `BROWSEROPS_TEACH_DIR`.
+
 ## Safety defaults
 
 - **Rate limit:** 16 actions/minute per tab, 60/minute globally. Exceeded → `RATE_LIMITED` with `retry_after_ms`.
@@ -321,6 +333,7 @@ Currently ~220 unit tests total across shared (envelope guards, tool catalogue i
 | `BROWSEROPS_LOG_LEVEL` | `normal` | `normal` truncates strings > 200 chars; `audit` logs full payloads |
 | `BROWSEROPS_APPROVAL` | `auto` | `auto` (default) or `gate`; controls approval mode for risky actions |
 | `BROWSEROPS_TRACE` | unset | `=1` writes trace events including auto-approvals to `~/.browserops/trace.jsonl` |
+| `BROWSEROPS_TEACH_DIR` | `~/browserops/teach-sessions` | Override the directory where teach-mode sessions are recorded |
 
 ## Troubleshooting
 
