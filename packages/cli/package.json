@@ -2,7 +2,33 @@
   "name": "browserops",
   "version": "0.0.2",
   "type": "module",
-  "description": "browserops CLI — install, run, and orchestrate the browserops bridge from the terminal",
+  "description": "Drive your real Chrome browser from any MCP-compatible AI client (Claude Code, Cursor, Codex, Continue, Windsurf). CLI + MCP server with procedure memory.",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "claude",
+    "claude-code",
+    "cursor",
+    "codex",
+    "browser-automation",
+    "chrome",
+    "chrome-extension",
+    "agent",
+    "ai",
+    "automation",
+    "browserops"
+  ],
+  "homepage": "https://github.com/quaylabshq/browserops#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/quaylabshq/browserops.git",
+    "directory": "packages/cli"
+  },
+  "bugs": {
+    "url": "https://github.com/quaylabshq/browserops/issues"
+  },
+  "license": "MIT",
+  "author": "Saket Aryan",
   "bin": {
     "browserops": "./dist/index.js"
   },

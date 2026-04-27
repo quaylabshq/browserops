@@ -2,6 +2,28 @@
   "name": "@browserops/bridge",
   "version": "0.0.2",
   "type": "module",
+  "description": "MCP stdio server + WebSocket primary for browserops — drives the browserops Chrome extension. Install `browserops` for the user-facing CLI.",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "mcp-server",
+    "browser-automation",
+    "chrome",
+    "websocket",
+    "claude-code",
+    "browserops"
+  ],
+  "homepage": "https://github.com/quaylabshq/browserops#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/quaylabshq/browserops.git",
+    "directory": "packages/bridge"
+  },
+  "bugs": {
+    "url": "https://github.com/quaylabshq/browserops/issues"
+  },
+  "license": "MIT",
+  "author": "Saket Aryan",
   "bin": {
     "browserops-bridge": "./dist/index.js"
   },
