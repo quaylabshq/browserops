@@ -128,10 +128,14 @@ export async function spawnBridge(opts: {
   // up and stall the bridge.
   const logFd = openSync(daemonLogPath(), "a");
 
+  // BROWSEROPS_DAEMON=1 tells the bridge we spawned it as a long-running
+  // daemon (stdio:ignore gives it /dev/null on stdin); without it, the bridge's
+  // stdin-EOF handler would fire on the first read and tear the bridge down
+  // before our control-socket health probe could observe it.
   const child = spawn(command, args, {
     detached: true,
     stdio: ["ignore", logFd, logFd],
-    env: { ...process.env, ...(opts.env ?? {}) },
+    env: { ...process.env, BROWSEROPS_DAEMON: "1", ...(opts.env ?? {}) },
   });
   child.unref();
   if (child.pid) await writePid(child.pid);
