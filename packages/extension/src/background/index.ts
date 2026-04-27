@@ -21,6 +21,7 @@ import { registerInputHandlers } from "./handlers/input.js";
 import { registerSafetyHandler, resolveSafetyDecision } from "./handlers/safety.js";
 import { registerTeachHandlers } from "./handlers/teach.js";
 import { TeachRecorder } from "./teach-recorder.js";
+import { setGatedDomainPatterns } from "./gated-state.js";
 
 // Yellow icon variants — `?url` suffix forces vite to emit them as files
 // (the small PNGs would otherwise be inlined as base64, which
@@ -273,6 +274,9 @@ async function startClient(): Promise<void> {
     onConnectionChange,
     onFeatures: (features) => {
       void persistFeatures(features);
+    },
+    onGatedDomains: (patterns) => {
+      setGatedDomainPatterns(patterns);
     },
     onFatalClose: (code) => {
       if (code === CloseCode.SUPERSEDED) {
