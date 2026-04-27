@@ -99,5 +99,4 @@ export async function runInit(): Promise<void> {
   out.write("An onboarding tab opens automatically — once your MCP client starts the\n");
   out.write("bridge, click 'Confirm & connect' to pair. (No token copy-paste required;\n");
   out.write("the bridge prints a 6-digit pair code to its stderr for visual verification.)\n");
-  out.write("Then click the BrowserOps icon and 'Use this tab' on the page you want to drive.\n");
 }
