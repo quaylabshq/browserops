@@ -105,7 +105,7 @@ registerTabHandlers(router, {
   chromeIdToTabId,
   getPinnedTabId,
 });
-registerNavigationHandlers(router, { tabIdMap: tabIdToChromeId, refCache, network });
+registerNavigationHandlers(router, { tabIdMap: tabIdToChromeId, refCache, network, cdp });
 registerScreenshotHandler(router, { tabIdMap: tabIdToChromeId });
 registerReadHandler(router, { tabIdMap: tabIdToChromeId, refCache });
 registerInputHandlers(router, { tabIdMap: tabIdToChromeId, refCache, cdp, network });

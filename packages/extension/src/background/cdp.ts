@@ -21,6 +21,17 @@ interface AttachState {
   detachTimer: ReturnType<typeof setTimeout> | null;
 }
 
+/** Domains where all input must go through CDP (canvas-rendered UIs). */
+const AUTO_CDP_DOMAINS: readonly RegExp[] = [
+  /^docs\.google\.com$/,
+  /^sheets\.google\.com$/,
+  /^(www\.)?figma\.com$/,
+  /(\.|^)canva\.com$/,
+  /^miro\.com$/,
+  /(\.|^)whimsical\.com$/,
+  /^figjam\.com$/,
+];
+
 export class CdpManager {
   private readonly attached = new Map<number, AttachState>();
   private readonly external = new Set<number>();
@@ -94,6 +105,20 @@ export class CdpManager {
   /** Remove persistent flag without detaching (for tab removal). */
   clearPersistent(chromeTabId: number): void {
     this.persistent.delete(chromeTabId);
+  }
+
+  /** Auto-enable persistent CDP if the URL is a known canvas domain.
+   *  Call after navigation completes. No-op for non-matching URLs. */
+  async autoAttachIfCanvas(chromeTabId: number, url: string): Promise<void> {
+    let hostname: string;
+    try { hostname = new URL(url).hostname; } catch { return; }
+    const match = AUTO_CDP_DOMAINS.some((re) => re.test(hostname));
+    if (match && !this.persistent.has(chromeTabId)) {
+      await this.setPersistent(chromeTabId, true).catch(() => { /* ignore attach failures */ });
+    } else if (!match && this.persistent.has(chromeTabId)) {
+      // Navigated away from a canvas site — disable persistent CDP.
+      await this.setPersistent(chromeTabId, false);
+    }
   }
 
   private async ensureAttached(chromeTabId: number): Promise<AttachState> {
