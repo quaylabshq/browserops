@@ -4,8 +4,6 @@ import type { Router } from "../router.js";
 interface TabsOpts {
   tabIdMap: Map<string, number>;
   chromeIdToTabId: Map<number, string>;
-  /** Returns the currently pinned tab_id, or null if none. */
-  getPinnedTabId: () => string | null;
 }
 
 interface TabSummary {
@@ -60,37 +58,7 @@ async function waitForTabIdAssignment(
 }
 
 export function registerTabHandlers(router: Router, opts: TabsOpts): void {
-  const { tabIdMap, chromeIdToTabId, getPinnedTabId } = opts;
-
-  router.register(
-    "browser_pinned_tab",
-    async (): Promise<{ tab_id: string; url: string; title: string }> => {
-      const tabId = getPinnedTabId();
-      if (tabId === null) {
-        throw makeError(
-          "NO_PINNED_TAB",
-          'no tab is pinned; open the extension popup and click "Use this tab" on the tab you want to work on',
-        );
-      }
-      const chromeId = tabIdMap.get(tabId);
-      if (chromeId === undefined) {
-        // Pin survived storage but the chrome tab is gone. Caller should fall
-        // back to list_tabs / current_tab.
-        throw makeError("TAB_NOT_FOUND", `pinned tab_id ${tabId} no longer maps to a chrome tab`);
-      }
-      let tab: chrome.tabs.Tab;
-      try {
-        tab = await chrome.tabs.get(chromeId);
-      } catch {
-        throw makeError("TAB_NOT_FOUND", `chrome tab ${chromeId} for pinned ${tabId} is closed`);
-      }
-      return {
-        tab_id: tabId,
-        url: tab.url ?? tab.pendingUrl ?? "",
-        title: tab.title ?? "",
-      };
-    },
-  );
+  const { tabIdMap, chromeIdToTabId } = opts;
 
   router.register("browser_list_tabs", async (): Promise<{ tabs: TabSummary[] }> => {
     const tabs = await chrome.tabs.query({});

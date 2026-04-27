@@ -9,6 +9,7 @@ build/
 
 # Runtime state
 .browserops/
+/procedures/
 
 # Editor
 .vscode/

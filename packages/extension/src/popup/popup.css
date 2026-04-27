@@ -1,0 +1,346 @@
+@import "tailwindcss";
+
+/* Inter Display — body + UI */
+@font-face {
+  font-family: "Inter Display";
+  src: url("../assets/fonts/InterDisplay-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Inter Display";
+  src: url("../assets/fonts/InterDisplay-Medium.ttf") format("truetype");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Inter Display";
+  src: url("../assets/fonts/InterDisplay-SemiBold.ttf") format("truetype");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* Commit Mono — code, refs, technical strings */
+@font-face {
+  font-family: "Commit Mono";
+  src: url("../assets/fonts/CommitMono-400-Regular.otf") format("opentype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Commit Mono";
+  src: url("../assets/fonts/CommitMono-400-Italic.otf") format("opentype");
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Commit Mono";
+  src: url("../assets/fonts/CommitMono-700-Regular.otf") format("opentype");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Commit Mono";
+  src: url("../assets/fonts/CommitMono-700-Italic.otf") format("opentype");
+  font-weight: 700;
+  font-style: italic;
+  font-display: swap;
+}
+
+@theme {
+  /* Typography */
+  --font-sans: "Inter Display", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "Commit Mono", ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
+
+  /* Brand ink */
+  --color-ink:        #19181B;
+  --color-ink-60:     rgba(25, 24, 27, 0.6);
+  --color-ink-45:     rgba(25, 24, 27, 0.45);
+  --color-ink-30:     rgba(25, 24, 27, 0.3);
+  --color-ink-12:     rgba(25, 24, 27, 0.12);
+  --color-ink-08:     rgba(25, 24, 27, 0.08);
+  --color-ink-06:     rgba(25, 24, 27, 0.06);
+  --color-ink-04:     rgba(25, 24, 27, 0.04);
+
+  /* Brand blue — primary action color */
+  --color-brand:      #2E5EC4;
+  --color-brand-deep: #2347A6;
+  --color-brand-12:   rgba(46, 94, 196, 0.12);
+  --color-brand-08:   rgba(46, 94, 196, 0.08);
+  --color-brand-04:   rgba(46, 94, 196, 0.04);
+
+  /* Brand cream — highlight surface */
+  --color-brand-cream:    #EAF6D2;
+  --color-brand-cream-50: rgba(234, 246, 210, 0.5);
+
+  /* Surfaces */
+  --color-surface:    #ffffff;
+  --color-surface-2:  #fafafa;
+  --color-bg:         #eaeaef;
+
+  /* Status */
+  --color-danger:        #dc2626;
+  --color-danger-bg:     #fef2f2;
+  --color-danger-border: #fecaca;
+  --color-danger-ink:    #991b1b;
+
+  --color-success:        #15803d;
+  --color-success-bg:     #f0fdf4;
+  --color-success-border: #bbf7d0;
+  --color-success-ink:    #166534;
+}
+
+/* Popup base — width-locked panel. Chrome's popup window already rounds the
+   outer corners on macOS; the body just fills with a white surface and lets
+   the system rounding clip it. No inner frame — that produced a nested
+   "card-in-card" look on systems where the OS already rounds the window. */
+html {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+}
+body {
+  width: 320px;
+  margin: 0;
+  padding: 0;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.45;
+  color: var(--color-ink);
+  background: var(--color-surface);
+  -webkit-font-smoothing: antialiased;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---------------------------------------------------------------- */
+/* Header — brand · toggles · options icon. Single row.             */
+/* ---------------------------------------------------------------- */
+
+.section.head {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px 10px;
+}
+
+.brand { display: flex; align-items: center; height: 16px; }
+.brand svg { display: block; height: 100%; width: auto; }
+
+/* Option row — title + description on the left, toggle on the right. Used
+   in `.section.options` to expose Pin tab and Require approval as
+   self-explaining settings instead of cryptic chips. */
+.section.options {
+  gap: 14px;
+  padding-top: 12px;
+  padding-bottom: 12px;
+}
+.option-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+.option-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+.option-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-ink);
+}
+.option-desc {
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
+  color: var(--color-ink-45);
+}
+
+/* iOS-style switch — track + thumb. Suppress native checkbox chrome. */
+.toggle {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  display: inline-block;
+  width: 28px;
+  height: 16px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: var(--color-ink-12);
+  cursor: pointer;
+  transition: background 120ms ease;
+  flex-shrink: 0;
+}
+.toggle::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  background: var(--color-surface);
+  transition: transform 120ms ease;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+.toggle:checked            { background: var(--color-brand); }
+.toggle:checked::before    { transform: translateX(12px); }
+.toggle:focus-visible      { outline: 0; box-shadow: 0 0 0 3px var(--color-brand-08); }
+.toggle:disabled           { opacity: 0.5; cursor: not-allowed; }
+
+/* Status pill — connection state anchored on the right side of the header */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  background: var(--color-ink-06);
+  color: var(--color-ink-60);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.pill--on {
+  background: var(--color-success-bg);
+  color: var(--color-success-ink);
+  box-shadow: inset 0 0 0 1px var(--color-success-border);
+}
+.pill--off {
+  background: var(--color-ink-04);
+  color: var(--color-ink-45);
+}
+
+/* Option action — small circular ghost button placed on the right of an
+   .option-row when the row triggers a navigation/redirection instead of
+   toggling state. Visually distinct from .toggle so the row never reads as
+   a switch. */
+.option-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: var(--color-ink-04);
+  color: var(--color-ink-60);
+  cursor: pointer;
+  transition: background 80ms ease, color 80ms ease, box-shadow 80ms ease;
+  flex-shrink: 0;
+}
+.option-action:hover         { background: var(--color-ink-08); color: var(--color-ink); }
+.option-action:active        { transform: scale(0.96); }
+.option-action:focus-visible { outline: 0; box-shadow: 0 0 0 3px var(--color-ink-08); }
+.option-action svg           { width: 12px; height: 12px; display: block; }
+
+/* ---------------------------------------------------------------- */
+/* Body sections — uniform whitespace; no dividers in main flow.    */
+/* ---------------------------------------------------------------- */
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+}
+.section__title {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--color-ink-45);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+/* Buttons — primary is brand blue; ghost is outlined; danger is tinted */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 4px;
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  background: var(--color-brand);
+  color: var(--color-surface);
+  transition: background 80ms ease, transform 80ms ease, box-shadow 80ms ease;
+}
+.btn:hover         { background: var(--color-brand-deep); }
+.btn:active        { transform: scale(0.98); }
+.btn:focus-visible { outline: 0; box-shadow: 0 0 0 3px var(--color-brand-08); }
+.btn:disabled      { opacity: 0.5; cursor: not-allowed; }
+
+.btn--ghost {
+  background: transparent;
+  color: var(--color-ink-60);
+  box-shadow: inset 0 0 0 1px var(--color-ink-12);
+}
+.btn--ghost:hover         { background: var(--color-ink-04); color: var(--color-ink); }
+.btn--ghost:focus-visible { box-shadow: inset 0 0 0 1px var(--color-ink-12), 0 0 0 3px var(--color-ink-08); }
+
+.btn--danger {
+  background: var(--color-danger-bg);
+  color: var(--color-danger-ink);
+  box-shadow: inset 0 0 0 1px var(--color-danger-border);
+}
+.btn--danger:hover         { background: #fde6e6; }
+.btn--danger:focus-visible {
+  box-shadow: inset 0 0 0 1px var(--color-danger-border), 0 0 0 3px rgba(220, 38, 38, 0.12);
+}
+
+.btn--block { width: 100%; }
+
+/* Setup pane (first-run pairing prompt) — divider on top to read as a takeover */
+#setup { display: none; border-top: 1px solid var(--color-ink-06); }
+#setup.active { display: flex; }
+.setup-title { font-weight: 500; color: var(--color-ink); }
+.setup-desc  { color: var(--color-ink-45); font-weight: 500; }
+
+/* Main / safety toggling */
+#main { display: flex; flex-direction: column; }
+#main.hidden { display: none; }
+#main.unconfigured > :not(#setup) { display: none; }
+
+/* Safety prompt — divider-led takeover */
+#safety {
+  display: none;
+  background: var(--color-danger-bg);
+  border-top: 1px solid var(--color-danger-border);
+}
+#safety.active { display: flex; }
+.safety-tool   { font-family: var(--font-mono); color: var(--color-danger-ink); font-weight: 400; }
+.safety-reason { color: var(--color-ink); font-weight: 500; }
+.safety-actions { display: flex; gap: 6px; }
+.safety-actions .btn { flex: 1; }
+
+/* Footer — flat, holds only the primary block CTA */
+.footer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+}
+.footer .btn--block { width: 100%; }
