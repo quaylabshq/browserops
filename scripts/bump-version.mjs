@@ -11,7 +11,7 @@
  * Updates:
  *   - package.json                                (root, private)
  *   - packages/{shared,bridge,extension,cli}/package.json
- *   - packages/bridge/src/index.ts                (const VERSION)
+ *   - packages/bridge/src/daemon.ts               (const VERSION)
  *   - packages/cli/src/lib/version.ts             (export const CLI_VERSION)
  *   - packages/extension/src/manifest.ts          (version: "...")
  *
@@ -34,7 +34,7 @@ const PACKAGE_JSONS = [
 
 const SOURCE_PATCHES = [
   {
-    file: "packages/bridge/src/index.ts",
+    file: "packages/bridge/src/daemon.ts",
     pattern: /const VERSION = "[^"]+"/,
     replace: (v) => `const VERSION = "${v}"`,
   },
