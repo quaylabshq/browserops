@@ -24,6 +24,8 @@ import type {
 import { normalize, type IRStep } from "./distiller-ir.js";
 import { collapseRetries } from "./stage-collapse.js";
 import { removeDeadReads } from "./stage-dead-reads.js";
+import { liftBinds } from "./stage-binds.js";
+import { tuneWaits } from "./stage-waits.js";
 
 export interface DistillOptions {
   goal: string;
@@ -48,15 +50,17 @@ export function distill(
   records: AutoTeachTraceRecord[],
   opts: DistillOptions,
 ): DistillResult {
-  // Pipeline: normalize → collapse retries → drop dead reads → emit.
-  // Phase 2b/c will add bind lifting, wait tuning, leaf splitting, and
-  // selector tiering between dead-read elimination and emission.
+  // Pipeline: normalize → collapse retries → drop dead reads →
+  //           lift binds → tune waits → emit.
+  // Phase 2c will add leaf splitting + selector tiering.
   const ir0 = normalize(records);
   const ir1 = collapseRetries(ir0);
   const ir2 = removeDeadReads(ir1);
+  const lifted = liftBinds(ir2);
+  const ir3 = tuneWaits(lifted.steps);
 
-  const baseName = deriveName(opts.goal, ir2);
-  const steps = emitSteps(ir2);
+  const baseName = deriveName(opts.goal, ir3);
+  const steps = emitSteps(ir3);
 
   if (steps.length === 0) {
     steps.push({
@@ -66,21 +70,22 @@ export function distill(
     });
   }
 
-  const sideEffects = classifySideEffects(ir2);
-  const fragility = scoreFragility(ir2);
+  const sideEffects = classifySideEffects(ir3);
+  const fragility = scoreFragility(ir3);
 
   const draft: ProcedureDef = {
     schema_version: 1,
     name: baseName,
     description: opts.goal.slice(0, 200),
     kind: "leaf",
-    domain: deriveDomain(ir2),
+    domain: deriveDomain(ir3),
+    ...(Object.keys(lifted.inputs).length > 0 ? { inputs: lifted.inputs } : {}),
     steps,
     fragility,
     ...(sideEffects.length > 0 ? { side_effects: sideEffects } : {}),
   };
 
-  const yaml = headerComment(opts.goal, ir0.length, ir2.length) + YAML.stringify(draft, { lineWidth: 0 });
+  const yaml = headerComment(opts.goal, ir0.length, ir3.length) + YAML.stringify(draft, { lineWidth: 0 });
 
   const leafSummary: AutoTeachLeafSummary = {
     name: baseName,
@@ -90,7 +95,7 @@ export function distill(
   };
 
   const validation_errors: string[] = [];
-  if (ir2.length === 0) {
+  if (ir3.length === 0) {
     validation_errors.push(
       "no browser_* calls in trace after normalization — distiller emitted a placeholder leaf",
     );
@@ -116,6 +121,19 @@ function emitSteps(ir: IRStep[]): ActionStepDef[] {
     };
     if (s.page_effect && hasObservableEffect(s.page_effect)) {
       step.expected_effect = { dom: { any: true } };
+    }
+    if (s.wait_for_ms !== undefined) {
+      // We don't have a selector to wait for, so use the URL after-state
+      // when the step navigated. Otherwise leave wait_for absent — the
+      // expected_effect is the post-condition, and the agent / runner can
+      // re-fetch a refined wait when replaying.
+      const after = s.page_effect?.url?.after;
+      if (typeof after === "string" && s.page_effect?.url?.changed === true) {
+        // Navigations don't normally need a wait_for selector — the
+        // browser_navigate tool already waits for load.
+      }
+      // Future: derive wait_for.selector from elements observed in the
+      // page_effect once the extension surfaces that metadata.
     }
     steps.push(step);
   }
