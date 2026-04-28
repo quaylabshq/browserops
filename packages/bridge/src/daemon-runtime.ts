@@ -13,14 +13,11 @@ import {
   DEFAULT_WS_HOST,
   DEFAULT_WS_PORT,
   ENV,
-  RATE_LIMIT_GLOBAL_PER_MIN_DEFAULT,
-  RATE_LIMIT_PER_TAB_PER_MIN,
   type FeatureName,
   type TeachEvent,
 } from "@browserops/shared";
 import { createTraceWriter, type TraceWriter } from "./trace-writer.js";
 import { Logger, type LogLevel } from "./logger.js";
-import { RateLimiter } from "./rate-limiter.js";
 import { loadRiskyDomainMatcher, type RiskyDomainMatcher } from "./risky-domains.js";
 import { loadGatedDomainMatcher, type GatedDomainMatcher } from "./gated-domains.js";
 import { Safety } from "./safety.js";
@@ -39,14 +36,19 @@ export interface DaemonRuntime {
   traceWriter: TraceWriter;
   wsBridge: WSBridge;
   tabs: TabRegistry;
-  /** Shared rate limiter for substep 1.4. Phase 2 swaps to per-session. */
-  sharedRateLimiter: RateLimiter;
   safety: Safety;
   teachStore: TeachSessionStore;
   enabledFeatures: { current: Set<FeatureName> };
   riskyMatcher: RiskyDomainMatcher;
   gatedMatcher: GatedDomainMatcher;
   pairCode: string;
+  /**
+   * Mutable fan-out point invoked when the extension reports a closed
+   * tab. The daemon registers a handler that walks every active
+   * session's RateLimiter and calls forgetTab. Defaults to a no-op so
+   * the runtime is usable from tests without rate-limit accounting.
+   */
+  onTabClosed: (tabId: string) => void;
   shutdown(): Promise<void>;
 }
 
@@ -68,18 +70,17 @@ export async function bootDaemonRuntime(opts: BootDaemonRuntimeOptions): Promise
   const host = process.env[ENV.HOST] ?? DEFAULT_WS_HOST;
   const port = Number.parseInt(process.env[ENV.PORT] ?? String(DEFAULT_WS_PORT), 10);
   const allowedExtensionId = process.env[ENV.EXTENSION_ID] ?? "";
-  const globalCap = Number.parseInt(
-    process.env[ENV.GLOBAL_CAP] ?? String(RATE_LIMIT_GLOBAL_PER_MIN_DEFAULT),
-    10,
-  );
 
   const [riskyMatcher, gatedMatcher] = await Promise.all([
     loadRiskyDomainMatcher(),
     loadGatedDomainMatcher(),
   ]);
   const tabs = new TabRegistry();
-  const sharedRateLimiter = new RateLimiter(RATE_LIMIT_PER_TAB_PER_MIN, globalCap);
   const teachStore = new TeachSessionStore();
+
+  // Mutable hook the daemon overrides post-construction with a fan-out
+  // across every active session's per-session RateLimiter.
+  const hooks: { onTabClosed: (tabId: string) => void } = { onTabClosed: () => { /* noop */ } };
 
   const enabledFeatures: { current: Set<FeatureName> } = { current: new Set() };
   try {
@@ -122,7 +123,7 @@ export async function bootDaemonRuntime(opts: BootDaemonRuntimeOptions): Promise
         });
         return;
       }
-      const minted = handleEvent(name, payload, tabs, sharedRateLimiter, logger);
+      const minted = handleEvent(name, payload, tabs, hooks.onTabClosed, logger);
       if (minted) {
         wsBridge
           .callExtension(
@@ -189,25 +190,31 @@ export async function bootDaemonRuntime(opts: BootDaemonRuntimeOptions): Promise
     `[browserops-daemon] WS listening on ws://${host}:${port}; pair code ${wsBridge.pairCode}\n`,
   );
 
-  return {
+  const runtime: DaemonRuntime = {
     version: opts.version,
     logger,
     traceWriter,
     wsBridge,
     tabs,
-    sharedRateLimiter,
     safety,
     teachStore,
     enabledFeatures,
     riskyMatcher,
     gatedMatcher,
     pairCode: wsBridge.pairCode,
+    get onTabClosed() {
+      return hooks.onTabClosed;
+    },
+    set onTabClosed(handler: (tabId: string) => void) {
+      hooks.onTabClosed = handler;
+    },
     shutdown: async () => {
       try { await wsBridge.stop(); } catch { /* ignore */ }
       try { await traceWriter.close(); } catch { /* ignore */ }
       await logger.close();
     },
   };
+  return runtime;
 }
 
 function parseLogLevel(v: string | undefined): LogLevel {
@@ -218,7 +225,7 @@ function handleEvent(
   name: string,
   payload: Record<string, unknown>,
   tabs: TabRegistry,
-  rateLimiter: RateLimiter,
+  onTabClosed: (tabId: string) => void,
   logger: Logger,
 ): TabRecord | undefined {
   void logger.write({ dir: "ws_event", method: name, payload });
@@ -243,7 +250,7 @@ function handleEvent(
       const tabId = stringField(payload, "tab_id");
       if (tabId) {
         tabs.remove(tabId);
-        rateLimiter.forgetTab(tabId);
+        onTabClosed(tabId);
       }
       return undefined;
     }
