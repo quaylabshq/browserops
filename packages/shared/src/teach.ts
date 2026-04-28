@@ -124,6 +124,13 @@ export interface TeachSessionMeta {
   scope: TeachScope;
   narration_hint?: string;
   event_count: number;
+  /**
+   * Daemon-managed MCP session that initiated this teach recording.
+   * Lets `procedures_teach_list` filter the disk store to the caller's
+   * own sessions by default; absent on legacy single-session bridge
+   * runs and on extension-initiated sessions (no MCP origin).
+   */
+  owner_session_id?: string;
 }
 
 export type TeachScope = "active_tab" | "all_tabs";

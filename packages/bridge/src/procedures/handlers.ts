@@ -731,11 +731,18 @@ export const PROCEDURE_HANDLERS: Record<string, HandlerFn> = {
 export function buildProcedureHandlers(
   wsBridge: WSBridgeLike,
   teachStore: TeachSessionStore,
+  /**
+   * Daemon-managed MCP session_id of the caller. Threaded into the
+   * teach handlers so procedures_teach_start can stamp ownership on
+   * the on-disk meta and procedures_teach_list can filter to the
+   * caller's own recordings. Empty string for the legacy bridge entry.
+   */
+  mcpSessionId: string,
 ): Record<string, HandlerFn> {
   return {
     ...PROCEDURE_HANDLERS,
     "procedures_execute": makeExecuteHandler(wsBridge),
-    ...buildTeachHandlers(wsBridge, teachStore),
+    ...buildTeachHandlers(wsBridge, teachStore, mcpSessionId),
   };
 }
 
