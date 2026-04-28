@@ -1,16 +1,26 @@
 /**
- * Weighted-field search ranker for the procedure catalogue.
+ * Coverage-based search ranker for the procedure catalogue.
  *
  * Pure function over a parsed Manifest (from index.json). Scoring model:
- *   10 × name-token overlap
- *    8 × trigger-token overlap
- *    5 × domain match (0 or 1)
- *    3 × description-token overlap
- *    2 × input-name-token overlap
- *    2 × tag-token overlap
- *   +0.5 × step-body-token overlap (deep mode only, applied after normalisation)
  *
- * Normalised: score = raw / (queryTokens.length * 10), capped at 1.0.
+ *   score = coverage / |distinct query tokens|
+ *
+ *   coverage = number of distinct query tokens that appear ANYWHERE in the
+ *              union of indexed-field tokens (name, triggers, description,
+ *              inputs, tags, domain). With deep:true, step-body tokens also
+ *              join the union.
+ *
+ *   tie-break = legacyRaw, the prior weighted-sum signal:
+ *     10 × fromName  +  8 × fromTriggers  +  5 × domainMatch  +
+ *      3 × fromDescription  +  2 × fromInputs  +  2 × fromTags
+ *     ( + 0.5 × stepOverlap when deep:true and step tokens are loaded)
+ *
+ * The shift from weighted-sum to coverage trades precision for recall: at
+ * current catalogue scale (tens of procedures, not thousands), missing a
+ * relevant procedure because one or two query tokens were absent from its
+ * indexed fields was the dominant failure mode. Coverage surfaces every
+ * procedure that shares at least min_score worth of tokens with the query;
+ * legacyRaw still orders ties so name/trigger/domain matches dominate.
  */
 import * as path from "node:path";
 import YAML from "yaml";
@@ -102,17 +112,22 @@ function tokenSet(s: string): Set<string> {
 }
 
 /**
- * Compute the shallow raw score for a manifest entry against query tokens.
+ * Coverage + legacy-raw scoring for a manifest entry against query tokens.
  *
- * Returns { raw, fromName, fromTriggers, fromDescription }
- * where the breakdown is used later for snippet selection.
+ * Coverage is the count of distinct query tokens that appear anywhere in the
+ * union of indexed-field token sets (name + triggers + description + inputs +
+ * tags + domain), plus optional `extraTokens` for deep mode. legacyRaw is the
+ * prior weighted-sum signal, kept for tie-breaking and snippet selection.
  */
-function shallowScore(
+function scoreCoverage(
   entry: ManifestEntry,
   name: string,
-  queryTokens: string[],
+  dedupedQueryTokens: string[],
+  extraTokens?: Set<string>,
 ): {
-  raw: number;
+  coverage: number;
+  coverageRatio: number;
+  legacyRaw: number;
   fromName: number;
   fromTriggers: number;
   fromDescription: number;
@@ -124,23 +139,24 @@ function shallowScore(
   const inputTokens = unionTokens(entry.inputs);
   const tagTokens = unionTokens(entry.tags);
 
-  const fromName = overlapCount(queryTokens, nameTokens);
-  const fromTriggers = overlapCount(queryTokens, triggerTokens);
+  const fromName = overlapCount(dedupedQueryTokens, nameTokens);
+  const fromTriggers = overlapCount(dedupedQueryTokens, triggerTokens);
 
   // Domain match: 0 or 1
   let domainContrib = 0;
+  let domainToken: string | undefined;
   if (entry.domain) {
-    const domainToken = tokenize(entry.domain)[0];
-    if (domainToken !== undefined && queryTokens.includes(domainToken)) {
+    domainToken = tokenize(entry.domain)[0];
+    if (domainToken !== undefined && dedupedQueryTokens.includes(domainToken)) {
       domainContrib = 1;
     }
   }
 
-  const fromDescription = overlapCount(queryTokens, descTokens);
-  const fromInputs = overlapCount(queryTokens, inputTokens);
-  const fromTags = overlapCount(queryTokens, tagTokens);
+  const fromDescription = overlapCount(dedupedQueryTokens, descTokens);
+  const fromInputs = overlapCount(dedupedQueryTokens, inputTokens);
+  const fromTags = overlapCount(dedupedQueryTokens, tagTokens);
 
-  const raw =
+  const legacyRaw =
     10 * fromName +
     8 * fromTriggers +
     5 * domainContrib +
@@ -148,7 +164,33 @@ function shallowScore(
     2 * fromInputs +
     2 * fromTags;
 
-  return { raw, fromName, fromTriggers, fromDescription };
+  // Union of every indexed-field token, plus any deep-mode extras.
+  const union = new Set<string>();
+  for (const t of nameTokens) union.add(t);
+  for (const t of triggerTokens) union.add(t);
+  for (const t of descTokens) union.add(t);
+  for (const t of inputTokens) union.add(t);
+  for (const t of tagTokens) union.add(t);
+  if (domainToken !== undefined) union.add(domainToken);
+  if (extraTokens) {
+    for (const t of extraTokens) union.add(t);
+  }
+
+  let coverage = 0;
+  for (const qt of dedupedQueryTokens) {
+    if (union.has(qt)) coverage++;
+  }
+  const coverageRatio =
+    dedupedQueryTokens.length === 0 ? 0 : coverage / dedupedQueryTokens.length;
+
+  return {
+    coverage,
+    coverageRatio,
+    legacyRaw,
+    fromName,
+    fromTriggers,
+    fromDescription,
+  };
 }
 
 /**
@@ -283,8 +325,9 @@ export async function search(
     );
   }
 
-  // Tokenise query
-  const queryTokens = tokenize(query);
+  // Tokenise query, then dedupe so "click click" counts as one token of
+  // coverage demand (and so coverageRatio stays in [0,1]).
+  const queryTokens = Array.from(new Set(tokenize(query)));
 
   // All stop-words / no tokens → zero-match (not an error)
   if (queryTokens.length === 0) {
@@ -300,9 +343,6 @@ export async function search(
   const deep = options?.deep ?? false;
   const includeDrafts = options?.include_drafts ?? false;
 
-  // Normalisation denominator
-  const normDenom = queryTokens.length * 10;
-
   const primary = await rankAndCollect(
     root,
     manifest,
@@ -313,7 +353,6 @@ export async function search(
       deep,
       limit,
       minScore,
-      normDenom,
       acceptEntry: (entry) => includeDrafts || entry.status !== "draft",
     },
   );
@@ -332,7 +371,6 @@ export async function search(
         deep,
         limit,
         minScore,
-        normDenom,
         acceptEntry: (entry) => entry.status === "draft",
       },
     );
@@ -350,7 +388,6 @@ interface RankOptions {
   deep: boolean;
   limit: number;
   minScore: number;
-  normDenom: number;
   acceptEntry: (entry: ManifestEntry) => boolean;
 }
 
@@ -369,6 +406,7 @@ async function rankAndCollect(
     name: string;
     entry: ManifestEntry;
     score: number;
+    legacyRaw: number;
     fromName: number;
     fromTriggers: number;
     fromDescription: number;
@@ -381,34 +419,50 @@ async function rankAndCollect(
     if (!passesScopeFilter(name, entry, opts.scope)) continue;
     if (!opts.acceptEntry(entry)) continue;
 
-    const { raw, fromName, fromTriggers, fromDescription } = shallowScore(
-      entry,
-      name,
-      queryTokens,
-    );
+    let scored = scoreCoverage(entry, name, queryTokens);
 
-    let score = Math.min(1, raw / opts.normDenom);
-
-    if (opts.deep && raw > 0) {
+    // Deep mode: widen the token haystack with step-body tokens. Gated on
+    // coverage > 0 to avoid loading every procedure's YAML when the query has
+    // no shallow signal — the caller can still surface step-only matches by
+    // setting min_score: 0, which lets coverage 0 entries through.
+    if (opts.deep && scored.coverage > 0) {
       try {
         const yamlText = await readProcedureYaml(path.join(root, entry.path));
         const parsed = YAML.parse(yamlText) as unknown;
         const stepTokens = extractStepTokens(parsed);
-        const stepOverlap = overlapCount(queryTokens, stepTokens);
-        score = Math.min(1, score + (0.5 * stepOverlap) / opts.normDenom);
+        if (stepTokens.size > 0) {
+          const widened = scoreCoverage(entry, name, queryTokens, stepTokens);
+          // Step matches still tie-break in favour of step-token-rich entries.
+          const stepOverlap = overlapCount(queryTokens, stepTokens);
+          scored = {
+            ...widened,
+            legacyRaw: widened.legacyRaw + 0.5 * stepOverlap,
+          };
+        }
       } catch {
         // If loading fails (e.g. file deleted between index and search),
         // proceed with shallow score only.
       }
     }
 
-    if (score >= opts.minScore) {
-      candidates.push({ name, entry, score, fromName, fromTriggers, fromDescription });
+    if (scored.coverageRatio >= opts.minScore) {
+      candidates.push({
+        name,
+        entry,
+        score: scored.coverageRatio,
+        legacyRaw: scored.legacyRaw,
+        fromName: scored.fromName,
+        fromTriggers: scored.fromTriggers,
+        fromDescription: scored.fromDescription,
+      });
     }
   }
 
+  // Sort: coverage ratio first, then legacyRaw as tie-break, then name
+  // ascending for stable ordering.
   candidates.sort((a, b) => {
     if (b.score !== a.score) return b.score - a.score;
+    if (b.legacyRaw !== a.legacyRaw) return b.legacyRaw - a.legacyRaw;
     return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
   });
 
