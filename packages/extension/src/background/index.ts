@@ -20,6 +20,7 @@ import { registerReadHandler } from "./handlers/read.js";
 import { registerInputHandlers } from "./handlers/input.js";
 import { registerSafetyHandler, resolveSafetyDecision } from "./handlers/safety.js";
 import { registerTeachHandlers } from "./handlers/teach.js";
+import { registerSessionGroupHandlers } from "./handlers/session-groups.js";
 import { TeachRecorder } from "./teach-recorder.js";
 import { setGatedDomainPatterns } from "./gated-state.js";
 
@@ -107,6 +108,7 @@ const teachRecorder = new TeachRecorder({
   },
 });
 registerTeachHandlers(router, { recorder: teachRecorder });
+registerSessionGroupHandlers(router);
 
 router.register("assign_tab_id", async (params) => {
   const chromeTabId = params["chrome_tab_id"];
