@@ -28,7 +28,7 @@ import {
 } from "@browserops/shared";
 import type { RateLimiter } from "./rate-limiter.js";
 import type { Safety, TabInfo } from "./safety.js";
-import type { TabRegistry } from "./tab-registry.js";
+import type { TabRecord, TabRegistry } from "./tab-registry.js";
 import type { Logger } from "./logger.js";
 import type { TraceWriter } from "./trace-writer.js";
 import type { GatedDomainMatcher } from "./gated-domains.js";
@@ -153,6 +153,26 @@ interface ToolErrorPayload {
   message: string;
   details?: unknown;
 }
+
+/**
+ * Tools that *read* a tab's state. These pass through ownership
+ * resolution without claiming — the caller can inspect user-owned
+ * tabs and its own tabs without committing to ownership.
+ *
+ * Everything else with a tab_id is treated as a mutation and
+ * auto-claims user-owned tabs into the calling session.
+ */
+const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
+  "browser_list_tabs",
+  "browser_current_tab",
+  "browser_read",
+  "browser_quick_read",
+  "browser_screenshot",
+  "browser_query_selector",
+  "browser_describe_ref",
+  "browser_wait_for",
+  "browser_wait_for_idle",
+]);
 
 interface ToolCallResult {
   content: Array<{ type: "text"; text: string }>;
@@ -441,13 +461,28 @@ export class McpBridgeServer {
       // Unknown procedures_* tool — fall through to let MethodNotFound fire below.
     }
 
-    // 4b. Look up tab info (optional).
+    // 4b. Look up tab info + enforce per-session ownership.
+    //
+    // Visibility rule: a session sees only the tabs it owns plus
+    // user-owned (unclaimed) tabs. Other sessions' tabs are treated as
+    // non-existent (TAB_NOT_FOUND), so an agent can't even discover
+    // them, let alone act on them.
+    //
+    // Claim rule: the first mutating call from a session on a
+    // user-owned tab atomically transfers ownership. From then on
+    // it's invisible to every other session. Read-only calls never
+    // claim — they pass through without changing ownership.
     const tabIdRaw = params["tab_id"];
     const tabId = typeof tabIdRaw === "string" ? tabIdRaw : undefined;
     let tab: TabInfo | undefined;
     if (tabId) {
-      const rec = this.deps.tabs.get(tabId);
-      tab = rec ? { url: rec.url } : undefined;
+      const resolved = this.resolveTab(name, tabId);
+      if (!resolved.ok) {
+        const result = await this.reply(id, name, toolError(resolved.error));
+        this.emitTrace(id, name, params, startMs, result);
+        return result;
+      }
+      tab = resolved.record ? { url: resolved.record.url } : undefined;
     }
 
     // 5. Extension connectivity — short-circuit before charging.
@@ -546,6 +581,7 @@ export class McpBridgeServer {
         this.emitTrace(id, name, params, startMs, result);
         return result;
       }
+      this.maybeClaimNewTab(name, extResult);
       const result = await this.reply(id, name, advisedResult);
       recordBreakerResult(breakerCall, { ok: true });
       this.emitTrace(id, name, params, startMs, result);
@@ -558,6 +594,90 @@ export class McpBridgeServer {
       this.emitTrace(id, name, params, startMs, result);
       return result;
     }
+  }
+
+  /**
+   * Per-session tab resolution + auto-claim. Three outcomes:
+   *
+   *   • { ok: true, record }  — caller can use the record (for
+   *     read-only tools and own/just-claimed tabs).
+   *   • { ok: false, error }  — caller bails out with this error.
+   *
+   * Empty sessionId disables ownership entirely so the legacy bridge
+   * entry — which has no session model — keeps working unchanged.
+   * Phase 5 deletes that path along with the empty-session fallback.
+   */
+  private resolveTab(
+    toolName: string,
+    tabId: string,
+  ): { ok: true; record: TabRecord | undefined } | { ok: false; error: ToolErrorPayload } {
+    const sessionId = this.deps.sessionId;
+    if (sessionId === "") {
+      // Legacy / single-session path — no ownership enforcement.
+      return { ok: true, record: this.deps.tabs.get(tabId) };
+    }
+
+    if (READ_ONLY_TOOLS.has(toolName)) {
+      const rec = this.deps.tabs.getVisibleTo(tabId, sessionId);
+      if (!rec) {
+        return {
+          ok: false,
+          error: { code: "TAB_NOT_FOUND", message: `tab ${tabId} not found` },
+        };
+      }
+      return { ok: true, record: rec };
+    }
+
+    // Mutating tool — atomically claim a user-owned tab into this
+    // session, or bail out with TAB_NOT_FOUND for missing or
+    // other-session-owned tabs.
+    const claim = this.deps.tabs.claim(tabId, sessionId);
+    if (claim.ok) {
+      return { ok: true, record: claim.record };
+    }
+    // owned_by_other and unknown both surface the same way: the tab
+    // simply doesn't exist for this session. The dedicated
+    // TAB_CLAIMED_BY_OTHER code is reserved for the explicit
+    // browser_claim_tab path that lands in phase 4.
+    return {
+      ok: false,
+      error: { code: "TAB_NOT_FOUND", message: `tab ${tabId} not found` },
+    };
+  }
+
+  /**
+   * Post-call hook: when browser_new_tab succeeds, the new tab belongs
+   * to the calling session by construction. Stamp ownership on the
+   * registry so subsequent calls from this session resolve and other
+   * sessions can't see it.
+   */
+  private maybeClaimNewTab(toolName: string, extResult: unknown): void {
+    if (toolName !== "browser_new_tab") return;
+    if (this.deps.sessionId === "") return;
+    if (!extResult || typeof extResult !== "object") return;
+    const newTabId = (extResult as { tab_id?: unknown }).tab_id;
+    if (typeof newTabId !== "string") return;
+
+    // The tab_created event may not have been processed yet; handle
+    // both orderings by claiming after a microtask if the registry
+    // doesn't yet know about it. This is a best-effort race fix —
+    // phase 3.3 introduces an explicit createdBy hook on the WS event
+    // path that covers the cleaner case.
+    const claim = this.deps.tabs.claim(newTabId, this.deps.sessionId);
+    if (claim.ok) return;
+    // Tab not in registry yet — defer one tick.
+    queueMicrotask(() => {
+      const second = this.deps.tabs.claim(newTabId, this.deps.sessionId);
+      if (!second.ok) {
+        void this.deps.logger.write({
+          dir: "system",
+          event: "new_tab_claim_missed",
+          tab_id: newTabId,
+          session_id: this.deps.sessionId,
+          status: second.status,
+        });
+      }
+    });
   }
 
   /**

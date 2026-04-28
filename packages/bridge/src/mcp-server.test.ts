@@ -84,7 +84,11 @@ function makeDeps(overrides: Partial<McpBridgeDeps> = {}): McpBridgeDeps {
     tabs: new TabRegistry(),
     logger: makeLogger(),
     version: "0.0.0-test",
-    sessionId: "test-session",
+    // "" puts dispatch in legacy / single-session mode so existing
+    // pipeline tests (rate-limit, trace, dispatch) don't have to set
+    // up tab ownership. Session-aware behaviour is exercised end-to-end
+    // by the daemon smoke tests.
+    sessionId: "",
     teachStore: new TeachSessionStore(),
     gatedMatcher: { patterns: [], matches: () => false },
     // Test default: every gated feature on, so existing tool-call tests
