@@ -357,6 +357,7 @@ export class McpBridgeServer {
         store: deps.autoteachStore,
         bindings: deps.autoteachBindings,
         tabs: deps.tabs,
+        teachStore: deps.teachStore,
         mcpSessionId: deps.sessionId,
         enabledFeatures: deps.enabledFeatures,
         ...(deps.renameSession !== undefined ? { renameSession: deps.renameSession } : {}),
