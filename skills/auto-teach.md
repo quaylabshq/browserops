@@ -10,8 +10,10 @@ description: >
   procedure", or anything that says "do this once and remember it for
   next time". DO NOT TRIGGER for: one-shot tasks the user clearly won't
   repeat, or any flow where there's already a trusted procedure that
-  procedures_search returns at score >= 0.5 (use that procedure
-  instead — auto-teach is for new flows, not reruns of existing ones).
+  procedures_search returns at score >= 0.5 — i.e. at least half of the
+  user's query tokens are present in the procedure's indexed fields (use
+  that procedure instead — auto-teach is for new flows, not reruns of
+  existing ones).
 metadata:
   category: browser-automation
   tags: "browserops, autoteach, procedures, optimization-loop"
@@ -27,7 +29,7 @@ The bridge owns the heavy machinery — the distiller, convergence detector, var
 
 ## 1. Pre-flight check — does the user actually need auto-teach?
 
-Before opening a session, run `procedures_search` with tokens from the user's request. If the top trusted match scores >= 0.5, **stop**: that procedure already exists, and auto-teach would just re-derive it. Tell the user the existing procedure name and ask if they want to run it instead. Auto-teach is for flows that have no procedure yet OR for explicit optimization of one the user is dissatisfied with.
+Before opening a session, run `procedures_search` with tokens from the user's request. If the top trusted match scores >= 0.5 (coverage-based: at least half the query tokens hit the procedure's indexed fields), **stop**: that procedure likely exists, and auto-teach would just re-derive it. Fetch the YAML with `procedures_get` to confirm relevance, then tell the user the existing procedure name and ask if they want to run it instead. Auto-teach is for flows that have no procedure yet OR for explicit optimization of one the user is dissatisfied with.
 
 If `procedures_search` is not in your tool catalogue, the procedures feature is off. Ask the user to enable it: `browserops feature enable procedures` (and `teach` if they want demo mode, `autoteach` to expose this skill's tools at all).
 
