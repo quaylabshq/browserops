@@ -361,6 +361,81 @@ describe("procedures_execute", () => {
     expect(capturedCalls[1]!.params["text"]).toBe("hello world");
   });
 
+  it("{{input.NAME}} placeholders resolve against bare input keys", async () => {
+    // Mirrors the binding-validator's contract: YAML must use `{{input.NAME}}`
+    // for input refs, but callers pass the natural shape `{NAME: value}` —
+    // not `{"input.NAME": value}`. The executor must strip the prefix.
+    const name = "test.input_dot_substitution";
+
+    await writeProcedure(name, makeLeafYaml(
+      name,
+      [
+        {
+          id: "step_01_navigate",
+          action: "browser_navigate",
+          with: { tab_id: "{{tab_id}}", url: "{{input.url}}" },
+        },
+        {
+          id: "step_02_type",
+          action: "browser_type",
+          with: { tab_id: "{{tab_id}}", ref: 1, text: "{{input.query}}" },
+        },
+      ],
+      {
+        url: { type: "string", required: true },
+        query: { type: "string", required: true },
+      },
+    ));
+
+    const capturedCalls: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const bridge = makeConnectedBridge(async (method, params) => {
+      capturedCalls.push({ method, params: { ...params } });
+      return { ok: true };
+    });
+
+    const handler = makeExecuteHandler(bridge);
+    await handler({
+      name,
+      inputs: { tab_id: "t_99", url: "https://example.com", query: "find me" },
+    });
+
+    expect(capturedCalls).toHaveLength(2);
+    expect(capturedCalls[0]!.params["tab_id"]).toBe("t_99");
+    expect(capturedCalls[0]!.params["url"]).toBe("https://example.com");
+    expect(capturedCalls[1]!.params["text"]).toBe("find me");
+  });
+
+  it("{{input.NAME}} also accepts the legacy prefixed key for backward compat", async () => {
+    // Older callers may still be passing inputs with the literal `input.NAME`
+    // key. Accept that too so we don't silently break them.
+    const name = "test.input_dot_legacy";
+
+    await writeProcedure(name, makeLeafYaml(
+      name,
+      [{
+        id: "step_01_navigate",
+        action: "browser_navigate",
+        with: { tab_id: "{{tab_id}}", url: "{{input.url}}" },
+      }],
+      { url: { type: "string", required: true } },
+    ));
+
+    const capturedCalls: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const bridge = makeConnectedBridge(async (method, params) => {
+      capturedCalls.push({ method, params: { ...params } });
+      return { ok: true };
+    });
+
+    const handler = makeExecuteHandler(bridge);
+    await handler({
+      name,
+      inputs: { tab_id: "t_55", "input.url": "https://legacy.example" },
+    });
+
+    expect(capturedCalls).toHaveLength(1);
+    expect(capturedCalls[0]!.params["url"]).toBe("https://legacy.example");
+  });
+
   it("max_steps cap stops execution after N steps", async () => {
     const name = "test.max_steps";
 
