@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { createConnection } from "node:net";
 import { execFile } from "node:child_process";
 import { join } from "node:path";
-import { isBridgeAlive } from "../lib/daemon.js";
+import { isDaemonAlive } from "../lib/daemon.js";
 import { getSafeMode, getFeatureStates } from "../lib/config.js";
 import { STATE_DIR, tokenPath, bundledAssetsDir } from "../lib/paths.js";
 import { DEFAULT_WS_PORT, ENV } from "@browserops/shared";
@@ -131,7 +131,7 @@ async function checkPort(port: number): Promise<Check> {
   if (!connectable) {
     return { ok: true, label: `Port ${port} free` };
   }
-  const bridgeOwns = await isBridgeAlive();
+  const bridgeOwns = await isDaemonAlive();
   if (bridgeOwns) {
     return { ok: true, label: `Port ${port} owned by bridge` };
   }
@@ -157,7 +157,7 @@ function tcpConnect(port: number): Promise<boolean> {
 }
 
 async function checkSocket(): Promise<Check> {
-  const alive = await isBridgeAlive();
+  const alive = await isDaemonAlive();
   return {
     ok: alive,
     informational: true,

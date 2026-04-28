@@ -116,12 +116,12 @@ The browser-side gate above is independent and unaffected.
 
 ## Connecting your MCP client
 
-`browserops init` registers the bridge in every detected client automatically. The snippets below are for manual or non-detected setups — paste them into your client's MCP config. The bridge is a plain stdio MCP server (`browserops-bridge` on PATH after `npm i -g browserops`); any client that can spawn one can use it.
+`browserops init` registers the shim in every detected client automatically. The snippets below are for manual or non-detected setups — paste them into your client's MCP config. The shim is a plain stdio MCP server (`browserops-shim` on PATH after `npm i -g browserops`) that auto-spawns the long-lived daemon on first call, so multiple clients can share one Chrome profile concurrently.
 
 ### Claude Code
 
 ```bash
-claude mcp add browserops --scope user -- browserops-bridge
+claude mcp add browserops --scope user -- browserops-shim
 ```
 
 Verify with `claude mcp list`.
@@ -133,7 +133,7 @@ Verify with `claude mcp list`.
 ```json
 {
   "mcpServers": {
-    "browserops": { "command": "browserops-bridge" }
+    "browserops": { "command": "browserops-shim" }
   }
 }
 ```
@@ -145,7 +145,7 @@ Verify with `claude mcp list`.
 ```json
 {
   "context_servers": {
-    "browserops": { "command": { "path": "browserops-bridge", "args": [] } }
+    "browserops": { "command": { "path": "browserops-shim", "args": [] } }
   }
 }
 ```
@@ -158,7 +158,7 @@ Verify with `claude mcp list`.
 {
   "experimental": {
     "modelContextProtocolServers": [
-      { "transport": { "type": "stdio", "command": "browserops-bridge" } }
+      { "transport": { "type": "stdio", "command": "browserops-shim" } }
     ]
   }
 }
@@ -171,7 +171,7 @@ Verify with `claude mcp list`.
 ```json
 {
   "mcpServers": {
-    "browserops": { "command": "browserops-bridge" }
+    "browserops": { "command": "browserops-shim" }
   }
 }
 ```
@@ -182,13 +182,13 @@ Verify with `claude mcp list`.
 
 ```toml
 [mcp_servers.browserops]
-command = "browserops-bridge"
+command = "browserops-shim"
 args = []
 ```
 
 ### Custom / SDK-based agents
 
-Any client built on the official MCP SDKs can connect with `command: "browserops-bridge"`, no args, no env vars (token + extension ID are handled through `~/.browserops/`).
+Any client built on the official MCP SDKs can connect with `command: "browserops-shim"`, no args, no env vars (token + extension ID are handled through `~/.browserops/`).
 
 ### Setting environment variables
 
@@ -311,7 +311,7 @@ pnpm setup
 `pnpm setup` = `pnpm install && pnpm build && node packages/cli/dist/index.js init` (same wizard as the published `browserops init`, just driven from your clone). The build produces:
 
 - `packages/cli/dist/index.js`        — the `browserops` CLI binary
-- `packages/bridge/dist/index.js`     — the `browserops-bridge` MCP server binary
+- `packages/bridge/dist/index.js`     — the `browserops-shim` MCP server binary
 - `packages/extension/dist/`          — the unpacked Chrome extension
 
 ## Dev loop
@@ -391,4 +391,4 @@ browserops/
 | Package | Purpose |
 |---|---|
 | [`browserops`](https://www.npmjs.com/package/browserops) | CLI orchestrator. Provides `browserops init`, `--claude/--cursor/--codex`, lifecycle commands. Depends on `@browserops/bridge`. |
-| [`@browserops/bridge`](https://www.npmjs.com/package/@browserops/bridge) | The MCP stdio server (`browserops-bridge` binary). What MCP clients spawn. |
+| [`@browserops/bridge`](https://www.npmjs.com/package/@browserops/bridge) | The MCP stdio server (`browserops-shim` binary). What MCP clients spawn. |

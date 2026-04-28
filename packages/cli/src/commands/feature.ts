@@ -4,7 +4,7 @@ import {
   setFeatureEnabled,
   type FeatureState,
 } from "../lib/config.js";
-import { isBridgeAlive } from "../lib/daemon.js";
+import { isDaemonAlive } from "../lib/daemon.js";
 import { c, dim, err, header, info, ok, warn } from "../lib/ui.js";
 
 const VALID_ACTIONS = ["list", "enable", "disable"] as const;
@@ -79,7 +79,7 @@ async function runDisable(name: FeatureName): Promise<void> {
 }
 
 async function reloadHint(): Promise<void> {
-  if (await isBridgeAlive()) {
+  if (await isDaemonAlive()) {
     warn(
       `bridge is running with the previous feature set. Restart it with ${c.cyan("browserops restart")} to apply.`,
     );
