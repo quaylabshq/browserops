@@ -1,5 +1,6 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -293,7 +294,7 @@ export class McpBridgeServer {
   private readonly server: Server;
   private readonly validators = new Map<string, ValidateFunction>();
   private readonly procedureHandlers: Record<string, (raw: Record<string, unknown>) => Promise<unknown>>;
-  private transport?: StdioServerTransport;
+  private transport?: Transport;
 
   constructor(deps: McpBridgeDeps) {
     this.deps = deps;
@@ -339,8 +340,8 @@ export class McpBridgeServer {
     });
   }
 
-  async start(): Promise<void> {
-    this.transport = new StdioServerTransport();
+  async start(transport?: Transport): Promise<void> {
+    this.transport = transport ?? new StdioServerTransport();
     await this.server.connect(this.transport);
   }
 
