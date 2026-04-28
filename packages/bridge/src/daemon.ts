@@ -161,7 +161,17 @@ async function main(): Promise<void> {
       onSession: async (conn, register) => {
         const session = sessions.create(register.client_info);
         try {
-          const entry = await attachMcpSession(conn, session, runtime);
+          const renameSession = (name: string): string | undefined => {
+            const updated = sessions.rename(session.id, name);
+            if (!updated) return undefined;
+            broadcast("session_renamed", {
+              session_id: updated.id,
+              name: updated.name,
+              color: updated.color,
+            });
+            return updated.name;
+          };
+          const entry = await attachMcpSession(conn, session, runtime, renameSession);
           active.set(session.id, entry);
           conn.onClose(async (reason) => {
             const e = active.get(session.id);
@@ -218,6 +228,7 @@ async function attachMcpSession(
   conn: ShimConnection,
   session: DaemonSession,
   runtime: DaemonRuntime,
+  renameSession: (name: string) => string | undefined,
 ): Promise<ActiveSession> {
   // Per-session rate limiter: bursts in one session never throttle
   // another. Caps are sourced from the same env vars the legacy bridge
@@ -242,6 +253,7 @@ async function attachMcpSession(
     enabledFeatures: runtime.enabledFeatures.current,
     traceWriter: runtime.traceWriter,
     gatedMatcher: runtime.gatedMatcher,
+    renameSession,
   });
   await mcp.start(transport);
   void runtime.logger.write({
