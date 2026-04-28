@@ -1,6 +1,8 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
+  DAEMON_PIDFILE_FILENAME,
+  DAEMON_SOCKET_FILENAME,
   GATED_DOMAINS_FILENAME,
   LOG_FILENAME,
   RISKY_DOMAINS_FILENAME,
@@ -31,6 +33,14 @@ export function gatedDomainsPath(): string {
 
 export function controlSocketPath(): string {
   return join(stateDir(), CONTROL_SOCKET_FILENAME);
+}
+
+export function daemonSocketPath(): string {
+  return join(stateDir(), DAEMON_SOCKET_FILENAME);
+}
+
+export function daemonPidfilePath(): string {
+  return join(stateDir(), DAEMON_PIDFILE_FILENAME);
 }
 
 export function configPath(): string {
