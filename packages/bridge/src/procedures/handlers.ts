@@ -29,9 +29,7 @@ import {
   readProcedureYaml,
   writeProcedureYamlAtomic,
   deleteProcedureDir,
-  moveProcedureDir,
 } from "./store.js";
-import { handleCompile } from "./compile.js";
 import { makeExecuteHandler } from "./execute.js";
 import type { WSBridgeLike } from "../mcp-server.js";
 import {
@@ -125,96 +123,6 @@ function passesScopeFilter(
 // handlers
 // ---------------------------------------------------------------------------
 
-// ---- handleList ----
-
-export interface ListResult {
-  tree: {
-    shared: ProcedureEntry[];
-    composites: Record<string, { composite: ProcedureEntry; subs: ProcedureEntry[] }>;
-  };
-}
-
-export async function handleList(raw: Record<string, unknown>): Promise<ListResult> {
-  // Validate optional params
-  const scope =
-    raw["scope"] !== undefined
-      ? (() => {
-          const s = raw["scope"];
-          if (typeof s !== "string") {
-            throw new CodedError("INVALID_PARAMS", "scope must be a string");
-          }
-          if (s !== "all" && s !== "shared" && !s.startsWith("composite:")) {
-            throw new CodedError(
-              "INVALID_PARAMS",
-              `scope must be "all", "shared", or "composite:<name>"`,
-            );
-          }
-          return s;
-        })()
-      : "all";
-
-  const domain =
-    raw["domain"] !== undefined
-      ? (() => {
-          const d = raw["domain"];
-          if (typeof d !== "string") {
-            throw new CodedError("INVALID_PARAMS", "domain must be a string");
-          }
-          return d;
-        })()
-      : undefined;
-
-  const manifest = await ensureIndex(proceduresRoot());
-
-  const shared: ProcedureEntry[] = [];
-  const composites: Record<string, { composite: ProcedureEntry; subs: ProcedureEntry[] }> = {};
-
-  for (const [name, entry] of Object.entries(manifest.procedures)) {
-    // Apply scope filter
-    if (!passesScopeFilter(name, entry, scope)) continue;
-
-    // Apply domain filter
-    if (domain !== undefined && entry.domain !== domain) continue;
-
-    if (isShared(entry) && entry.kind !== "composite") {
-      // Top-level shared leaf
-      shared.push(toEntry(name, entry));
-    } else if (isShared(entry) && entry.kind === "composite") {
-      // Shared composites — treat as standalone in shared list
-      shared.push(toEntry(name, entry));
-    } else if (entry.owner === null && !isShared(entry)) {
-      // Top-level composite (path like "email_posthog_users/procedure.yaml")
-      if (!composites[name]) {
-        composites[name] = { composite: toEntry(name, entry), subs: [] };
-      } else {
-        composites[name]!.composite = toEntry(name, entry);
-      }
-    } else if (entry.owner !== null) {
-      // Sub-procedure — place under owner composite
-      const owner = entry.owner;
-      if (!composites[owner]) {
-        // Owner might not have been visited yet or filtered out
-        composites[owner] = {
-          composite: { name: owner, kind: "composite", description: "", inputs: [], triggers: [], tags: [] },
-          subs: [],
-        };
-      }
-      composites[owner]!.subs.push(toEntry(name, entry));
-    }
-  }
-
-  // If scope is "composite:X", prune composites that aren't X
-  if (scope.startsWith("composite:")) {
-    const compositeName = scope.slice("composite:".length);
-    for (const key of Object.keys(composites)) {
-      if (key !== compositeName) {
-        delete composites[key];
-      }
-    }
-  }
-
-  return { tree: { shared, composites } };
-}
 
 // ---- handleSearch ----
 
@@ -589,68 +497,6 @@ export async function handleSave(raw: Record<string, unknown>): Promise<SaveResu
   return { saved: true, path: relPath, version: newMeta.version };
 }
 
-// ---- handlePromote ----
-
-export interface PromoteResult {
-  promoted: true;
-  old_path: string;
-  new_path: string;
-  rewrote: string[];
-}
-
-export async function handlePromote(raw: Record<string, unknown>): Promise<PromoteResult> {
-  const name = assertName(raw["name"]);
-  const fromOwner = assertName(raw["from_owner"], "from_owner");
-
-  const manifest = await ensureIndex(proceduresRoot());
-  const entry = manifest.procedures[name];
-
-  if (!entry) {
-    throw new CodedError("PROC_NOT_FOUND", `procedure not found: ${name}`, { name });
-  }
-
-  if (entry.owner !== fromOwner) {
-    throw new CodedError(
-      "PROC_OWNER_INVALID",
-      `procedure "${name}" is not owned by "${fromOwner}" (actual owner: ${entry.owner ?? "none"})`,
-      { name, from_owner: fromOwner, actual_owner: entry.owner },
-    );
-  }
-
-  const fromPath = procedureYamlPath(fromOwner, name);
-  const toPath = procedureYamlPath(null, name);
-  const fromDir = path.dirname(fromPath);
-  const toDir = path.dirname(toPath);
-
-  const oldRelPath = path.relative(proceduresRoot(), fromPath);
-  const newRelPath = path.relative(proceduresRoot(), toPath);
-
-  // Move the directory
-  await moveProcedureDir(fromDir, toDir);
-
-  // Check owner's uses: for this sub — log a warning if not found (v1 behavior)
-  const ownerEntry = manifest.procedures[fromOwner];
-  if (ownerEntry && ownerEntry.uses) {
-    if (!ownerEntry.uses.includes(name)) {
-      process.stderr.write(
-        `[procedures] warn: promoted "${name}" from "${fromOwner}" but owner's uses: does not include it\n`,
-      );
-    }
-    // In v1: name doesn't change on promotion, so uses: stays the same.
-    // No rewrite needed.
-  }
-
-  // Rebuild index
-  const newManifest = await buildIndex(proceduresRoot());
-  await writeIndex(proceduresRoot(), newManifest);
-
-  return {
-    promoted: true,
-    old_path: oldRelPath,
-    new_path: newRelPath,
-    rewrote: [], // v1: names don't change on promotion, so no rewrite needed
-  };
-}
 
 // ---- handleDelete ----
 
@@ -710,13 +556,10 @@ export async function handleDelete(raw: Record<string, unknown>): Promise<Delete
 type HandlerFn = (raw: Record<string, unknown>) => Promise<unknown>;
 
 export const PROCEDURE_HANDLERS: Record<string, HandlerFn> = {
-  "procedures_list": handleList,
   "procedures_search": handleSearch,
   "procedures_get": handleGet,
   "procedures_save": handleSave,
-  "procedures_promote": handlePromote,
   "procedures_delete": handleDelete,
-  "procedures_compile": handleCompile,
 };
 
 /**

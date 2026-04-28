@@ -36,7 +36,7 @@ export interface PreconditionDef {
 }
 
 /**
- * Loose assertion shape emitted by procedures_compile (Phase 4) and
+ * Loose assertion shape recorded by the agent when authoring a step, and
  * verified by procedures_execute (Phase 5 Step 2) during replay.
  *
  * All sub-fields are optional — a step declares only what it cares about.
@@ -325,7 +325,7 @@ const stepSchema: JSONSchemaObject = {
       ...expectedEffectSchema,
       description:
         "Loose assertions about the page-level effect of this step. " +
-        "Emitted by procedures_compile; verified by procedures_execute during replay.",
+        "Author-supplied; verified by procedures_execute during replay.",
     },
     selector_tier: {
       enum: SELECTOR_TIERS,

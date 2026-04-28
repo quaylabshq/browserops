@@ -1,8 +1,8 @@
 /**
  * checkExpectation — verify an ExpectedEffect against an observed PageEffect.
  *
- * Used by procedures_execute (Phase 5) to validate each step's page_effect
- * against the loose assertions emitted by procedures_compile (Phase 4).
+ * Used by procedures_execute to validate each step's observed page_effect
+ * against the loose author-supplied expected_effect on the step.
  *
  * Matching rules:
  *   dom.any: true     → observed.dom.added + removed + attr_changes + text_changes > 0

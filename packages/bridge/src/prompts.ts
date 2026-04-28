@@ -163,7 +163,7 @@ export async function getPrompt(
     } catch (err) {
       throw new McpError(
         McpErrorCode.InvalidParams,
-        `no procedure named ${procedureName} — list with \`procedures_list\` or \`procedures_search\``,
+        `no procedure named ${procedureName} — discover with \`procedures_search\``,
       );
     }
 

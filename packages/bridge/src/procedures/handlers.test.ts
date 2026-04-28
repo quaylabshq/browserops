@@ -21,11 +21,9 @@ import {
 } from "vitest";
 import { CodedError } from "./store.js";
 import {
-  handleList,
   handleSearch,
   handleGet,
   handleSave,
-  handlePromote,
   handleDelete,
   PROCEDURE_HANDLERS,
 } from "./handlers.js";
@@ -199,127 +197,13 @@ async function setupTempRoot(): Promise<{ root: string; restore: () => void }> {
 // ---------------------------------------------------------------------------
 
 describe("PROCEDURE_HANDLERS", () => {
-  it("has an entry for each of the seven tools", () => {
+  it("has an entry for each of the four sync tools (search/get/save/delete)", () => {
     const keys = Object.keys(PROCEDURE_HANDLERS);
-    expect(keys).toContain("procedures_list");
     expect(keys).toContain("procedures_search");
     expect(keys).toContain("procedures_get");
     expect(keys).toContain("procedures_save");
-    expect(keys).toContain("procedures_promote");
     expect(keys).toContain("procedures_delete");
-    expect(keys).toContain("procedures_compile");
-    expect(keys).toHaveLength(7);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// handleList
-// ---------------------------------------------------------------------------
-
-describe("handleList", () => {
-  let tmpRoot: string;
-  let restoreEnv: () => void;
-
-  beforeAll(async () => {
-    const setup = await setupTempRoot();
-    tmpRoot = setup.root;
-    restoreEnv = setup.restore;
-  });
-
-  afterAll(async () => {
-    restoreEnv();
-    await fs.rm(tmpRoot, { recursive: true, force: true });
-  });
-
-  it("returns shared procedures and composites in tree structure", async () => {
-    const result = await handleList({});
-    expect(result.tree).toBeDefined();
-    expect(Array.isArray(result.tree.shared)).toBe(true);
-    expect(typeof result.tree.composites).toBe("object");
-
-    // Should have 2 shared procs
-    expect(result.tree.shared.length).toBeGreaterThanOrEqual(2);
-
-    // email_posthog_users composite
-    expect(result.tree.composites["email_posthog_users"]).toBeDefined();
-    expect(result.tree.composites["email_posthog_users"]!.subs.length).toBeGreaterThanOrEqual(2);
-  });
-
-  it("entries do NOT include tokens, path, or owner fields", async () => {
-    const result = await handleList({});
-    const allEntries = [
-      ...result.tree.shared,
-      ...Object.values(result.tree.composites).flatMap((c) => [c.composite, ...c.subs]),
-    ];
-    for (const entry of allEntries) {
-      expect(entry).not.toHaveProperty("tokens");
-      expect(entry).not.toHaveProperty("path");
-      expect(entry).not.toHaveProperty("owner");
-    }
-  });
-
-  it("scope=shared returns shared procedures", async () => {
-    const result = await handleList({ scope: "shared" });
-    expect(result.tree.shared.length).toBeGreaterThanOrEqual(2);
-    // gmail.send_email and posthog.export_cohort should be in shared
-    const names = result.tree.shared.map((e) => e.name);
-    expect(names).toContain("gmail.send_email");
-    expect(names).toContain("posthog.export_cohort");
-  });
-
-  it("scope=composite:email_posthog_users returns only that composite and its subs", async () => {
-    const result = await handleList({ scope: "composite:email_posthog_users" });
-    expect(result.tree.composites["email_posthog_users"]).toBeDefined();
-    const subs = result.tree.composites["email_posthog_users"]!.subs;
-    expect(subs.length).toBeGreaterThanOrEqual(2);
-    // No other composites in results
-    const compositeKeys = Object.keys(result.tree.composites);
-    expect(compositeKeys).toHaveLength(1);
-    expect(compositeKeys[0]).toBe("email_posthog_users");
-  });
-
-  it("domain filter — domain=gmail returns only gmail procedures", async () => {
-    const result = await handleList({ domain: "gmail" });
-    const allEntries = [
-      ...result.tree.shared,
-      ...Object.values(result.tree.composites).flatMap((c) => [c.composite, ...c.subs]),
-    ];
-    // gmail.send_email should be present
-    const gmailEntry = allEntries.find((e) => e.name === "gmail.send_email");
-    expect(gmailEntry).toBeDefined();
-    // posthog.export_cohort should not be present (domain=posthog)
-    const posthogEntry = allEntries.find((e) => e.name === "posthog.export_cohort");
-    expect(posthogEntry).toBeUndefined();
-    // All entries with a domain set must be "gmail"
-    for (const entry of allEntries) {
-      if (entry.domain !== undefined) {
-        expect(entry.domain).toBe("gmail");
-      }
-    }
-  });
-
-  it("domain filter — domain=posthog returns only posthog procedures", async () => {
-    const result = await handleList({ domain: "posthog" });
-    const allEntries = [
-      ...result.tree.shared,
-      ...Object.values(result.tree.composites).flatMap((c) => [c.composite, ...c.subs]),
-    ];
-    const posthogEntry = allEntries.find((e) => e.name === "posthog.export_cohort");
-    expect(posthogEntry).toBeDefined();
-  });
-
-  it("throws INVALID_PARAMS on bad scope value", async () => {
-    await expect(handleList({ scope: "invalid_scope" })).rejects.toSatisfy(
-      (err: unknown) =>
-        err instanceof CodedError && err.code === "INVALID_PARAMS",
-    );
-  });
-
-  it("throws INVALID_PARAMS when scope is not a string", async () => {
-    await expect(handleList({ scope: 42 })).rejects.toSatisfy(
-      (err: unknown) =>
-        err instanceof CodedError && err.code === "INVALID_PARAMS",
-    );
+    expect(keys).toHaveLength(4);
   });
 });
 
@@ -723,24 +607,13 @@ steps:
     expect(typeof getResult.meta.created).toBe("string");
   });
 
-  it("saved procedure appears in list output without forbidden fields", async () => {
+  it("saved procedure is fetchable via handleGet", async () => {
     // Ensure roundtrip.test exists (saved in previous test)
-    const listResult = await handleList({});
-    const allEntries = [
-      ...listResult.tree.shared,
-      ...Object.values(listResult.tree.composites).flatMap((c) => [c.composite, ...c.subs]),
-    ];
-    const found = allEntries.find((e) => e.name === "roundtrip.test");
-    expect(found).toBeDefined();
-    // Confirm no forbidden fields
-    if (found) {
-      expect(found).not.toHaveProperty("tokens");
-      expect(found).not.toHaveProperty("path");
-      expect(found).not.toHaveProperty("owner");
-    }
+    const getResult = await handleGet({ name: "roundtrip.test" });
+    expect(getResult.yaml).toContain("roundtrip.test");
   });
 
-  it("overwrite bumps version from 1 to 2 and list shows updated entry", async () => {
+  it("overwrite bumps version from 1 to 2", async () => {
     const rtYaml2 = `\
 schema_version: 1
 name: roundtrip.test
@@ -757,90 +630,9 @@ steps:
     const saveResult = await handleSave({ name: "roundtrip.test", yaml: rtYaml2, overwrite: true });
     expect(saveResult.version).toBe(2);
 
-    // Verify via list that the procedure is still present
-    const listResult = await handleList({});
-    const allEntries = [
-      ...listResult.tree.shared,
-      ...Object.values(listResult.tree.composites).flatMap((c) => [c.composite, ...c.subs]),
-    ];
-    const found = allEntries.find((e) => e.name === "roundtrip.test");
-    expect(found).toBeDefined();
-    if (found) {
-      expect(found.description).toBe("Updated description for round-trip testing");
-    }
-  });
-});
-
-// ---------------------------------------------------------------------------
-// handlePromote
-// ---------------------------------------------------------------------------
-
-describe("handlePromote", () => {
-  let tmpRoot: string;
-  let restoreEnv: () => void;
-
-  beforeAll(async () => {
-    const setup = await setupTempRoot();
-    tmpRoot = setup.root;
-    restoreEnv = setup.restore;
-  });
-
-  afterAll(async () => {
-    restoreEnv();
-    await fs.rm(tmpRoot, { recursive: true, force: true });
-  });
-
-  it("moves a sub from composite/subs/ to shared/ and rebuilds index", async () => {
-    const result = await handlePromote({
-      name: "craft_email_body",
-      from_owner: "email_posthog_users",
-    });
-
-    expect(result.promoted).toBe(true);
-    expect(result.old_path).toContain("subs");
-    expect(result.new_path).toContain("shared");
-    expect(Array.isArray(result.rewrote)).toBe(true);
-
-    // After promotion, it should appear in shared
-    const listAfter = await handleList({ scope: "shared" });
-    const inShared = listAfter.tree.shared.find((e) => e.name === "craft_email_body");
-    expect(inShared).toBeDefined();
-  });
-
-  it("throws PROC_NOT_FOUND for unknown procedure", async () => {
-    await expect(
-      handlePromote({ name: "nonexistent_xyz", from_owner: "email_posthog_users" }),
-    ).rejects.toSatisfy(
-      (err: unknown) =>
-        err instanceof CodedError && err.code === "PROC_NOT_FOUND",
-    );
-  });
-
-  it("throws PROC_OWNER_INVALID when procedure has no owner (is shared)", async () => {
-    // posthog.export_cohort is shared (no owner)
-    await expect(
-      handlePromote({
-        name: "posthog.export_cohort",
-        from_owner: "email_posthog_users",
-      }),
-    ).rejects.toSatisfy(
-      (err: unknown) =>
-        err instanceof CodedError && err.code === "PROC_OWNER_INVALID",
-    );
-  });
-
-  it("throws PROC_OWNER_INVALID when from_owner doesn't match actual owner", async () => {
-    // find_users_by_event is owned by email_posthog_users
-    // Attempting to promote from a different owner should fail
-    await expect(
-      handlePromote({
-        name: "find_users_by_event",
-        from_owner: "wrong_owner",
-      }),
-    ).rejects.toSatisfy(
-      (err: unknown) =>
-        err instanceof CodedError && err.code === "PROC_OWNER_INVALID",
-    );
+    // Verify via get that the description was updated
+    const getResult = await handleGet({ name: "roundtrip.test" });
+    expect(getResult.yaml).toContain("Updated description for round-trip testing");
   });
 });
 
