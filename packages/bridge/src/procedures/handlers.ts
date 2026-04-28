@@ -185,8 +185,6 @@ interface ProcedureMeta {
   version: number;
   created: string;
   last_verified: string;
-  success_count: number;
-  failure_count: number;
   status: "draft" | "trusted";
 }
 
@@ -250,26 +248,17 @@ function extractMeta(parsed: unknown, defaultTs: string): ProcedureMeta {
       version: 1,
       created: defaultTs,
       last_verified: defaultTs,
-      success_count: 0,
-      failure_count: 0,
       status: "draft",
     };
   }
 
   const m = (parsed as Record<string, unknown>)["meta"] as Record<string, unknown>;
-  const successCount = typeof m["success_count"] === "number" ? m["success_count"] : 0;
   const status: "draft" | "trusted" =
-    m["status"] === "trusted" || m["status"] === "draft"
-      ? (m["status"] as "draft" | "trusted")
-      : successCount >= 1
-        ? "trusted"
-        : "draft";
+    m["status"] === "trusted" ? "trusted" : "draft";
   return {
     version: typeof m["version"] === "number" ? m["version"] : 1,
     created: typeof m["created"] === "string" ? m["created"] : defaultTs,
     last_verified: typeof m["last_verified"] === "string" ? m["last_verified"] : defaultTs,
-    success_count: successCount,
-    failure_count: typeof m["failure_count"] === "number" ? m["failure_count"] : 0,
     status,
   };
 }
@@ -457,29 +446,21 @@ export async function handleSave(raw: Record<string, unknown>): Promise<SaveResu
         version: 1,
         created: now,
         last_verified: now,
-        success_count: 0,
-        failure_count: 0,
         status: "draft",
       };
     }
-    const nextSuccessCount = priorMeta.success_count + (bumpSuccess ? 1 : 0);
     newMeta = {
       version: priorMeta.version + 1,
       created: priorMeta.created,
       last_verified: now,
-      success_count: nextSuccessCount,
-      failure_count: priorMeta.failure_count,
-      status: nextSuccessCount >= 1 ? "trusted" : priorMeta.status,
+      status: bumpSuccess ? "trusted" : priorMeta.status,
     };
   } else {
-    const successCount = bumpSuccess ? 1 : 0;
     newMeta = {
       version: 1,
       created: now,
       last_verified: now,
-      success_count: successCount,
-      failure_count: 0,
-      status: successCount >= 1 ? "trusted" : "draft",
+      status: bumpSuccess ? "trusted" : "draft",
     };
   }
 

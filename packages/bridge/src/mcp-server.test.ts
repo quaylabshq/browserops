@@ -255,17 +255,6 @@ describe("McpBridgeServer — TraceEvent emission", () => {
   // procedures_* meta RPC → no event written
   // -------------------------------------------------------------------------
 
-  it("does not emit a TraceEvent for procedures_list (meta RPC)", async () => {
-    const { writer, calls } = makeEnabledTraceWriter();
-    const deps = makeDeps({ traceWriter: writer });
-
-    // procedures_list takes no required arguments — pass empty object.
-    await callTool(deps, "procedures_list", {}, "req-plist");
-
-    // Procedure handlers are in-process and intentionally not traced.
-    expect(calls).toHaveLength(0);
-  });
-
   it("does not emit a TraceEvent for procedures_search (meta RPC)", async () => {
     const { writer, calls } = makeEnabledTraceWriter();
     const deps = makeDeps({ traceWriter: writer });
@@ -318,13 +307,13 @@ describe("McpBridgeServer — feature gates", () => {
 
   it("returns FEATURE_DISABLED when calling a procedures_* tool with procedures off", async () => {
     const deps = makeDeps({ enabledFeatures: new Set([]) });
-    const result = await callTool(deps, "procedures_list", {});
+    const result = await callTool(deps, "procedures_search", { query: "gmail" });
     expect(errorCodeOf(result)).toBe("FEATURE_DISABLED");
   });
 
   it("permits a procedures_* tool when procedures is enabled", async () => {
     const deps = makeDeps({ enabledFeatures: new Set(["procedures"]) });
-    const result = await callTool(deps, "procedures_list", {});
+    const result = await callTool(deps, "procedures_search", { query: "gmail" });
     // Real handler runs; whatever it returns isn't FEATURE_DISABLED.
     expect(errorCodeOf(result)).not.toBe("FEATURE_DISABLED");
   });
