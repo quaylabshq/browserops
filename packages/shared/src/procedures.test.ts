@@ -179,6 +179,56 @@ describe("PROCEDURE_SCHEMA — valid cases", () => {
       }),
     ).toBe(true);
   });
+
+  it("accepts a step with selector_tier", () => {
+    for (const tier of ["id", "testid", "role_name", "text", "css", "xpath"]) {
+      expect(
+        valid({
+          schema_version: 1,
+          name: "my.proc",
+          description: "with selector_tier",
+          kind: "leaf",
+          steps: [
+            {
+              id: "s1",
+              action: "browser_click",
+              with: { tab_id: "t_1", ref: 1 },
+              selector_tier: tier,
+            },
+          ],
+        }),
+      ).toBe(true);
+    }
+  });
+
+  it("accepts top-level fragility and side_effects", () => {
+    expect(
+      valid({
+        schema_version: 1,
+        name: "my.proc",
+        description: "with fragility and side_effects",
+        kind: "leaf",
+        steps: [{ id: "s1", action: "browser_click" }],
+        fragility: "low",
+        side_effects: ["send_message", "post_public"],
+      }),
+    ).toBe(true);
+  });
+
+  it("accepts an input flagged destructive", () => {
+    expect(
+      valid({
+        schema_version: 1,
+        name: "my.proc",
+        description: "with destructive input",
+        kind: "leaf",
+        inputs: {
+          recipient: { type: "string", destructive: true, required: true },
+        },
+        steps: [{ id: "s1", action: "browser_click" }],
+      }),
+    ).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -283,6 +333,37 @@ describe("PROCEDURE_SCHEMA — rejection cases", () => {
         description: "x".repeat(201),
         kind: "leaf",
         steps: [{ id: "s1", action: "browser_click" }],
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects an unknown selector_tier value", () => {
+    expect(
+      invalid({
+        schema_version: 1,
+        name: "my.proc",
+        description: "bad selector_tier",
+        kind: "leaf",
+        steps: [
+          {
+            id: "s1",
+            action: "browser_click",
+            selector_tier: "made_up",
+          },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects an unknown side_effects entry", () => {
+    expect(
+      invalid({
+        schema_version: 1,
+        name: "my.proc",
+        description: "bad side_effects",
+        kind: "leaf",
+        steps: [{ id: "s1", action: "browser_click" }],
+        side_effects: ["send_message", "made_up_class"],
       }),
     ).toBe(true);
   });
