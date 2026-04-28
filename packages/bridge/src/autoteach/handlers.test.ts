@@ -25,15 +25,16 @@ afterEach(async () => {
 });
 
 function makeBridge(impl?: (method: string) => unknown): WSBridgeLike {
+  const callExtension = vi.fn(async (method: string) => {
+    if (impl) return impl(method);
+    if (method === "teach_start") {
+      return { session_id: "ts_test", started_at: Date.now() };
+    }
+    return {};
+  });
   return {
     isConnected: () => true,
-    callExtension: vi.fn(async (method: string) => {
-      if (impl) return impl(method);
-      if (method === "teach_start") {
-        return { session_id: "ts_test", started_at: Date.now() };
-      }
-      return {};
-    }),
+    callExtension: callExtension as unknown as WSBridgeLike["callExtension"],
   };
 }
 
