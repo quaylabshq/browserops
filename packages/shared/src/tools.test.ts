@@ -228,27 +228,6 @@ describe("browser_screenshot schema", () => {
   });
 });
 
-describe("procedures_list", () => {
-  const tool = TOOL_DEF_MAP["procedures_list"];
-
-  it("is registered", () => {
-    expect(tool).toBeDefined();
-  });
-
-  it("is observation-weight and never risky", () => {
-    expect(tool?.action_weight).toBe(0);
-    expect(tool?.risky).toBe("never");
-  });
-
-  it("errorCodes contains PROC_NOT_FOUND", () => {
-    expect(tool?.errorCodes).toContain("PROC_NOT_FOUND");
-  });
-
-  it("has no required inputs", () => {
-    expect(tool?.inputSchema.required).toBeUndefined();
-  });
-});
-
 describe("procedures_search", () => {
   const tool = TOOL_DEF_MAP["procedures_search"];
   const props = tool?.inputSchema.properties as
@@ -337,28 +316,6 @@ describe("procedures_save", () => {
 
   it("overwrite defaults to false", () => {
     expect(props?.overwrite?.default).toBe(false);
-  });
-});
-
-describe("procedures_promote", () => {
-  const tool = TOOL_DEF_MAP["procedures_promote"];
-
-  it("is registered", () => {
-    expect(tool).toBeDefined();
-  });
-
-  it("is action_weight 0.5 and never risky", () => {
-    expect(tool?.action_weight).toBe(0.5);
-    expect(tool?.risky).toBe("never");
-  });
-
-  it("errorCodes contains PROC_NOT_FOUND", () => {
-    expect(tool?.errorCodes).toContain("PROC_NOT_FOUND");
-  });
-
-  it("requires name and from_owner", () => {
-    expect(tool?.inputSchema.required).toContain("name");
-    expect(tool?.inputSchema.required).toContain("from_owner");
   });
 });
 

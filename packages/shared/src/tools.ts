@@ -1362,58 +1362,6 @@ const entrySchema: JSONSchemaObject = {
   },
 } as const;
 
-const proceduresList: ToolDef = {
-  name: "procedures_list",
-  feature: "procedures",
-  description:
-    "List all stored procedures as metadata-only entries (no YAML bodies). " +
-    "Scope to a specific domain or composite procedure. " +
-    "Use procedures_get to retrieve a full YAML body.",
-  inputSchema: {
-    type: "object",
-    additionalProperties: false,
-    properties: {
-      scope: {
-        type: "string",
-        pattern: scopePattern,
-        default: "all",
-      },
-      domain: {
-        type: "string",
-        pattern: domainPattern,
-      },
-    },
-  },
-  outputSchema: {
-    type: "object",
-    additionalProperties: false,
-    required: ["tree"] as const,
-    properties: {
-      tree: {
-        type: "object",
-        additionalProperties: false,
-        required: ["shared", "composites"] as const,
-        properties: {
-          shared: { type: "array", items: entrySchema },
-          composites: {
-            type: "object",
-            additionalProperties: {
-              type: "object",
-              properties: {
-                composite: entrySchema,
-                subs: { type: "array", items: entrySchema },
-              },
-            },
-          },
-        },
-      },
-    },
-  },
-  action_weight: 0,
-  risky: "never",
-  errorCodes: [...BASE_CODES, ...PROC_CODES] as const,
-} as const;
-
 const proceduresSearch: ToolDef = {
   name: "procedures_search",
   feature: "procedures",
@@ -1569,97 +1517,6 @@ const proceduresSave: ToolDef = {
     },
   },
   action_weight: 0.5,
-  risky: "never",
-  errorCodes: [...BASE_CODES, ...PROC_CODES] as const,
-} as const;
-
-const proceduresPromote: ToolDef = {
-  name: "procedures_promote",
-  feature: "procedures",
-  description:
-    "Move a sub-procedure from a composite's subs/ folder into the top-level shared/ folder, " +
-    "making it independently reusable. Rebuilds the index and rewrites any affected uses: references. " +
-    'REQUIRED ARGUMENTS: {"name": "<sub-procedure name>", "from_owner": "<composite name>"}.',
-  inputSchema: {
-    type: "object",
-    additionalProperties: false,
-    required: ["name", "from_owner"] as const,
-    properties: {
-      name: { type: "string", pattern: procedureNamePattern },
-      from_owner: { type: "string", pattern: procedureNamePattern },
-    },
-  },
-  outputSchema: {
-    type: "object",
-    additionalProperties: false,
-    required: ["promoted", "old_path", "new_path", "rewrote"] as const,
-    properties: {
-      promoted: { const: true },
-      old_path: { type: "string" },
-      new_path: { type: "string" },
-      rewrote: { type: "array", items: { type: "string" } },
-    },
-  },
-  action_weight: 0.5,
-  risky: "never",
-  errorCodes: [...BASE_CODES, ...PROC_CODES] as const,
-} as const;
-
-const proceduresCompile: ToolDef = {
-  name: "procedures_compile",
-  feature: "procedures",
-  description:
-    "Compile a JSONL trace file into a draft procedure YAML. " +
-    "Reads the trace, drops read-only and failed-call events, and emits one step per " +
-    "remaining tool call with a loose expected_effect clause derived from observed page_effect. " +
-    "Returns the YAML as a string for review — never auto-saved. " +
-    "Caller can review and persist via procedures_save.",
-  inputSchema: {
-    type: "object",
-    additionalProperties: false,
-    required: ["trace_path", "out_name"] as const,
-    properties: {
-      trace_path: {
-        type: "string",
-        description: "Absolute path to a .jsonl trace file produced by browserops tracing.",
-        minLength: 1,
-        maxLength: 4096,
-      },
-      out_name: {
-        type: "string",
-        pattern: "^[a-z][a-z0-9_.-]{0,79}$",
-        description: "Dot-delimited procedure name for the compiled output (e.g. 'slack.search_messages').",
-      },
-      skip_tools: {
-        type: "array",
-        items: { type: "string" },
-        description:
-          "Additional tool names to exclude from the compiled procedure (beyond the default read-only skip list).",
-        maxItems: 50,
-      },
-    },
-  },
-  outputSchema: {
-    type: "object",
-    additionalProperties: false,
-    required: ["yaml", "warnings"] as const,
-    properties: {
-      yaml: {
-        type: "string",
-        description: "The compiled YAML body as a string. Review and save via procedures_save.",
-      },
-      path: {
-        type: "string",
-        description: "Always absent — procedures_compile never auto-saves.",
-      },
-      warnings: {
-        type: "array",
-        items: { type: "string" },
-        description: "Compile-time warnings (e.g. empty trace, filtered events).",
-      },
-    },
-  },
-  action_weight: 0,
   risky: "never",
   errorCodes: [...BASE_CODES, ...PROC_CODES] as const,
 } as const;
@@ -1902,13 +1759,10 @@ export const TOOL_DEFS: readonly ToolDef[] = [
   setCdp,
   setSessionName,
   releaseTab,
-  proceduresList,
   proceduresSearch,
   proceduresGet,
   proceduresSave,
-  proceduresPromote,
   proceduresDelete,
-  proceduresCompile,
   proceduresExecute,
 ] as const;
 
