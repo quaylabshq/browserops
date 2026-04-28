@@ -63,9 +63,21 @@ export interface ExecuteResult {
 // ---------------------------------------------------------------------------
 
 /**
- * Recursively substitute `{{varName}}` placeholders in a value using the
- * provided inputs map. String values are scanned; objects and arrays are
- * traversed recursively. Non-string scalars are returned as-is.
+ * Recursively substitute `{{...}}` placeholders in a value using the provided
+ * inputs map. Mirrors the binding-validator contract:
+ *
+ *   {{tab_id}}        → inputs.tab_id
+ *   {{input.NAME}}    → inputs.NAME              (preferred form)
+ *   {{NAME}}          → inputs.NAME              (legacy / loose form)
+ *
+ * The `input.` prefix in the placeholder is the form save-validation
+ * enforces; the executor strips it so callers pass natural input names
+ * (e.g. `{recipient: "..."}` rather than `{"input.recipient": "..."}`).
+ *
+ * String values are scanned; objects and arrays are traversed recursively.
+ * Non-string scalars are returned as-is. Unresolved placeholders are left
+ * intact so a missing input shows up at the call site rather than as a
+ * silent empty string.
  */
 function substituteVars(
   value: unknown,
@@ -74,7 +86,22 @@ function substituteVars(
   if (typeof value === "string") {
     return value.replace(/\{\{([^}]+)\}\}/g, (match, key: string) => {
       const trimmed = key.trim();
-      if (Object.prototype.hasOwnProperty.call(inputs, trimmed)) {
+
+      // Resolve `input.NAME` → look up bare NAME in inputs.
+      const lookupKey = trimmed.startsWith("input.")
+        ? trimmed.slice("input.".length)
+        : trimmed;
+
+      if (Object.prototype.hasOwnProperty.call(inputs, lookupKey)) {
+        const v = inputs[lookupKey];
+        return typeof v === "string" ? v : JSON.stringify(v);
+      }
+      // Fallback: if caller passed the raw `input.NAME` key (older code path),
+      // honour that too. Cheap belt-and-braces — the common case is `lookupKey`.
+      if (
+        lookupKey !== trimmed &&
+        Object.prototype.hasOwnProperty.call(inputs, trimmed)
+      ) {
         const v = inputs[trimmed];
         return typeof v === "string" ? v : JSON.stringify(v);
       }
