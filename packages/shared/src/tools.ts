@@ -1512,6 +1512,11 @@ const proceduresSave: ToolDef = {
     "Validate and persist a procedure YAML. Parses, schema-validates, resolves uses: references, " +
     "then atomically writes to disk and rebuilds the search index. " +
     "Set overwrite: true to update an existing procedure. " +
+    "Set bump_success: true on a save you've personally verified end-to-end " +
+    "(procedure ran cleanly against the live UI in this same session) — that " +
+    "increments success_count and, on the first success, flips status from " +
+    "draft to trusted so procedures_search starts returning the entry. Do NOT " +
+    "set bump_success on an untested save. " +
     'REQUIRED ARGUMENTS: {"name": "<procedure name>", "yaml": "<full YAML body>"}.',
   inputSchema: {
     type: "object",
@@ -1522,6 +1527,17 @@ const proceduresSave: ToolDef = {
       yaml: { type: "string", minLength: 1, maxLength: 65536 },
       owner: { type: "string", pattern: procedureNamePattern },
       overwrite: { type: "boolean", default: false },
+      bump_success: {
+        type: "boolean",
+        default: false,
+        description:
+          "When true, increment the procedure's success_count by 1. On the " +
+          "first successful save (count goes 0 → 1) the status auto-promotes " +
+          "from draft to trusted, making the procedure discoverable via " +
+          "procedures_search. Use this only when you've actually verified " +
+          "the procedure works against the live UI — never on the initial " +
+          "untested write.",
+      },
     },
   },
   outputSchema: {
