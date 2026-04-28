@@ -1,6 +1,6 @@
 {
   "name": "@browserops/monorepo",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "private": true,
   "description": "MCP server that drives a live Chrome browser profile",
   "type": "module",

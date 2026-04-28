@@ -28,7 +28,7 @@ import { TeachSessionStore } from "./teach/session-store.js";
 import type { FeatureName, TeachEvent } from "@browserops/shared";
 import { loadConfigFeatures } from "./config.js";
 
-const VERSION = "0.0.4";
+const VERSION = "0.0.5";
 
 async function main(): Promise<void> {
   installProcessErrorHandlers();
