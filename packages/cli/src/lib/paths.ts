@@ -2,7 +2,8 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  CONTROL_SOCKET_FILENAME,
+  DAEMON_PIDFILE_FILENAME,
+  DAEMON_SOCKET_FILENAME,
   LOG_FILENAME,
   STATE_DIR_NAME,
   TOKEN_FILENAME,
@@ -13,8 +14,12 @@ export const STATE_DIR = join(homedir(), STATE_DIR_NAME);
 export const tokenPath = (): string => join(STATE_DIR, TOKEN_FILENAME);
 export const logPath = (): string => join(STATE_DIR, LOG_FILENAME);
 export const daemonLogPath = (): string => join(STATE_DIR, "daemon.log");
-export const pidPath = (): string => join(STATE_DIR, "bridge.pid");
-export const controlSocketPath = (): string => join(STATE_DIR, CONTROL_SOCKET_FILENAME);
+/**
+ * Pidfile the daemon itself writes via acquirePidfile. The CLI just
+ * reads it for `status` / `stop`; we no longer track our own.
+ */
+export const daemonPidPath = (): string => join(STATE_DIR, DAEMON_PIDFILE_FILENAME);
+export const daemonSocketPath = (): string => join(STATE_DIR, DAEMON_SOCKET_FILENAME);
 export const configPath = (): string => join(STATE_DIR, "config.json");
 export const extensionInstallDir = (): string => join(STATE_DIR, "extension");
 

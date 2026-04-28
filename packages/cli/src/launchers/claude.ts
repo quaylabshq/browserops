@@ -1,5 +1,5 @@
 import { spawnSync, spawn } from "node:child_process";
-import { ensureBridgeRunning } from "../lib/daemon.js";
+import { ensureDaemonRunning } from "../lib/daemon.js";
 import { getSafeMode } from "../lib/config.js";
 import { ok, info, err } from "../lib/ui.js";
 
@@ -13,11 +13,11 @@ function resolveBin(name: string): string | null {
 }
 
 export async function runClaudeLauncher(task: string): Promise<void> {
-  const result = await ensureBridgeRunning({});
+  const result = await ensureDaemonRunning({});
   if (result.alreadyRunning) {
-    info("bridge already running");
+    info("daemon already running");
   } else {
-    ok(`bridge started — pid ${result.pid}`);
+    ok(`daemon started — pid ${result.pid}`);
   }
 
   const bin = resolveBin(BIN);

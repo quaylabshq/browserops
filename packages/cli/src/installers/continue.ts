@@ -42,7 +42,7 @@ function isBrowseropsEntry(s: unknown, specCommand: string): boolean {
   const transport = (s as Record<string, unknown>)["transport"] as Record<string, unknown> | undefined;
   const cmd = transport?.["command"];
   if (typeof cmd !== "string") return false;
-  if (cmd.includes("browserops-bridge") || cmd === specCommand) return true;
+  if (cmd.includes("browserops-shim") || cmd.includes("browserops-bridge") || cmd === specCommand) return true;
   // command may be "node" with args pointing at the bridge dist
   const args = transport?.["args"];
   if (Array.isArray(args)) {
@@ -69,7 +69,7 @@ export const continueInstaller: ClientInstaller = {
     const cfg = await readConfig(configPath);
     const servers = cfg.experimental?.modelContextProtocolServers;
     if (Array.isArray(servers)) {
-      alreadyInstalled = servers.some((s) => isBrowseropsEntry(s, "browserops-bridge"));
+      alreadyInstalled = servers.some((s) => isBrowseropsEntry(s, "browserops-shim"));
     }
 
     return { id: ID, label: LABEL, detected, configPath, alreadyInstalled };
@@ -126,7 +126,7 @@ export const continueInstaller: ClientInstaller = {
       return { changed: false, configPath, message: "no change (not found)" };
     }
 
-    const filtered = servers.filter((s) => !isBrowseropsEntry(s, "browserops-bridge"));
+    const filtered = servers.filter((s) => !isBrowseropsEntry(s, "browserops-shim"));
     if (filtered.length === servers.length) {
       return { changed: false, configPath, message: "no change (not found)" };
     }
