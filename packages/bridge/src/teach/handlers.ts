@@ -57,6 +57,14 @@ export interface TeachDistillResult {
 export function buildTeachHandlers(
   wsBridge: WSBridgeLike,
   store: TeachSessionStore,
+  /**
+   * Daemon-managed MCP session_id of the caller, used to tag teach
+   * recordings with their originator and to filter list() to the
+   * caller's own recordings. Empty string in the legacy bridge entry,
+   * which has no session model — that mode falls back to listing
+   * everything.
+   */
+  mcpSessionId: string,
 ): Record<string, (raw: Record<string, unknown>) => Promise<unknown>> {
   async function handleStart(raw: Record<string, unknown>): Promise<TeachStartResult> {
     const params: Record<string, unknown> = {};
@@ -74,6 +82,11 @@ export function buildTeachHandlers(
       typeof result?.started_at !== "number"
     ) {
       throw new CodedError("INTERNAL", "teach_start returned malformed result");
+    }
+    if (mcpSessionId !== "") {
+      // Best-effort: if the meta write fails the recording still works,
+      // it just won't filter to this MCP session in procedures_teach_list.
+      await store.setOwner(result.session_id, mcpSessionId).catch(() => undefined);
     }
     return {
       session_id: result.session_id,
@@ -133,7 +146,10 @@ export function buildTeachHandlers(
 
   async function handleList(raw: Record<string, unknown>): Promise<TeachListResult> {
     void raw;
-    const sessions = await store.list();
+    // Multi-session daemon: scope to recordings this MCP session
+    // started. Legacy bridge entry (mcpSessionId === "") sees
+    // everything, preserving its single-tenant behaviour.
+    const sessions = await store.list(mcpSessionId || undefined);
     return { sessions };
   }
 

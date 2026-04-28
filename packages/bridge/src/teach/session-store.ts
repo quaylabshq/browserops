@@ -54,8 +54,16 @@ export class TeachSessionStore {
     return meta;
   }
 
-  /** List all known sessions, newest first. */
-  async list(): Promise<TeachSessionMeta[]> {
+  /**
+   * List all known sessions, newest first.
+   *
+   * When `ownerSessionId` is supplied, only sessions tagged with that
+   * MCP session_id (set via setOwner during teach_start) are returned.
+   * Useful in the multi-session daemon so each MCP client sees only
+   * the recordings it initiated, not every other agent's. Pass an
+   * empty string or omit to disable filtering.
+   */
+  async list(ownerSessionId?: string): Promise<TeachSessionMeta[]> {
     await this.ensureRoot();
     let files: string[];
     try {
@@ -69,9 +77,36 @@ export class TeachSessionStore {
       if (!f.endsWith(".meta.json")) continue;
       const sessionId = f.slice(0, -".meta.json".length);
       const meta = await this.getMeta(sessionId);
-      if (meta !== null) out.push(meta);
+      if (meta === null) continue;
+      if (ownerSessionId && meta.owner_session_id !== ownerSessionId) continue;
+      out.push(meta);
     }
     return out.sort((a, b) => b.started_at - a.started_at);
+  }
+
+  /**
+   * Stamp ownership onto a session's meta so a later list({owner}) can
+   * filter to it. Idempotent; called from procedures_teach_start once
+   * the extension confirms the session_id.
+   */
+  async setOwner(sessionId: string, ownerSessionId: string): Promise<void> {
+    if (!ownerSessionId) return;
+    let meta = await this.getMeta(sessionId);
+    if (meta === null) {
+      // teach_start may complete before any TeachEvent arrives — write
+      // a stub meta now so the owner stamp survives subsequent
+      // event-driven getOrCreateMeta calls.
+      meta = {
+        session_id: sessionId,
+        started_at: Date.now(),
+        scope: "all_tabs" as TeachScope,
+        event_count: 0,
+        owner_session_id: ownerSessionId,
+      };
+    } else {
+      meta.owner_session_id = ownerSessionId;
+    }
+    await this.writeMeta(meta);
   }
 
   async getMeta(sessionId: string): Promise<TeachSessionMeta | null> {
