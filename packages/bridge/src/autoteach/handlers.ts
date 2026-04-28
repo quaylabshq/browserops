@@ -24,6 +24,7 @@ import type {
   ProcedureDef,
 } from "@browserops/shared";
 import type { WSBridgeLike } from "../mcp-server.js";
+import type { TabRegistry } from "../tab-registry.js";
 import { CodedError } from "../procedures/store.js";
 import {
   ensureIndex,
@@ -48,16 +49,24 @@ export interface AutoteachHandlerDeps {
   wsBridge: WSBridgeLike;
   store: AutoTeachStore;
   bindings: AutoTeachBindings;
+  tabs: TabRegistry;
   /** Daemon-managed MCP session_id of the caller; empty for legacy bridge. */
   mcpSessionId: string;
   /** Read at call time so feature toggles take effect without restart. */
   enabledFeatures: ReadonlySet<FeatureName>;
+  /**
+   * Optional renameSession hook (provided by the daemon, undefined
+   * under the legacy single-session bridge). When set + caller passed
+   * session_name, the bridge labels the tab group before acquiring
+   * the tab.
+   */
+  renameSession?: (name: string) => string | undefined;
 }
 
 export function buildAutoteachHandlers(
   deps: AutoteachHandlerDeps,
 ): Record<string, (raw: Record<string, unknown>) => Promise<unknown>> {
-  const { wsBridge, store, bindings, mcpSessionId, enabledFeatures } = deps;
+  const { wsBridge, store, bindings, tabs, mcpSessionId, enabledFeatures, renameSession } = deps;
 
   // ---------------------------------------------------------------------
   // start
@@ -67,6 +76,8 @@ export function buildAutoteachHandlers(
     session_id: string;
     teach_session_id?: string;
     state: string;
+    tab_id?: string;
+    session_name?: string;
   }> {
     const goal = requireString(raw, "goal");
     const mode = requireMode(raw["mode"]);
@@ -87,6 +98,35 @@ export function buildAutoteachHandlers(
           "(browserops feature enable teach), or call with mode: 'explore'",
         { required_feature: "teach" },
       );
+    }
+
+    const sessionNameRaw = raw["session_name"];
+    const startUrlRaw = raw["start_url"];
+    const acquireTabRaw = raw["acquire_tab"];
+    const sessionName =
+      typeof sessionNameRaw === "string" && sessionNameRaw.trim() !== ""
+        ? sessionNameRaw.trim()
+        : undefined;
+    const startUrl = typeof startUrlRaw === "string" && startUrlRaw !== "" ? startUrlRaw : undefined;
+    const acquireTab =
+      typeof acquireTabRaw === "boolean" ? acquireTabRaw : startUrl !== undefined;
+
+    if (acquireTab && !wsBridge.isConnected()) {
+      throw new CodedError(
+        "EXTENSION_DISCONNECTED",
+        "auto-teach asked to acquire a tab but the extension is not connected",
+      );
+    }
+
+    // Set session_name first so the tab acquired below joins the labeled group.
+    let appliedSessionName: string | undefined;
+    if (sessionName !== undefined && renameSession !== undefined && mcpSessionId !== "") {
+      try {
+        appliedSessionName = renameSession(sessionName) ?? sessionName;
+      } catch {
+        // Session rename is a UX-only feature — ignore failures so the
+        // caller still gets a working session.
+      }
     }
 
     let teachSessionId: string | undefined;
@@ -115,11 +155,52 @@ export function buildAutoteachHandlers(
       ...(teachSessionId !== undefined ? { teach_session_id: teachSessionId } : {}),
     });
 
+    let tabId: string | undefined;
+    if (acquireTab) {
+      tabId = await acquireDemoTab({ startUrl });
+      if (tabId !== undefined) {
+        await store.update(session.session_id, { attached_tab_id: tabId });
+        bindings.detachSession(session.session_id);
+        bindings.attach(tabId, session.session_id, 0);
+      }
+    }
+
     return {
       session_id: session.session_id,
       ...(teachSessionId !== undefined ? { teach_session_id: teachSessionId } : {}),
       state: session.state,
+      ...(tabId !== undefined ? { tab_id: tabId } : {}),
+      ...(appliedSessionName !== undefined ? { session_name: appliedSessionName } : {}),
     };
+  }
+
+  /**
+   * Open + claim a fresh tab so the demo lands in a session-visible
+   * surface. Returns the new tab_id, or undefined if the extension's
+   * response was malformed (caller surfaces a soft warning).
+   */
+  async function acquireDemoTab(opts: { startUrl: string | undefined }): Promise<string | undefined> {
+    const params: Record<string, unknown> = { active: true };
+    if (opts.startUrl !== undefined) params["url"] = opts.startUrl;
+    const result = await wsBridge.callExtension<{ tab_id?: unknown }>(
+      "browser_new_tab",
+      params,
+      TEACH_CALL_TIMEOUT_MS,
+    );
+    const tabId = result?.tab_id;
+    if (typeof tabId !== "string") return undefined;
+    // Claim into the calling session if we're in the multi-session daemon
+    // so the agent's subsequent browser_* calls resolve. The tab_created
+    // event might not have hit the registry yet — best-effort retry on a
+    // microtask, mirroring maybeClaimNewTab in mcp-server.
+    if (mcpSessionId !== "") {
+      const first = tabs.claim(tabId, mcpSessionId);
+      if (!first.ok) {
+        await new Promise<void>((resolve) => queueMicrotask(resolve));
+        tabs.claim(tabId, mcpSessionId);
+      }
+    }
+    return tabId;
   }
 
   // ---------------------------------------------------------------------

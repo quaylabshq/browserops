@@ -2230,6 +2230,11 @@ const proceduresAutoteachStart: ToolDef = {
     "teach_session_id; mode 'explore' returns no teach_session_id and " +
     "expects the agent to call procedures_autoteach_attach + drive the " +
     "browser itself for run 0. " +
+    "OPTIONAL: pass session_name to label the tab group (so the user " +
+    "can tell at a glance which Chrome tabs belong to this loop), and " +
+    "start_url to have the bridge open + claim a fresh tab there before " +
+    "the demo (defaults true when start_url is set; binds tab to " +
+    "run_index 0 automatically). " +
     'REQUIRED: {"goal", "mode", "consent"}.',
   inputSchema: {
     type: "object",
@@ -2240,6 +2245,30 @@ const proceduresAutoteachStart: ToolDef = {
       mode: { enum: ["demo", "explore"] as const },
       consent: autoteachConsentSchema,
       narration_hint: { type: "string", maxLength: 200 },
+      session_name: {
+        type: "string",
+        minLength: 1,
+        maxLength: 64,
+        description:
+          "Label applied to the Chrome tab group for this MCP session " +
+          "via browser_set_session_name. Helps the user identify which " +
+          "tabs belong to the auto-teach loop.",
+      },
+      start_url: {
+        type: "string",
+        format: "uri",
+        maxLength: 4096,
+        description:
+          "URL the bridge opens + claims into the calling session before " +
+          "the demo. The new tab is bound to run_index 0 automatically " +
+          "so the user demonstrates in a tab the agent can see.",
+      },
+      acquire_tab: {
+        type: "boolean",
+        description:
+          "Force tab acquisition even without start_url (opens about:blank). " +
+          "Defaults true when start_url is set, false otherwise.",
+      },
     },
   },
   outputSchema: {
@@ -2250,6 +2279,17 @@ const proceduresAutoteachStart: ToolDef = {
       session_id: { type: "string" },
       teach_session_id: { type: "string" },
       state: { type: "string" },
+      tab_id: {
+        type: "string",
+        description:
+          "Set when the bridge acquired a tab (start_url or acquire_tab). " +
+          "Already attached to run_index 0 — the agent does not need to " +
+          "call procedures_autoteach_attach for run 0.",
+      },
+      session_name: {
+        type: "string",
+        description: "The canonical session name set on the tab group, when applied.",
+      },
     },
   },
   action_weight: 0,

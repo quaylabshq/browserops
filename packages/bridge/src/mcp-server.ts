@@ -356,8 +356,10 @@ export class McpBridgeServer {
         wsBridge: deps.wsBridge,
         store: deps.autoteachStore,
         bindings: deps.autoteachBindings,
+        tabs: deps.tabs,
         mcpSessionId: deps.sessionId,
         enabledFeatures: deps.enabledFeatures,
+        ...(deps.renameSession !== undefined ? { renameSession: deps.renameSession } : {}),
       }),
     };
 
