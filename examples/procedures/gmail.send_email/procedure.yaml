@@ -42,7 +42,11 @@ steps:
       url: "https://mail.google.com/mail/?view=cm&fs=1&to={{input.to}}&su={{input.subject}}&body={{input.body}}"
       active: true
     bind: compose
-    wait_for:
+
+  - id: wait_for_send_button
+    action: browser_wait_for
+    with:
+      tab_id: "{{compose.tab_id}}"
       text: "Send"
       timeout_ms: 20000
 
@@ -53,7 +57,11 @@ steps:
       text: "Send"
       role: button
       match: prefix
-    wait_for:
+
+  - id: wait_for_sent_toast
+    action: browser_wait_for
+    with:
+      tab_id: "{{compose.tab_id}}"
       text: "Message sent"
       timeout_ms: 15000
 

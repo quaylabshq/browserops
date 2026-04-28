@@ -1455,13 +1455,12 @@ const proceduresGet: ToolDef = {
       meta: {
         type: "object",
         additionalProperties: false,
-        required: ["version", "created", "last_verified", "success_count", "failure_count"] as const,
+        required: ["version", "created", "last_verified", "status"] as const,
         properties: {
           version: { type: "integer" },
           created: { type: "string" },
           last_verified: { type: "string" },
-          success_count: { type: "integer" },
-          failure_count: { type: "integer" },
+          status: { enum: ["draft", "trusted"] as const },
         },
       },
     },
@@ -1480,9 +1479,8 @@ const proceduresSave: ToolDef = {
     "Set overwrite: true to update an existing procedure. " +
     "Set bump_success: true on a save you've personally verified end-to-end " +
     "(procedure ran cleanly against the live UI in this same session) — that " +
-    "increments success_count and, on the first success, flips status from " +
-    "draft to trusted so procedures_search starts returning the entry. Do NOT " +
-    "set bump_success on an untested save. " +
+    "flips status from draft to trusted so procedures_search starts returning " +
+    "the entry by default. Do NOT set bump_success on an untested save. " +
     'REQUIRED ARGUMENTS: {"name": "<procedure name>", "yaml": "<full YAML body>"}.',
   inputSchema: {
     type: "object",
@@ -1497,12 +1495,10 @@ const proceduresSave: ToolDef = {
         type: "boolean",
         default: false,
         description:
-          "When true, increment the procedure's success_count by 1. On the " +
-          "first successful save (count goes 0 → 1) the status auto-promotes " +
-          "from draft to trusted, making the procedure discoverable via " +
-          "procedures_search. Use this only when you've actually verified " +
-          "the procedure works against the live UI — never on the initial " +
-          "untested write.",
+          "When true, mark the procedure as status:trusted so it shows up " +
+          "in procedures_search by default. Use this only when you've " +
+          "actually verified the procedure works against the live UI — " +
+          "never on the initial untested write.",
       },
     },
   },
