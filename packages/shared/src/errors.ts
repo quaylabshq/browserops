@@ -3,6 +3,7 @@
  */
 export const ERROR_CODES = [
   "TAB_NOT_FOUND",
+  "TAB_CLAIMED_BY_OTHER",
   "REF_STALE",
   "REF_NOT_FOUND",
   "TEXT_NOT_FOUND",
