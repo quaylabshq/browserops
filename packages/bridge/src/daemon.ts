@@ -3,18 +3,12 @@
  * browserops-daemon
  *
  * Long-lived per-user singleton. Owns the WebSocket to the extension
- * (in later phases) and accepts shim connections over a Unix socket so
- * multiple MCP clients can drive the same Chrome profile concurrently
- * without stomping on each other.
- *
- * This file is the daemon entry skeleton. Subsequent phases bolt on:
- *   • per-session McpBridgeServer instances (1.4)
- *   • shared WSBridge / Safety / procedures (later in 1.4)
- *   • per-session rate limiters (phase 2)
- *   • tab ownership + auto-claim (phase 3)
+ * and accepts shim connections over a Unix socket so multiple MCP
+ * clients can drive the same Chrome profile concurrently without
+ * stomping on each other.
  */
-import { Logger, type LogLevel } from "./logger.js";
 import { ENV } from "@browserops/shared";
+import { Logger, type LogLevel } from "./logger.js";
 import {
   acquirePidfile,
   DaemonSocketServer,
@@ -23,16 +17,26 @@ import {
 } from "./daemon-socket.js";
 import { SessionRegistry, type DaemonSession } from "./daemon-sessions.js";
 import { daemonPidfilePath, daemonSocketPath } from "./paths.js";
+import { bootDaemonRuntime, type DaemonRuntime } from "./daemon-runtime.js";
+import { McpBridgeServer } from "./mcp-server.js";
+import { SocketServerTransport } from "./socket-mcp-transport.js";
 
 const VERSION = "0.0.5";
+
+interface ActiveSession {
+  session: DaemonSession;
+  mcp: McpBridgeServer;
+  transport: SocketServerTransport;
+}
 
 async function main(): Promise<void> {
   installProcessErrorHandlers();
   process.env["BROWSEROPS_DAEMON_VERSION"] = VERSION;
+  applyDaemonCliFlags(process.argv.slice(2));
 
-  const logLevel = parseLogLevel(process.env[ENV.LOG_LEVEL]);
-  const logger = new Logger(logLevel);
-  await logger.write({ dir: "system", event: "daemon_boot", version: VERSION });
+  // Bootstrap logger early so pidfile/socket failures still get logged.
+  const bootLogger = new Logger(parseLogLevel(process.env[ENV.LOG_LEVEL]));
+  await bootLogger.write({ dir: "system", event: "daemon_boot", version: VERSION });
 
   const pidfile = daemonPidfilePath();
   const ok = await acquirePidfile(pidfile).catch((err: unknown) => {
@@ -47,9 +51,17 @@ async function main(): Promise<void> {
     process.exit(2);
   }
 
+  const runtime = await bootDaemonRuntime({ version: VERSION }).catch(async (err: unknown) => {
+    const msg = err instanceof Error ? (err.stack ?? err.message) : String(err);
+    process.stderr.write(`browserops-daemon: runtime boot failed: ${msg}\n`);
+    await releasePidfile(pidfile);
+    process.exit(1);
+  });
+
+  const active = new Map<string, ActiveSession>();
   const sessions = new SessionRegistry({
     onCreate: (s) => {
-      void logger.write({
+      void runtime.logger.write({
         dir: "system",
         event: "session_create",
         session_id: s.id,
@@ -58,7 +70,7 @@ async function main(): Promise<void> {
       });
     },
     onDestroy: (s) => {
-      void logger.write({
+      void runtime.logger.write({
         dir: "system",
         event: "session_destroy",
         session_id: s.id,
@@ -71,9 +83,33 @@ async function main(): Promise<void> {
   const socketPath = daemonSocketPath();
   const socket = new DaemonSocketServer({
     socketPath,
-    logger,
+    logger: runtime.logger,
     handlers: {
-      onSession: (conn, register) => attachStubSession(conn, register, sessions, logger),
+      onSession: async (conn, register) => {
+        const session = sessions.create(register.client_info);
+        try {
+          const entry = await attachMcpSession(conn, session, runtime);
+          active.set(session.id, entry);
+          conn.onClose(async (reason) => {
+            const e = active.get(session.id);
+            if (e) {
+              active.delete(session.id);
+              try { await e.mcp.stop(); } catch { /* ignore */ }
+            }
+            sessions.destroy(session.id);
+            void runtime.logger.write({
+              dir: "system",
+              event: "session_socket_closed",
+              session_id: session.id,
+              reason,
+            });
+          });
+          return session;
+        } catch (err) {
+          sessions.destroy(session.id);
+          throw err;
+        }
+      },
     },
   });
   await socket.start();
@@ -81,10 +117,17 @@ async function main(): Promise<void> {
 
   const shutdown = (reason: string): void => {
     void (async () => {
-      await logger.write({ dir: "system", event: "daemon_shutdown", reason });
+      await runtime.logger.write({ dir: "system", event: "daemon_shutdown", reason });
+      // Tear down active sessions first so MCP servers don't try to send
+      // responses through a half-closed socket.
+      for (const [, entry] of active) {
+        try { await entry.mcp.stop(); } catch { /* ignore */ }
+      }
+      active.clear();
       try { await socket.stop(); } catch { /* ignore */ }
+      try { await runtime.shutdown(); } catch { /* ignore */ }
       await releasePidfile(pidfile);
-      await logger.close();
+      await bootLogger.close();
       process.exit(0);
     })();
   };
@@ -93,40 +136,48 @@ async function main(): Promise<void> {
   process.on("SIGTERM", () => shutdown("SIGTERM"));
 }
 
-/**
- * Substep 1.2: registration only. We mint a session, ack, then echo
- * any mcp_in we receive back as mcp_out so end-to-end plumbing can be
- * smoke-tested before wiring the real MCP machinery in 1.4.
- */
-function attachStubSession(
+async function attachMcpSession(
   conn: ShimConnection,
-  register: { client_info?: { name: string; version: string } },
-  sessions: SessionRegistry,
-  logger: Logger,
-): DaemonSession {
-  const session = sessions.create(register.client_info);
-
-  conn.onMcpIn((data) => {
-    void logger.write({
-      dir: "system",
-      event: "stub_mcp_in",
-      session_id: session.id,
-      bytes: data.length,
-    });
-    conn.send({ type: "mcp_out", data });
+  session: DaemonSession,
+  runtime: DaemonRuntime,
+): Promise<ActiveSession> {
+  const transport = new SocketServerTransport(conn, session.id);
+  const mcp = new McpBridgeServer({
+    wsBridge: runtime.wsBridge,
+    rateLimiter: runtime.sharedRateLimiter,
+    safety: runtime.safety,
+    tabs: runtime.tabs,
+    logger: runtime.logger,
+    version: runtime.version,
+    teachStore: runtime.teachStore,
+    enabledFeatures: runtime.enabledFeatures.current,
+    traceWriter: runtime.traceWriter,
+    gatedMatcher: runtime.gatedMatcher,
   });
-
-  conn.onClose((reason) => {
-    sessions.destroy(session.id);
-    void logger.write({
-      dir: "system",
-      event: "session_socket_closed",
-      session_id: session.id,
-      reason,
-    });
+  await mcp.start(transport);
+  void runtime.logger.write({
+    dir: "system",
+    event: "session_mcp_ready",
+    session_id: session.id,
   });
+  return { session, mcp, transport };
+}
 
-  return session;
+function applyDaemonCliFlags(argv: readonly string[]): void {
+  const approvalArg = argv.find((a) => a.startsWith("--approval="));
+  if (approvalArg) {
+    const mode = approvalArg.slice("--approval=".length);
+    if (mode === "auto" || mode === "gate") {
+      process.env[ENV.APPROVAL] = mode;
+    }
+  }
+  if (argv.includes("--trace")) {
+    process.env[ENV.TRACE] = "1";
+  }
+  const traceDirArg = argv.find((a) => a.startsWith("--trace-dir="));
+  if (traceDirArg) {
+    process.env[ENV.TRACE_DIR] = traceDirArg.slice("--trace-dir=".length);
+  }
 }
 
 function parseLogLevel(v: string | undefined): LogLevel {
