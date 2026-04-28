@@ -13,7 +13,12 @@
  * extension router dispatch) cover everything else.
  */
 
-export const FEATURES = ["teach", "procedures", "gated-domains"] as const;
+export const FEATURES = [
+  "teach",
+  "procedures",
+  "gated-domains",
+  "autoteach",
+] as const;
 
 export type FeatureName = (typeof FEATURES)[number];
 
@@ -53,6 +58,12 @@ export const FEATURE_METADATA: Record<FeatureName, FeatureMetadata> = {
       "Auto-attach CDP and bias the agent toward browser_execute_js on a curated list of rich-editor / SPA domains (Gmail, Slack, Notion, Linear, Discord, …). Extend the list via ~/.browserops/gated-domains.json.",
     stability: "experimental",
     default: true,
+  },
+  autoteach: {
+    description:
+      "Auto-teach — bootstrap a procedure from one user demonstration, then iteratively replay-and-optimize with one change per run until convergence. Requires the procedures and teach features to also be enabled when the loop is in demo mode.",
+    stability: "experimental",
+    default: false,
   },
 };
 
