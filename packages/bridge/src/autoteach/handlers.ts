@@ -42,6 +42,9 @@ import type { AutoTeachBindings } from "./bindings.js";
 import { distill } from "./distiller.js";
 import { computeConvergence, pickNextOptimization } from "./convergence.js";
 import { checkVariance } from "./variance-gate.js";
+import { teachEventsToTraceRecords } from "./teach-to-trace.js";
+import type { TeachSessionStore } from "../teach/session-store.js";
+import type { TeachEvent } from "@browserops/shared";
 
 const TEACH_CALL_TIMEOUT_MS = 10_000;
 
@@ -50,6 +53,14 @@ export interface AutoteachHandlerDeps {
   store: AutoTeachStore;
   bindings: AutoTeachBindings;
   tabs: TabRegistry;
+  /**
+   * Read access to the teach-mode session store so demo-mode distill
+   * can fall back to teach events when the autoteach trace is empty
+   * (the user-driven case for run 0). Optional so tests + the legacy
+   * bridge can omit it; when unset, demo distill works only if the
+   * agent dispatched browser_* calls itself.
+   */
+  teachStore?: TeachSessionStore;
   /** Daemon-managed MCP session_id of the caller; empty for legacy bridge. */
   mcpSessionId: string;
   /** Read at call time so feature toggles take effect without restart. */
@@ -66,7 +77,7 @@ export interface AutoteachHandlerDeps {
 export function buildAutoteachHandlers(
   deps: AutoteachHandlerDeps,
 ): Record<string, (raw: Record<string, unknown>) => Promise<unknown>> {
-  const { wsBridge, store, bindings, tabs, mcpSessionId, enabledFeatures, renameSession } = deps;
+  const { wsBridge, store, bindings, tabs, mcpSessionId, enabledFeatures, renameSession, teachStore } = deps;
 
   // ---------------------------------------------------------------------
   // start
@@ -257,7 +268,22 @@ export function buildAutoteachHandlers(
       raw["run_index"] !== undefined
         ? requireNonNegativeInt(raw, "run_index")
         : pickLatestRunIndexFromTrace(await store.readTrace(sessionId));
-    const records = await store.readTrace(sessionId, runIndex);
+    let records = await store.readTrace(sessionId, runIndex);
+    // Demo-mode fallback: in demo mode the user — not the agent — drives
+    // run 0, so trace.jsonl is empty. Synthesize trace records from the
+    // teach session events instead.
+    if (
+      records.length === 0 &&
+      runIndex === 0 &&
+      session.mode === "demo" &&
+      session.teach_session_id !== undefined &&
+      teachStore !== undefined
+    ) {
+      const events = await drainTeachEvents(teachStore, session.teach_session_id);
+      if (events.length > 0) {
+        records = teachEventsToTraceRecords(events, { runIndex });
+      }
+    }
     const result = distill(records, { goal: session.goal });
     const draftVersion = await store.writeDraft(sessionId, result.yaml);
     await store.update(sessionId, {
@@ -605,6 +631,21 @@ function pickLatestRunIndexFromTrace(
     if (r.run_index > max) max = r.run_index;
   }
   return max;
+}
+
+async function drainTeachEvents(
+  teachStore: TeachSessionStore,
+  teachSessionId: string,
+): Promise<TeachEvent[]> {
+  const events: TeachEvent[] = [];
+  let sinceSeq = 0;
+  for (;;) {
+    const chunk = await teachStore.observe(teachSessionId, sinceSeq, 0, 500);
+    if (chunk.events.length === 0) break;
+    events.push(...chunk.events);
+    sinceSeq = chunk.next_seq;
+  }
+  return events;
 }
 
 interface DraftSummary {
