@@ -13,7 +13,8 @@
  * Steps that don't address an element (browser_navigate, browser_press,
  * browser_screenshot, browser_read with no query) get no tier.
  */
-import type { IRStep, SelectorTier } from "./distiller-ir.js";
+import type { SelectorTier } from "@browserops/shared";
+import type { IRStep } from "./distiller-ir.js";
 
 const ID_RE = /(^|\s|\[|>)#[a-zA-Z][\w-]*\b/;
 const TESTID_RE = /\[data-testid[~|^$*]?=/i;

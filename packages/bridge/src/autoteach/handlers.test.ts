@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WSBridgeLike } from "../mcp-server.js";
+import { TabRegistry } from "../tab-registry.js";
 import { AutoTeachStore } from "./store.js";
 import { AutoTeachBindings } from "./bindings.js";
 import { buildAutoteachHandlers } from "./handlers.js";
@@ -24,16 +25,22 @@ afterEach(async () => {
   await fs.rm(proceduresDir, { recursive: true, force: true });
 });
 
-function makeBridge(impl?: (method: string) => unknown): WSBridgeLike {
-  const callExtension = vi.fn(async (method: string) => {
-    if (impl) return impl(method);
+function makeBridge(opts?: {
+  impl?: (method: string, params: Record<string, unknown>) => unknown;
+  connected?: boolean;
+}): WSBridgeLike {
+  const callExtension = vi.fn(async (method: string, params: Record<string, unknown>) => {
+    if (opts?.impl) return opts.impl(method, params);
     if (method === "teach_start") {
       return { session_id: "ts_test", started_at: Date.now() };
+    }
+    if (method === "browser_new_tab") {
+      return { tab_id: "t_demo", url: typeof params["url"] === "string" ? params["url"] : "about:blank" };
     }
     return {};
   });
   return {
-    isConnected: () => true,
+    isConnected: () => opts?.connected !== false,
     callExtension: callExtension as unknown as WSBridgeLike["callExtension"],
   };
 }
@@ -42,23 +49,41 @@ function makeHandlers(opts?: {
   features?: ReadonlySet<"teach" | "procedures" | "autoteach" | "gated-domains">;
   bridge?: WSBridgeLike;
   mcpSessionId?: string;
+  renameSession?: (name: string) => string | undefined;
 }) {
   const store = new AutoTeachStore();
   const bindings = new AutoTeachBindings();
+  const tabs = new TabRegistry();
   const features =
     opts?.features ?? new Set(["procedures", "teach", "autoteach"] as const);
   const handlers = buildAutoteachHandlers({
     wsBridge: opts?.bridge ?? makeBridge(),
     store,
     bindings,
+    tabs,
     mcpSessionId: opts?.mcpSessionId ?? "",
     enabledFeatures: features,
+    ...(opts?.renameSession !== undefined ? { renameSession: opts.renameSession } : {}),
   });
-  return { store, bindings, handlers };
+  return { store, bindings, tabs, handlers };
 }
 
 describe("autoteach handlers — start", () => {
   it("opens an explore-mode session without calling teach_start", async () => {
+    const bridge = makeBridge();
+    const { handlers } = makeHandlers({ bridge });
+    const startResult = (await handlers["procedures_autoteach_start"]!({
+      goal: "scrape a wiki page",
+      mode: "explore",
+      consent: { budget: 5, side_effect_policy: "read_only_only" },
+    })) as { session_id: string; teach_session_id?: string; state: string };
+    expect(startResult.session_id).toMatch(/^at_/);
+    expect(startResult.teach_session_id).toBeUndefined();
+    expect(startResult.state).toBe("exploring");
+    expect(bridge.callExtension).not.toHaveBeenCalled();
+  });
+
+  it("opens an explore-mode session WITHOUT acquiring (legacy path)", async () => {
     const bridge = makeBridge();
     const { handlers } = makeHandlers({ bridge });
     const result = (await handlers["procedures_autoteach_start"]!({
@@ -70,6 +95,68 @@ describe("autoteach handlers — start", () => {
     expect(result.teach_session_id).toBeUndefined();
     expect(result.state).toBe("exploring");
     expect(bridge.callExtension).not.toHaveBeenCalled();
+  });
+
+  it("acquires + binds a tab when start_url is provided", async () => {
+    const bridge = makeBridge();
+    const { handlers, store, bindings } = makeHandlers({ bridge });
+    const result = (await handlers["procedures_autoteach_start"]!({
+      goal: "open slack",
+      mode: "explore",
+      consent: { budget: 1, side_effect_policy: "read_only_only" },
+      start_url: "https://app.slack.com",
+    })) as { session_id: string; tab_id?: string };
+    expect(result.tab_id).toBe("t_demo");
+    expect(bridge.callExtension).toHaveBeenCalledWith(
+      "browser_new_tab",
+      expect.objectContaining({ url: "https://app.slack.com", active: true }),
+      expect.any(Number),
+    );
+    const session = await store.get(result.session_id);
+    expect(session?.attached_tab_id).toBe("t_demo");
+    // run_index 0 is bound automatically — no need for explicit attach
+    expect(bindings.get("t_demo")?.run_index).toBe(0);
+  });
+
+  it("acquires a blank tab when acquire_tab=true without start_url", async () => {
+    const bridge = makeBridge();
+    const { handlers } = makeHandlers({ bridge });
+    const result = (await handlers["procedures_autoteach_start"]!({
+      goal: "x",
+      mode: "explore",
+      consent: { budget: 1, side_effect_policy: "read_only_only" },
+      acquire_tab: true,
+    })) as { tab_id?: string };
+    expect(result.tab_id).toBe("t_demo");
+  });
+
+  it("refuses tab acquisition when extension is disconnected", async () => {
+    const bridge = makeBridge({ connected: false });
+    const { handlers } = makeHandlers({ bridge });
+    await expect(
+      handlers["procedures_autoteach_start"]!({
+        goal: "x",
+        mode: "explore",
+        consent: { budget: 1, side_effect_policy: "read_only_only" },
+        start_url: "https://example.com",
+      }),
+    ).rejects.toThrow(/extension is not connected/);
+  });
+
+  it("applies session_name through renameSession when both are provided", async () => {
+    const renameSession = vi.fn((name: string) => name + "-canonical");
+    const { handlers } = makeHandlers({
+      mcpSessionId: "owner_a",
+      renameSession,
+    });
+    const result = (await handlers["procedures_autoteach_start"]!({
+      goal: "x",
+      mode: "explore",
+      consent: { budget: 1, side_effect_policy: "read_only_only" },
+      session_name: "auto-teach: send slack",
+    })) as { session_name?: string };
+    expect(renameSession).toHaveBeenCalledWith("auto-teach: send slack");
+    expect(result.session_name).toBe("auto-teach: send slack-canonical");
   });
 
   it("opens a demo-mode session and threads the teach_session_id", async () => {
