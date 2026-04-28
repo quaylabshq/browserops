@@ -28,8 +28,6 @@ import { ensureIndex } from "./procedures/index-builder.js";
 import { proceduresRoot } from "./procedures/paths.js";
 import { seedBundledProcedures } from "./procedures/seed.js";
 import { TeachSessionStore } from "./teach/session-store.js";
-import { AutoTeachStore } from "./autoteach/store.js";
-import { AutoTeachBindings } from "./autoteach/bindings.js";
 import { loadConfigFeatures } from "./config.js";
 
 export interface DaemonRuntime {
@@ -40,8 +38,6 @@ export interface DaemonRuntime {
   tabs: TabRegistry;
   safety: Safety;
   teachStore: TeachSessionStore;
-  autoteachStore: AutoTeachStore;
-  autoteachBindings: AutoTeachBindings;
   enabledFeatures: { current: Set<FeatureName> };
   riskyMatcher: RiskyDomainMatcher;
   gatedMatcher: GatedDomainMatcher;
@@ -88,8 +84,6 @@ export async function bootDaemonRuntime(opts: BootDaemonRuntimeOptions): Promise
   ]);
   const tabs = new TabRegistry();
   const teachStore = new TeachSessionStore();
-  const autoteachStore = new AutoTeachStore();
-  const autoteachBindings = new AutoTeachBindings();
 
   // Mutable hook the daemon overrides post-construction with a fan-out
   // across every active session's per-session RateLimiter.
@@ -219,8 +213,6 @@ export async function bootDaemonRuntime(opts: BootDaemonRuntimeOptions): Promise
     tabs,
     safety,
     teachStore,
-    autoteachStore,
-    autoteachBindings,
     enabledFeatures,
     riskyMatcher,
     gatedMatcher,
