@@ -134,6 +134,15 @@ export interface McpBridgeDeps {
    * session model.
    */
   sessionId: string;
+  /**
+   * Hook the daemon supplies for browser_set_session_name. Renames
+   * the session in the daemon's SessionRegistry and broadcasts
+   * session_renamed to the extension. Returns the canonical name the
+   * registry settled on (may differ from the requested name if a
+   * dedup suffix had to be appended). Undefined for the legacy
+   * bridge entry; the tool reports INVALID_STATE in that case.
+   */
+  renameSession?: (name: string) => string | undefined;
   /** Disk-backed teach-mode session store (procedures_teach_* handlers read/write here). */
   teachStore: TeachSessionStore;
   /**
@@ -445,7 +454,82 @@ export class McpBridgeServer {
       return result;
     }
 
-    // 4a. In-process procedure handlers — bypass extension WebSocket entirely.
+    // 4a. Session-management tools — handled entirely in-daemon, no
+    //      extension round trip.
+    if (name === "browser_set_session_name") {
+      const newName = typeof params["name"] === "string" ? (params["name"] as string).trim() : "";
+      if (!newName) {
+        const result = await this.reply(
+          id,
+          name,
+          toolError({ code: "INVALID_PARAMS", message: "name must be a non-empty string" }),
+        );
+        this.emitTrace(id, name, params, startMs, result);
+        return result;
+      }
+      if (this.deps.sessionId === "" || !this.deps.renameSession) {
+        const result = await this.reply(
+          id,
+          name,
+          toolError({
+            code: "INVALID_STATE",
+            message:
+              "browser_set_session_name is only available when running under the multi-session daemon",
+          }),
+        );
+        this.emitTrace(id, name, params, startMs, result);
+        return result;
+      }
+      const settled = this.deps.renameSession(newName) ?? newName;
+      const result = await this.reply(
+        id,
+        name,
+        toolOk({ session_id: this.deps.sessionId, name: settled }),
+      );
+      this.emitTrace(id, name, params, startMs, result);
+      return result;
+    }
+
+    if (name === "browser_release_tab") {
+      const tabId = typeof params["tab_id"] === "string" ? (params["tab_id"] as string) : "";
+      if (!tabId) {
+        const result = await this.reply(
+          id,
+          name,
+          toolError({ code: "INVALID_PARAMS", message: "tab_id is required" }),
+        );
+        this.emitTrace(id, name, params, startMs, result);
+        return result;
+      }
+      if (this.deps.sessionId === "") {
+        const result = await this.reply(
+          id,
+          name,
+          toolError({
+            code: "INVALID_STATE",
+            message:
+              "browser_release_tab is only available when running under the multi-session daemon",
+          }),
+        );
+        this.emitTrace(id, name, params, startMs, result);
+        return result;
+      }
+      const released = this.deps.tabs.release(tabId, this.deps.sessionId);
+      if (!released) {
+        const result = await this.reply(
+          id,
+          name,
+          toolError({ code: "TAB_NOT_FOUND", message: `tab ${tabId} not found` }),
+        );
+        this.emitTrace(id, name, params, startMs, result);
+        return result;
+      }
+      const result = await this.reply(id, name, toolOk({ released: true }));
+      this.emitTrace(id, name, params, startMs, result);
+      return result;
+    }
+
+    // 4b. In-process procedure handlers — bypass extension WebSocket entirely.
     if (name.startsWith("procedures_")) {
       const handler = this.procedureHandlers[name];
       if (handler) {
