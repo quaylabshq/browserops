@@ -14,7 +14,6 @@ import {
   DEFAULT_WS_PORT,
   ENV,
   type FeatureName,
-  type TeachEvent,
 } from "@browserops/shared";
 import { createTraceWriter, type TraceWriter } from "./trace-writer.js";
 import { Logger, type LogLevel } from "./logger.js";
@@ -27,7 +26,6 @@ import { WSBridge } from "./ws-server.js";
 import { ensureIndex } from "./procedures/index-builder.js";
 import { proceduresRoot } from "./procedures/paths.js";
 import { seedBundledProcedures } from "./procedures/seed.js";
-import { TeachSessionStore } from "./teach/session-store.js";
 import { loadConfigFeatures } from "./config.js";
 
 export interface DaemonRuntime {
@@ -37,7 +35,6 @@ export interface DaemonRuntime {
   wsBridge: WSBridge;
   tabs: TabRegistry;
   safety: Safety;
-  teachStore: TeachSessionStore;
   enabledFeatures: { current: Set<FeatureName> };
   riskyMatcher: RiskyDomainMatcher;
   gatedMatcher: GatedDomainMatcher;
@@ -83,7 +80,6 @@ export async function bootDaemonRuntime(opts: BootDaemonRuntimeOptions): Promise
     loadGatedDomainMatcher(),
   ]);
   const tabs = new TabRegistry();
-  const teachStore = new TeachSessionStore();
 
   // Mutable hook the daemon overrides post-construction with a fan-out
   // across every active session's per-session RateLimiter.
@@ -120,18 +116,6 @@ export async function bootDaemonRuntime(opts: BootDaemonRuntimeOptions): Promise
     bridgeVersion: opts.version,
     logger,
     onEvent: (name, payload) => {
-      if (name === "teach_event") {
-        if (!enabledFeatures.current.has("teach")) return;
-        const ev = payload as unknown as TeachEvent;
-        teachStore.appendEvent(ev).catch((err: unknown) => {
-          void logger.write({
-            dir: "system",
-            event: "teach_append_failed",
-            error: err instanceof Error ? err.message : String(err),
-          });
-        });
-        return;
-      }
       const minted = handleEvent(name, payload, tabs, hooks.onTabClosed, logger);
       if (minted) {
         wsBridge
@@ -212,7 +196,6 @@ export async function bootDaemonRuntime(opts: BootDaemonRuntimeOptions): Promise
     wsBridge,
     tabs,
     safety,
-    teachStore,
     enabledFeatures,
     riskyMatcher,
     gatedMatcher,

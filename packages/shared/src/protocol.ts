@@ -21,7 +21,7 @@ export interface Hello {
  * Bridge reply to Hello.
  *
  * `features` carries the bridge's currently-enabled gated feature names
- * (e.g. "teach", "procedures"). Extension stores them in
+ * (e.g. "procedures", "gated-domains"). Extension stores them in
  * chrome.storage.local.features and uses them to decide whether to
  * register optional handlers and surface optional UI.
  * `gated_domains` carries the resolved domain glob list when the

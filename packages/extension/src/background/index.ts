@@ -19,9 +19,7 @@ import { registerScreenshotHandler } from "./handlers/screenshot.js";
 import { registerReadHandler } from "./handlers/read.js";
 import { registerInputHandlers } from "./handlers/input.js";
 import { registerSafetyHandler, resolveSafetyDecision } from "./handlers/safety.js";
-import { registerTeachHandlers } from "./handlers/teach.js";
 import { registerSessionGroupHandlers } from "./handlers/session-groups.js";
-import { TeachRecorder } from "./teach-recorder.js";
 import { setGatedDomainPatterns } from "./gated-state.js";
 
 // Yellow icon variants — `?url` suffix forces vite to emit them as files
@@ -47,7 +45,7 @@ let wsClient: WsClient | null = null;
 
 // Live feature set sourced from chrome.storage.local.features. Populated on
 // SW boot and updated on every HelloAck so the router's gate sees the latest
-// state. Both teach and procedures default to OFF — explicit user opt-in.
+// state. The procedures feature defaults to OFF — explicit user opt-in.
 const enabledFeatures = new Set<FeatureName>();
 router.setFeatureSource(() => enabledFeatures);
 
@@ -91,23 +89,6 @@ registerReadHandler(router, { tabIdMap: tabIdToChromeId, refCache });
 registerInputHandlers(router, { tabIdMap: tabIdToChromeId, refCache, cdp, network });
 registerSafetyHandler(router, { restoreBadge: () => setBadge(currentConnected) });
 
-// TeachRecorder is always instantiated — its lifetime cost is one Map
-// allocation. The router's feature gate prevents teach_* methods from
-// reaching its handlers when teach is off; teach_event from the content
-// script can't fire either because the recorder.start() entry point is
-// gated. Keeping it always-instantiated avoids recreate-on-toggle
-// complexity and means a feature flip takes effect on next HelloAck
-// without restarting the SW.
-const teachRecorder = new TeachRecorder({
-  resolveTabId: (chromeTabId: number) => chromeIdToTabId.get(chromeTabId),
-  emit: (ev) => wsClient?.sendEvent("teach_event", ev),
-  onStatusChanged: () => {
-    currentRecording = teachRecorder.isActive();
-    applyBadge();
-    chrome.runtime.sendMessage({ type: "teach_status_changed" }).catch(() => {});
-  },
-});
-registerTeachHandlers(router, { recorder: teachRecorder });
 registerSessionGroupHandlers(router);
 
 router.register("assign_tab_id", async (params) => {
@@ -140,10 +121,6 @@ let currentDisabled = false;
 // gated mode via the popup checkbox. Source of truth is the popup-controlled
 // `requireApproval` session key (inverted) — see the storage listener below.
 let currentAutoApprove = true;
-// Teach mode capture state — when on, the badge shows REC regardless of
-// connection status. This is a privacy signal: the user must always know
-// when clicks/typing are being captured.
-let currentRecording = false;
 
 // The user's "Disable" intent is stored in chrome.storage.local so it persists
 // across both SW restarts and browser restarts. The extension stays off until
@@ -151,13 +128,6 @@ let currentRecording = false;
 const DISABLED_KEY = "disabled";
 
 function applyBadge(): void {
-  // Recording trumps every other badge state — the user must see capture is
-  // on, even if disabled or disconnected (capture works locally regardless).
-  if (currentRecording) {
-    chrome.action.setBadgeText({ text: "REC" }).catch(() => {});
-    chrome.action.setBadgeBackgroundColor({ color: "#c1121f" }).catch(() => {});
-    return;
-  }
   if (currentDisabled) {
     chrome.action.setBadgeText({ text: "—" }).catch(() => {});
     chrome.action.setBadgeBackgroundColor({ color: "#888888" }).catch(() => {});
@@ -306,7 +276,6 @@ chrome.tabs.onCreated.addListener((tab) => {
     index: tab.index,
     active: tab.active,
   });
-  void teachRecorder.maybeInject(tab.id);
 });
 
 chrome.tabs.onRemoved.addListener((chromeTabId) => {
@@ -344,17 +313,6 @@ chrome.webNavigation.onCommitted.addListener((d) => {
   if (tabId === undefined) return;
   refCache.invalidate(tabId);
   ctx.emitEvent("page_navigated", { tab_id: tabId, url: d.url, transition_type: d.transitionType });
-  // Teach mode: capture the navigation as its own event, then re-inject the
-  // capture script (the previous instance died with the page).
-  if (teachRecorder.isActive()) {
-    teachRecorder.onCapturedStep(
-      d.tabId,
-      d.url,
-      { kind: "navigate", url: d.url, transition: d.transitionType },
-      Date.now(),
-    );
-    void teachRecorder.maybeInject(d.tabId);
-  }
 });
 
 chrome.webNavigation.onHistoryStateUpdated.addListener((d) => {
@@ -405,36 +363,6 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
   if (typeof msg !== "object" || msg === null) return false;
   const m = msg as { kind?: unknown; type?: unknown };
   const tag = typeof m.type === "string" ? m.type : typeof m.kind === "string" ? m.kind : "";
-  if (tag === "teach_capture") {
-    const senderTabId = sender.tab?.id;
-    if (senderTabId === undefined) return false;
-    const mm = m as { step?: unknown; url?: unknown; ts?: unknown };
-    if (typeof mm.step !== "object" || mm.step === null) return false;
-    const url = typeof mm.url === "string" ? mm.url : "";
-    const ts = typeof mm.ts === "number" ? mm.ts : Date.now();
-    teachRecorder.onCapturedStep(
-      senderTabId,
-      url,
-      mm.step as Parameters<typeof teachRecorder.onCapturedStep>[2],
-      ts,
-    );
-    sendResponse({ ok: true });
-    return false;
-  }
-  // Popup-driven teach surface: only stop + status. Activation, markers,
-  // and narration are agent-driven through the procedures_teach_* MCP tools,
-  // which reach the recorder via the router (handlers/teach.ts).
-  if (tag === "teach_stop") {
-    void (async () => {
-      const r = await teachRecorder.stop();
-      sendResponse(r ?? { ok: false });
-    })();
-    return true;
-  }
-  if (tag === "teach_status") {
-    sendResponse(teachRecorder.status());
-    return false;
-  }
   if (tag === "kill_switch") {
     void (async () => {
       await setDisabled(true);
@@ -478,15 +406,6 @@ void (async () => {
     }
   });
   await loadFeaturesFromStorage();
-  await teachRecorder.rehydrate();
-  // If teach was disabled while a session was persisted to storage, stop
-  // the rehydrated session — otherwise the REC bar would be stuck showing
-  // without a working Stop button (the router gate would reject teach_stop).
-  if (!enabledFeatures.has("teach") && teachRecorder.isActive()) {
-    await teachRecorder.stop();
-  }
-  // Sync the recording flag if the SW was killed mid-session and revived.
-  currentRecording = teachRecorder.isActive();
   applyBadge();
   await startClient();
 })();
