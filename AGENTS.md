@@ -40,6 +40,7 @@ user's real Chrome tabs (with existing logins intact)
 | Rate limiter + risky-action gate | `packages/bridge/src/rate-limiter.ts` + `packages/bridge/src/safety.ts` |
 | Seed procedures to copy and learn from | `examples/procedures/` |
 | Teach mode (recorder, content script, session store, MCP tools) | `packages/extension/src/background/teach-recorder.ts` + `packages/extension/src/content/capture-events.ts` + `packages/bridge/src/teach/` |
+| Auto-teach (handlers, distiller pipeline, convergence, variance gate, trace bindings) | `packages/bridge/src/autoteach/` (`handlers.ts`, `distiller.ts` + `stage-*.ts`, `convergence.ts`, `variance-gate.ts`, `bindings.ts`, `store.ts`) |
 | User-facing setup (registration for every major MCP client) | `README.md` |
 
 ## browserops orchestration rules
@@ -181,6 +182,30 @@ Redacted typing arrives with `value: ""`, `redacted: true`, and a `redaction_rea
 ### Sessions live on disk
 
 `~/browserops/teach-sessions/<session_id>.jsonl` (events) + `<session_id>.meta.json` (sidecar). Override with `BROWSEROPS_TEACH_DIR`. Use `procedures_teach_list` to find sessions started before you had context — useful if the user starts demonstrating from the popup or via another agent before naming the goal.
+
+## Auto-teach
+
+> **Experimental — off by default.** The `procedures_autoteach_*` family only appears when the user has run `browserops feature enable autoteach`. If those tools aren't in your catalogue, don't suggest auto-teach — there is nothing you can call. Auto-teach also requires `procedures` enabled (it saves into the procedure store); demo mode also requires `teach`.
+
+Auto-teach is the procedure-bootstrapping loop. The user asks the agent to "learn to do X"; the agent captures one demonstration (or, when the caller opts in, explores cold), distills it into a draft, then iteratively replays-and-optimizes the draft applying ONE optimization per run until the metrics stop improving. The bridge owns the persistent state, distiller, convergence detector, and variance gate; the agent owns the loop body and the user-facing consent flow.
+
+### When to suggest it
+
+If `procedures_search` returns nothing relevant for a non-trivial flow AND the user signals they want to remember the flow ("learn to do X", "figure this out and save it", "auto-teach"), invoke the **auto-teach skill** (`skills/auto-teach.md` in this repo, mirrored to `~/.claude/skills/auto-teach/SKILL.md`). Don't try to drive the loop from this file alone — the skill is the canonical guide for the consent script, the per-run replay logic, the side-effect policies, and the failure-mode → fix-it map.
+
+If `procedures_search` DOES return a trusted match at score >= 0.5, point the user at it instead. Auto-teach is for new flows.
+
+### The 9 tools
+
+`procedures_autoteach_start`, `_attach`, `_record_trace`, `_distill`, `_record_run`, `_status`, `_finalize`, `_list`, `_resume`. All gated behind `autoteach`. The skill covers what each one does in the loop; the schemas are in `packages/shared/src/tools.ts`.
+
+### Side-effect handling
+
+The distiller flags leaves whose steps exercise destructive surfaces (Send/Pay/Post/Delete buttons, confirmation URLs after a network burst). Three policies the user picks at consent: `use_dummies`, `pause_at_destructive`, `read_only_only`. Inputs feeding destructive surfaces get `destructive: true` on the saved procedure — future callers can require a dummy substitute or refuse. Replay during the loop **must** use the dummy values from `consent.dummies`; running 9 replays of "send real email to real person" would be a bug.
+
+### Sessions live on disk
+
+`~/browserops/autoteach-sessions/<session_id>/` holds: `session.json` (metadata + consent), `trace.jsonl` (per-run browser_* records), `runs.jsonl` (per-run metrics + optimization tried), `drafts/v<N>.yaml` (distiller output at each iteration). Override with `BROWSEROPS_AUTOTEACH_DIR`. `procedures_autoteach_list` enumerates sessions for the calling MCP owner; `procedures_autoteach_resume` reloads one across conversations.
 
 ## Procedure authoring rules
 
