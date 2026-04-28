@@ -19,6 +19,9 @@ export type ClaimResult =
   | { ok: false; status: "owned_by_other"; owner_session_id: string }
   | { ok: false; status: "unknown" };
 
+export type TabClaimListener = (record: TabRecord, session_id: string) => void;
+export type TabReleaseListener = (record: TabRecord) => void;
+
 /**
  * Mints opaque tab ids (t_<base36-monotonic>), tracks tab metadata
  * from extension events, and enforces per-session ownership.
@@ -40,6 +43,20 @@ export class TabRegistry {
   private seq = 0;
   private readonly byTabId = new Map<string, TabRecord>();
   private readonly byChromeId = new Map<number, string>();
+  private readonly claimListeners: TabClaimListener[] = [];
+  private readonly releaseListeners: TabReleaseListener[] = [];
+
+  /**
+   * Subscribe to ownership transitions. The daemon uses these hooks
+   * to broadcast claim_tab / release_tab to the extension so Chrome
+   * tab groups stay in sync with the registry's ownership model.
+   */
+  onClaim(listener: TabClaimListener): void {
+    this.claimListeners.push(listener);
+  }
+  onRelease(listener: TabReleaseListener): void {
+    this.releaseListeners.push(listener);
+  }
 
   mint(chromeTabId: number, partial: Omit<TabRecord, "tab_id" | "chrome_tab_id" | "owner_session_id">): TabRecord {
     const existing = this.byChromeId.get(chromeTabId);
@@ -164,6 +181,9 @@ export class TabRegistry {
       return { ok: false, status: "owned_by_other", owner_session_id: rec.owner_session_id };
     }
     rec.owner_session_id = session_id;
+    for (const l of this.claimListeners) {
+      try { l(rec, session_id); } catch { /* listeners must not break the registry */ }
+    }
     return { ok: true, status: "claimed", record: rec };
   }
 
@@ -177,6 +197,9 @@ export class TabRegistry {
     if (!rec) return undefined;
     if (rec.owner_session_id !== session_id) return undefined;
     rec.owner_session_id = null;
+    for (const l of this.releaseListeners) {
+      try { l(rec); } catch { /* ignore */ }
+    }
     return rec;
   }
 
@@ -192,6 +215,11 @@ export class TabRegistry {
       if (rec.owner_session_id === session_id) {
         rec.owner_session_id = null;
         released.push(rec);
+      }
+    }
+    for (const rec of released) {
+      for (const l of this.releaseListeners) {
+        try { l(rec); } catch { /* ignore */ }
       }
     }
     return released;

@@ -49,6 +49,13 @@ export interface DaemonRuntime {
    * the runtime is usable from tests without rate-limit accounting.
    */
   onTabClosed: (tabId: string) => void;
+  /**
+   * Register a callback to run every time the extension transitions
+   * from disconnected → connected. The daemon uses this to replay
+   * session_started + claim_tab so the extension's tab-groups view
+   * recovers cold starts and reconnects.
+   */
+  onExtensionReady(handler: () => void): void;
   shutdown(): Promise<void>;
 }
 
@@ -81,6 +88,8 @@ export async function bootDaemonRuntime(opts: BootDaemonRuntimeOptions): Promise
   // Mutable hook the daemon overrides post-construction with a fan-out
   // across every active session's per-session RateLimiter.
   const hooks: { onTabClosed: (tabId: string) => void } = { onTabClosed: () => { /* noop */ } };
+  const extensionReadyListeners: Array<() => void> = [];
+  let lastExtensionConnected = false;
 
   const enabledFeatures: { current: Set<FeatureName> } = { current: new Set() };
   try {
@@ -141,8 +150,14 @@ export async function bootDaemonRuntime(opts: BootDaemonRuntimeOptions): Promise
           );
       }
     },
-    onConnectionChange: () => {
-      // Per-session fan-out lands in phase 3.
+    onConnectionChange: (connected) => {
+      const wasConnected = lastExtensionConnected;
+      lastExtensionConnected = connected;
+      if (connected && !wasConnected) {
+        for (const fn of extensionReadyListeners) {
+          try { fn(); } catch { /* ignore */ }
+        }
+      }
     },
     getFeatures: () => [...enabledFeatures.current],
     getGatedDomains: () =>
@@ -207,6 +222,15 @@ export async function bootDaemonRuntime(opts: BootDaemonRuntimeOptions): Promise
     },
     set onTabClosed(handler: (tabId: string) => void) {
       hooks.onTabClosed = handler;
+    },
+    onExtensionReady(handler: () => void): void {
+      extensionReadyListeners.push(handler);
+      // If the extension is already connected by the time the daemon
+      // wires up its listeners (legitimate at boot when the bridge
+      // resumes a previously-active extension), fire immediately.
+      if (lastExtensionConnected) {
+        try { handler(); } catch { /* ignore */ }
+      }
     },
     shutdown: async () => {
       try { await wsBridge.stop(); } catch { /* ignore */ }

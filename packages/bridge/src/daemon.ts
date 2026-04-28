@@ -75,11 +75,34 @@ async function main(): Promise<void> {
     }
   };
 
+  const broadcast = (method: string, params: Record<string, unknown>): void => {
+    if (!runtime.wsBridge.isConnected()) return;
+    runtime.wsBridge
+      .callExtension(method, params, 3_000)
+      .catch((err: unknown) => {
+        // Extension may pre-date the session-group handlers — log and
+        // keep going; nothing in the daemon's correctness depends on
+        // the broadcast succeeding.
+        void runtime.logger.write({
+          dir: "system",
+          event: "session_broadcast_failed",
+          method,
+          params,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+  };
+
   const sessions = new SessionRegistry({
     onCreate: (s) => {
       void runtime.logger.write({
         dir: "system",
         event: "session_create",
+        session_id: s.id,
+        name: s.name,
+        color: s.color,
+      });
+      broadcast("session_started", {
         session_id: s.id,
         name: s.name,
         color: s.color,
@@ -92,9 +115,43 @@ async function main(): Promise<void> {
         session_id: s.id,
         name: s.name,
       });
+      broadcast("session_ended", { session_id: s.id });
     },
     onWarn: (m) => process.stderr.write(`[browserops-daemon] ${m}\n`),
   });
+
+  // Mirror tab-ownership transitions into Chrome tab groups.
+  runtime.tabs.onClaim((rec, sessionId) => {
+    broadcast("claim_tab", {
+      session_id: sessionId,
+      chrome_tab_id: rec.chrome_tab_id,
+    });
+  });
+  runtime.tabs.onRelease((rec) => {
+    broadcast("release_tab", {
+      chrome_tab_id: rec.chrome_tab_id,
+    });
+  });
+
+  // When the extension reconnects (cold start, restart, reload), replay
+  // session_started + claim_tab so its tab-groups view matches the
+  // daemon's ownership model. The legacy WSBridge already exposes
+  // onConnectionChange via the bootDaemonRuntime callback path; we
+  // hook it here by wrapping the existing pair-broadcast.
+  const replaySessionState = (): void => {
+    for (const s of sessions.list()) {
+      broadcast("session_started", { session_id: s.id, name: s.name, color: s.color });
+    }
+    for (const rec of runtime.tabs.list()) {
+      if (rec.owner_session_id !== null) {
+        broadcast("claim_tab", {
+          session_id: rec.owner_session_id,
+          chrome_tab_id: rec.chrome_tab_id,
+        });
+      }
+    }
+  };
+  runtime.onExtensionReady(replaySessionState);
 
   const socketPath = daemonSocketPath();
   const socket = new DaemonSocketServer({
@@ -112,6 +169,11 @@ async function main(): Promise<void> {
               active.delete(session.id);
               try { await e.mcp.stop(); } catch { /* ignore */ }
             }
+            // Orphan this session's claimed tabs back to user-owned
+            // BEFORE destroying the session. The release_tab broadcast
+            // resets each tab's Chrome group; the subsequent
+            // session_ended cleans up the now-empty group.
+            runtime.tabs.releaseAll(session.id);
             sessions.destroy(session.id);
             void runtime.logger.write({
               dir: "system",
