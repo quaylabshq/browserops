@@ -66,11 +66,11 @@ browserops doctor            # diagnose Node / port / token / extension / client
 browserops upgrade           # bump the global install + refresh extension files
 
 browserops feature list                # show experimental features and their state
-browserops feature enable <name>       # opt into procedures or teach
+browserops feature enable <name>       # opt into procedures, teach, or autoteach
 browserops feature disable <name>      # opt out
 ```
 
-Both `procedures` and `teach` ship as **experimental** features — off by default. With both off, your agent gets the 26 always-on `browser_*` tools and nothing else: minimum token overhead for users who only want basic browser automation. Opt in with `browserops feature enable procedures` (or `teach`) and run `browserops restart` so the daemon broadcasts the new feature set to the extension.
+`procedures`, `teach`, and `autoteach` all ship as **experimental** features — off by default. With everything off, your agent gets the 26 always-on `browser_*` tools and nothing else: minimum token overhead for users who only want basic browser automation. Opt in with `browserops feature enable procedures` (or `teach`, or `autoteach`) and run `browserops restart` so the daemon broadcasts the new feature set to the extension. Auto-teach requires `procedures` (it saves into the procedure store); demo-mode auto-teach also requires `teach`.
 
 ### Per-project rules (optional)
 
@@ -285,6 +285,18 @@ Teach mode lets you demonstrate a flow once in your real browser while your agen
 
 **Storage.** Each session is two files in `~/browserops/teach-sessions/`: `<session_id>.jsonl` (one event per line) and `<session_id>.meta.json` (sidecar with start/stop times and event count). Override the location with `BROWSEROPS_TEACH_DIR`.
 
+## Auto-teach
+
+> **Experimental — off by default.** Enable with `browserops feature enable autoteach` (then `browserops restart`). Auto-teach also requires `procedures` enabled; demo mode (the default) additionally requires `teach`. Available tools: nine `procedures_autoteach_*` operations behind the `autoteach` flag.
+
+Auto-teach turns one user demonstration (or one cold-start exploration) into a procedure that the agent then iteratively replays-and-optimizes until the metrics stop improving. Optimization is a discrete gradient descent over the draft: each replay tries one change (cache a fragile selector, swap a click to a faster path, tighten a wait_for, split a leaf), keeps it if the run improved, reverts if it regressed.
+
+**How to use it.** Tell your agent *"learn to do X"* — for example *"learn to send a Slack DM to dummy_user"*. The agent invokes the auto-teach skill, asks four pre-flight questions in one message (goal, demo-vs-explore mode, side-effect policy, run budget), kicks off a teach recording (in demo mode) or starts driving the browser itself (in explore mode), distills the run, and then replays it 5–10 times under one optimization at a time. When two consecutive runs are noop, the loop converges and promotes the leaves + composite into the procedures store as trusted.
+
+**Side-effect handling.** The distiller flags any leaf that exercises a destructive surface (button text matching `Send|Pay|Post|Delete|Transfer`, navigation to `/confirm`/`/success` URLs after a network burst). Three policies the user picks during consent: `use_dummies` (replay with safe substitutes — e.g. dummy email recipient), `pause_at_destructive` (optimize the leading non-destructive leaves only; the destructive leaf runs once at finalize), `read_only_only` (refuse the session if any leaf is destructive). Inputs feeding destructive surfaces get marked `destructive: true` on the saved procedure so future callers can require dummies.
+
+**Storage.** Each session is a directory under `~/browserops/autoteach-sessions/<session_id>/`: `session.json` (metadata + consent), `trace.jsonl` (per-run browser_* records), `runs.jsonl` (per-run metrics + optimization tried), `drafts/v<N>.yaml` (distiller output at iteration N). Override the root with `BROWSEROPS_AUTOTEACH_DIR`.
+
 ## Gated domains
 
 > **Experimental — on by default.** Disable with `browserops feature disable gated-domains` (then `browserops restart`) if you'd rather avoid Chrome's "controlled by automation" banner on the listed domains.
@@ -350,6 +362,7 @@ Currently ~220 unit tests total across shared (envelope guards, tool catalogue i
 | `BROWSEROPS_APPROVAL` | `auto` | `auto` (default) or `gate`; controls approval mode for risky actions |
 | `BROWSEROPS_TRACE` | unset | `=1` writes trace events including auto-approvals to `~/.browserops/trace.jsonl` |
 | `BROWSEROPS_TEACH_DIR` | `~/browserops/teach-sessions` | Override the directory where teach-mode sessions are recorded |
+| `BROWSEROPS_AUTOTEACH_DIR` | `~/browserops/autoteach-sessions` | Override the directory where auto-teach sessions are persisted |
 | `BROWSEROPS_FEATURES` | unset | Comma-separated experimental feature names to force-enable (e.g. `teach,procedures`). Overrides `~/.browserops/config.json` when explicitly set; an empty string disables everything. Persistent toggles use `browserops feature enable/disable <name>` instead. |
 
 ## Troubleshooting
