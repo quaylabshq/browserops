@@ -1422,6 +1422,9 @@ const proceduresSearch: ToolDef = {
     "Returns ranked metadata-only matches; retrieve the YAML body with procedures_get. " +
     "By default only status:trusted procedures are returned — pass include_drafts:true to also see draft entries " +
     "(authored but not yet success-confirmed). " +
+    "Draft fallback: when include_drafts is false AND the trusted result set is empty, draft hits are surfaced " +
+    "under a separate `drafts` key so they aren't silently missed. Treat them as suggestions, not trusted hits — " +
+    "verify against the live UI before relying on them. " +
     'REQUIRED ARGUMENTS: {"query": "<search tokens>"}. Example: {"query": "github sign in"}.',
   inputSchema: {
     type: "object",
@@ -1457,6 +1460,7 @@ const proceduresSearch: ToolDef = {
       matches: { type: "array", items: { type: "object" } },
       total: { type: "integer" },
       truncated: { type: "boolean" },
+      drafts: { type: "array", items: { type: "object" } },
     },
   },
   action_weight: 0,
