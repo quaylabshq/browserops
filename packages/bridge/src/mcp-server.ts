@@ -126,6 +126,14 @@ export interface McpBridgeDeps {
   tabs: TabRegistry;
   logger: Logger;
   version: string;
+  /**
+   * Identifier of the daemon-managed session this MCP server belongs to.
+   * Phases 3+ thread it through dispatch so tools can resolve tab
+   * ownership, teach-session attribution, and per-session approval
+   * state. Empty string for the legacy bridge entry, which has no
+   * session model.
+   */
+  sessionId: string;
   /** Disk-backed teach-mode session store (procedures_teach_* handlers read/write here). */
   teachStore: TeachSessionStore;
   /**

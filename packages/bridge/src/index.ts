@@ -167,6 +167,7 @@ async function main(): Promise<void> {
     tabs,
     logger,
     version: VERSION,
+    sessionId: "",
     teachStore,
     enabledFeatures: featuresHolder.current,
     traceWriter,

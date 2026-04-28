@@ -149,6 +149,7 @@ async function attachMcpSession(
     tabs: runtime.tabs,
     logger: runtime.logger,
     version: runtime.version,
+    sessionId: session.id,
     teachStore: runtime.teachStore,
     enabledFeatures: runtime.enabledFeatures.current,
     traceWriter: runtime.traceWriter,
