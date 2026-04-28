@@ -1420,6 +1420,8 @@ const proceduresSearch: ToolDef = {
   description:
     "Full-text search over the procedure catalogue using pre-tokenized index fields. " +
     "Returns ranked metadata-only matches; retrieve the YAML body with procedures_get. " +
+    "By default only status:trusted procedures are returned — pass include_drafts:true to also see draft entries " +
+    "(authored but not yet success-confirmed). " +
     'REQUIRED ARGUMENTS: {"query": "<search tokens>"}. Example: {"query": "github sign in"}.',
   inputSchema: {
     type: "object",
@@ -1435,6 +1437,15 @@ const proceduresSearch: ToolDef = {
         type: "boolean",
         default: false,
         description: "When true, also scores tokens from step bodies (slower).",
+      },
+      include_drafts: {
+        type: "boolean",
+        default: false,
+        description:
+          "When true, also returns procedures with status:draft (authored via " +
+          "procedures_save but not yet promoted to trusted by a successful run). " +
+          "Off by default so search results stay scoped to procedures that have " +
+          "been verified at least once.",
       },
     },
   },
