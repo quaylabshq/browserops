@@ -28,6 +28,7 @@ import { removeDeadReads } from "./stage-dead-reads.js";
 import { liftBinds } from "./stage-binds.js";
 import { tuneWaits } from "./stage-waits.js";
 import { splitLeaves } from "./stage-leaves.js";
+import { assignTiers } from "./stage-tiers.js";
 
 export interface DistillOptions {
   goal: string;
@@ -59,14 +60,15 @@ export function distill(
   const ir2 = removeDeadReads(ir1);
   const lifted = liftBinds(ir2);
   const ir3 = tuneWaits(lifted.steps);
-  const leaves = splitLeaves(ir3);
+  const ir4 = assignTiers(ir3);
+  const leaves = splitLeaves(ir4);
 
-  const baseName = deriveName(opts.goal, ir3);
-  const domain = deriveDomain(ir3);
+  const baseName = deriveName(opts.goal, ir4);
+  const domain = deriveDomain(ir4);
   const description = opts.goal.slice(0, 200);
 
   const validation_errors: string[] = [];
-  if (ir3.length === 0) {
+  if (ir4.length === 0) {
     validation_errors.push(
       "no browser_* calls in trace after normalization — distiller emitted a placeholder leaf",
     );
@@ -89,7 +91,7 @@ export function distill(
       allInputs: lifted.inputs,
     });
     return {
-      yaml: headerComment(opts.goal, ir0.length, ir3.length) + YAML.stringify(draft.proc, { lineWidth: 0 }),
+      yaml: headerComment(opts.goal, ir0.length, ir4.length) + YAML.stringify(draft.proc, { lineWidth: 0 }),
       leaves: [draft.summary],
       composite_name: null,
       validation_errors: draft.validation_errors,
@@ -125,7 +127,7 @@ export function distill(
     YAML.stringify(compositeProc, { lineWidth: 0 }),
   ];
   const yaml =
-    headerComment(opts.goal, ir0.length, ir3.length) +
+    headerComment(opts.goal, ir0.length, ir4.length) +
     docs.join("---\n");
 
   return {
@@ -332,6 +334,9 @@ function emitSteps(ir: IRStep[]): ActionStepDef[] {
     if (s.page_effect && hasObservableEffect(s.page_effect)) {
       step.expected_effect = { dom: { any: true } };
     }
+    if (s.selector_tier !== undefined) {
+      step.selector_tier = s.selector_tier;
+    }
     steps.push(step);
   }
   return steps;
@@ -446,13 +451,17 @@ function classifySideEffects(steps: IRStep[]): SideEffectClass[] {
 }
 
 function scoreFragility(steps: IRStep[]): ProcedureFragility {
+  let worst: ProcedureFragility = "low";
   for (const s of steps) {
-    if (s.method !== "browser_execute_js") continue;
-    const code = typeof s.params["code"] === "string" ? (s.params["code"] as string) : "";
-    if (/nth-child|::nth|@xpath|querySelectorAll/.test(code)) return "high";
-    return "medium";
+    const tier = s.selector_tier;
+    if (tier === undefined) continue;
+    if (tier === "xpath") return "high";
+    if (tier === "css" || tier === "text") {
+      if (worst === "low") worst = "medium";
+    }
+    // id / testid / role_name leave worst at low
   }
-  return "low";
+  return worst;
 }
 
 function headerComment(goal: string, sourceCount: number, keptCount: number): string {

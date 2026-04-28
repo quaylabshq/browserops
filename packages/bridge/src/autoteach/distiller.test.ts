@@ -7,6 +7,7 @@ import { removeDeadReads } from "./stage-dead-reads.js";
 import { liftBinds } from "./stage-binds.js";
 import { tuneWaits } from "./stage-waits.js";
 import { splitLeaves } from "./stage-leaves.js";
+import { assignTiers, tierFromSelector } from "./stage-tiers.js";
 
 function pe(overrides: Partial<{
   added: number;
@@ -329,6 +330,64 @@ describe("splitLeaves", () => {
     const leaves = splitLeaves(ir);
     expect(leaves).toHaveLength(2);
     expect(leaves[1]?.reason).toBe("network_burst");
+  });
+});
+
+describe("tierFromSelector", () => {
+  it("classifies #id as 'id'", () => {
+    expect(tierFromSelector("#main-btn")).toBe("id");
+  });
+  it("classifies [data-testid=foo] as 'testid'", () => {
+    expect(tierFromSelector("[data-testid=submit]")).toBe("testid");
+  });
+  it("classifies xpath expressions as 'xpath'", () => {
+    expect(tierFromSelector("//button[@type='submit']")).toBe("xpath");
+  });
+  it("classifies :nth-child as 'xpath' (positional)", () => {
+    expect(tierFromSelector("div:nth-child(3) > .btn")).toBe("xpath");
+  });
+  it("classifies generic class selectors as 'css'", () => {
+    expect(tierFromSelector(".primary-action")).toBe("css");
+  });
+});
+
+describe("assignTiers", () => {
+  it("tiers click_by_text by role+name vs text-only", () => {
+    const ir = normalize([
+      rec(1, "browser_click_by_text", { text: "Login" }),
+      rec(2, "browser_click_by_text", { text: "Login", role: "button" }),
+    ]);
+    const tiered = assignTiers(ir);
+    expect(tiered[0]?.selector_tier).toBe("text");
+    expect(tiered[1]?.selector_tier).toBe("role_name");
+  });
+
+  it("tiers ref-based clicks as role_name (refs come from a11y resolution)", () => {
+    const ir = normalize([rec(1, "browser_click", { ref: 7 })]);
+    const tiered = assignTiers(ir);
+    expect(tiered[0]?.selector_tier).toBe("role_name");
+  });
+
+  it("tiers execute_js with getElementById as 'id'", () => {
+    const ir = normalize([
+      rec(1, "browser_execute_js", { code: "document.getElementById('login').click()" }),
+    ]);
+    const tiered = assignTiers(ir);
+    expect(tiered[0]?.selector_tier).toBe("id");
+  });
+
+  it("tiers execute_js with xpath-like patterns as 'xpath'", () => {
+    const ir = normalize([
+      rec(1, "browser_execute_js", { code: "document.querySelector('div:nth-child(3)').click()" }),
+    ]);
+    const tiered = assignTiers(ir);
+    expect(tiered[0]?.selector_tier).toBe("xpath");
+  });
+
+  it("does not assign a tier to navigation steps", () => {
+    const ir = normalize([rec(1, "browser_navigate", { url: "https://example.com" })]);
+    const tiered = assignTiers(ir);
+    expect(tiered[0]?.selector_tier).toBeUndefined();
   });
 });
 
