@@ -19,6 +19,8 @@ import type { Logger } from "./logger.js";
 import type { TraceWriter } from "./trace-writer.js";
 import type { TraceEvent } from "@browserops/shared";
 import { TeachSessionStore } from "./teach/session-store.js";
+import { AutoTeachStore } from "./autoteach/store.js";
+import { AutoTeachBindings } from "./autoteach/bindings.js";
 
 // ---------------------------------------------------------------------------
 // Minimal mock factory helpers
@@ -90,6 +92,8 @@ function makeDeps(overrides: Partial<McpBridgeDeps> = {}): McpBridgeDeps {
     // by the daemon smoke tests.
     sessionId: "",
     teachStore: new TeachSessionStore(),
+    autoteachStore: new AutoTeachStore(),
+    autoteachBindings: new AutoTeachBindings(),
     gatedMatcher: { patterns: [], matches: () => false },
     // Test default: every gated feature on, so existing tool-call tests
     // (which call browser_* + procedures_* tools) keep working without
@@ -335,6 +339,123 @@ describe("McpBridgeServer — feature gates", () => {
     const result = await callTool(deps, "procedures_list", {});
     // Real handler runs; whatever it returns isn't FEATURE_DISABLED.
     expect(errorCodeOf(result)).not.toBe("FEATURE_DISABLED");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Auto-teach trace tagging hook
+// ---------------------------------------------------------------------------
+
+describe("McpBridgeServer — autoteach trace tagging", () => {
+  beforeEach(async () => {
+    const { mkdtemp } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    process.env["BROWSEROPS_AUTOTEACH_DIR"] = await mkdtemp(
+      join(tmpdir(), "autoteach-mcp-test-"),
+    );
+  });
+
+  it("appends a trace record when a browser_* call hits a bound tab", async () => {
+    const store = new AutoTeachStore();
+    const bindings = new AutoTeachBindings();
+    const session = await store.create({
+      goal: "test",
+      mode: "explore",
+      consent: { budget: 1, side_effect_policy: "read_only_only" },
+      owner_session_id: "",
+    });
+    bindings.attach("t_abc", session.session_id, 0);
+
+    const deps = makeDeps({
+      autoteachStore: store,
+      autoteachBindings: bindings,
+      wsBridge: makeConnectedBridge({
+        final_url: "https://example.com",
+        page_effect: {
+          dom: { added: 1, removed: 0, attr_changes: 0, text_changes: 0 },
+          url: { changed: true },
+          focus: { changed: false },
+          network: { requests_started: 1, requests_completed: 1, in_flight_at_end: 0 },
+          console_errors: 0,
+          window_ms: 300,
+        },
+      }),
+    });
+    await callTool(deps, "browser_navigate", {
+      tab_id: "t_abc",
+      url: "https://example.com",
+    });
+    const recs = await store.readTrace(session.session_id, 0);
+    expect(recs).toHaveLength(1);
+    expect(recs[0]?.method).toBe("browser_navigate");
+    expect(recs[0]?.ok).toBe(true);
+    expect(recs[0]?.page_effect?.url.changed).toBe(true);
+    // page_effect should be lifted out of result_summary so we don't double-write
+    expect(recs[0]?.result_summary?.["page_effect"]).toBeUndefined();
+  });
+
+  it("does not append for browser_* calls on unbound tabs", async () => {
+    const store = new AutoTeachStore();
+    const bindings = new AutoTeachBindings();
+    const session = await store.create({
+      goal: "test",
+      mode: "explore",
+      consent: { budget: 1, side_effect_policy: "read_only_only" },
+      owner_session_id: "",
+    });
+    bindings.attach("t_bound", session.session_id, 0);
+
+    const deps = makeDeps({
+      autoteachStore: store,
+      autoteachBindings: bindings,
+      wsBridge: makeConnectedBridge({
+        final_url: "https://example.com",
+        page_effect: {
+          dom: { added: 0, removed: 0, attr_changes: 0, text_changes: 0 },
+          url: { changed: true },
+          focus: { changed: false },
+          network: { requests_started: 0, requests_completed: 0, in_flight_at_end: 0 },
+          console_errors: 0,
+          window_ms: 300,
+        },
+      }),
+    });
+    await callTool(deps, "browser_navigate", {
+      tab_id: "t_other",
+      url: "https://example.com",
+    });
+    const recs = await store.readTrace(session.session_id);
+    expect(recs).toHaveLength(0);
+  });
+
+  it("appends an error record when the call fails", async () => {
+    const store = new AutoTeachStore();
+    const bindings = new AutoTeachBindings();
+    const session = await store.create({
+      goal: "test",
+      mode: "explore",
+      consent: { budget: 1, side_effect_policy: "read_only_only" },
+      owner_session_id: "",
+    });
+    bindings.attach("t_abc", session.session_id, 2);
+
+    const deps = makeDeps({
+      autoteachStore: store,
+      autoteachBindings: bindings,
+      wsBridge: makeFailingBridge(
+        Object.assign(new Error("boom"), { code: "TIMEOUT" }),
+      ),
+    });
+    await callTool(deps, "browser_navigate", {
+      tab_id: "t_abc",
+      url: "https://example.com",
+    });
+    const recs = await store.readTrace(session.session_id, 2);
+    expect(recs).toHaveLength(1);
+    expect(recs[0]?.ok).toBe(false);
+    expect(recs[0]?.error_code).toBe("TIMEOUT");
+    expect(recs[0]?.run_index).toBe(2);
   });
 });
 
