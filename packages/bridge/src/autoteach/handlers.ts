@@ -260,13 +260,13 @@ export function buildAutoteachHandlers(
   }> {
     const session = await store.require(sessionId);
     const history = await store.readRuns(sessionId);
-    const convergence = computeConvergence(history);
+    const convergence = computeConvergence({ runs: history, session });
     const draftYaml = (await store.readDraft(sessionId)) ?? undefined;
+    const procedures = draftYaml !== undefined ? parseDraftYaml(draftYaml) : [];
     const leaves = leavesFromDraft(draftYaml);
-    const stepIds = stepIdsFromDraft(draftYaml);
     const next =
       convergence.verdict === "improving"
-        ? pickNextOptimization(history, stepIds)
+        ? pickNextOptimization({ runs: history, procedures })
         : undefined;
     return {
       session,
