@@ -33,6 +33,7 @@ import type { Logger } from "./logger.js";
 import type { TraceWriter } from "./trace-writer.js";
 import type { GatedDomainMatcher } from "./gated-domains.js";
 import { buildProcedureHandlers } from "./procedures/handlers.js";
+import { buildAutoteachHandlers } from "./autoteach/handlers.js";
 import { listPrompts, getPrompt } from "./prompts.js";
 import { checkBreaker, recordResult as recordBreakerResult } from "./circuit-breaker.js";
 import type { TeachSessionStore } from "./teach/session-store.js";
@@ -349,7 +350,16 @@ export class McpBridgeServer {
 
   constructor(deps: McpBridgeDeps) {
     this.deps = deps;
-    this.procedureHandlers = buildProcedureHandlers(deps.wsBridge, deps.teachStore, deps.sessionId);
+    this.procedureHandlers = {
+      ...buildProcedureHandlers(deps.wsBridge, deps.teachStore, deps.sessionId),
+      ...buildAutoteachHandlers({
+        wsBridge: deps.wsBridge,
+        store: deps.autoteachStore,
+        bindings: deps.autoteachBindings,
+        mcpSessionId: deps.sessionId,
+        enabledFeatures: deps.enabledFeatures,
+      }),
+    };
 
     const ajv = new Ajv({ allErrors: true, strict: false, useDefaults: true });
     addFormats(ajv);
