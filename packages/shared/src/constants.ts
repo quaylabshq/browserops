@@ -41,7 +41,6 @@ export const TOKEN_FILENAME = "token";
 export const LOG_FILENAME = "log.jsonl";
 export const RISKY_DOMAINS_FILENAME = "risky-domains.json";
 export const GATED_DOMAINS_FILENAME = "gated-domains.json";
-export const CONTROL_SOCKET_FILENAME = "bridge.sock";
 
 /**
  * Multi-session daemon paths. The shim binary connects to this socket;
