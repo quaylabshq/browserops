@@ -38,8 +38,9 @@ import { checkBreaker, recordResult as recordBreakerResult } from "./circuit-bre
 import type { TeachSessionStore } from "./teach/session-store.js";
 
 /**
- * Minimal shape McpBridgeServer needs to talk to the extension. Implemented
- * by {@link WSBridge} (primary) and RemoteWSBridge (secondary).
+ * Minimal shape McpBridgeServer needs to talk to the extension.
+ * Implemented by {@link WSBridge}; the daemon hosts one per process
+ * and shares it across every active session.
  */
 export interface WSBridgeLike {
   isConnected(): boolean;

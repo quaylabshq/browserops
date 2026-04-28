@@ -25,7 +25,6 @@
   "license": "MIT",
   "author": "Saket Aryan",
   "bin": {
-    "browserops-bridge": "./dist/index.js",
     "browserops-daemon": "./dist/daemon.js",
     "browserops-shim": "./dist/shim.js"
   },
