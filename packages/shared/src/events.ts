@@ -2,8 +2,6 @@
  * Named Event payloads from extension → bridge.
  */
 
-import type { TeachEvent } from "./teach.js";
-
 export interface TabCreatedPayload {
   chrome_tab_id: number;
   url: string;
@@ -50,8 +48,7 @@ export type EventName =
   | "page_navigated"
   | "page_loaded"
   | "extension_paused"
-  | "extension_resumed"
-  | "teach_event";
+  | "extension_resumed";
 
 export interface EventMap {
   tab_created: TabCreatedPayload;
@@ -61,5 +58,4 @@ export interface EventMap {
   page_loaded: PageLoadedPayload;
   extension_paused: ExtensionPausedPayload;
   extension_resumed: ExtensionResumedPayload;
-  teach_event: TeachEvent;
 }

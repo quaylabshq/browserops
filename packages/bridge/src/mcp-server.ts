@@ -35,7 +35,6 @@ import type { GatedDomainMatcher } from "./gated-domains.js";
 import { buildProcedureHandlers } from "./procedures/handlers.js";
 import { listPrompts, getPrompt } from "./prompts.js";
 import { checkBreaker, recordResult as recordBreakerResult } from "./circuit-breaker.js";
-import type { TeachSessionStore } from "./teach/session-store.js";
 
 /**
  * Minimal shape McpBridgeServer needs to talk to the extension.
@@ -130,9 +129,8 @@ export interface McpBridgeDeps {
   /**
    * Identifier of the daemon-managed session this MCP server belongs to.
    * Phases 3+ thread it through dispatch so tools can resolve tab
-   * ownership, teach-session attribution, and per-session approval
-   * state. Empty string for the legacy bridge entry, which has no
-   * session model.
+   * ownership and per-session approval state. Empty string for the
+   * legacy bridge entry, which has no session model.
    */
   sessionId: string;
   /**
@@ -144,8 +142,6 @@ export interface McpBridgeDeps {
    * bridge entry; the tool reports INVALID_STATE in that case.
    */
   renameSession?: (name: string) => string | undefined;
-  /** Disk-backed teach-mode session store (procedures_teach_* handlers read/write here). */
-  teachStore: TeachSessionStore;
   /**
    * Set of currently-enabled gated features. Tools whose def.feature is set
    * but absent from this set are hidden from tools/list and rejected at
@@ -343,9 +339,7 @@ export class McpBridgeServer {
 
   constructor(deps: McpBridgeDeps) {
     this.deps = deps;
-    this.procedureHandlers = {
-      ...buildProcedureHandlers(deps.wsBridge, deps.teachStore, deps.sessionId),
-    };
+    this.procedureHandlers = buildProcedureHandlers(deps.wsBridge);
 
     const ajv = new Ajv({ allErrors: true, strict: false, useDefaults: true });
     addFormats(ajv);

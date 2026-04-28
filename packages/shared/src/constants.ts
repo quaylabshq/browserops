@@ -66,7 +66,7 @@ export const ENV = {
   /** Override the directory where trace .jsonl files are written. */
   TRACE_DIR: "BROWSEROPS_TRACE_DIR",
   /**
-   * Comma-separated gated feature names (e.g. "teach,procedures").
+   * Comma-separated gated feature names (e.g. "procedures,gated-domains").
    * When set, overrides ~/.browserops/config.json's features block.
    * Set to empty string to explicitly disable everything.
    */

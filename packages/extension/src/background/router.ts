@@ -25,7 +25,7 @@ export class Router {
   private readonly featureByMethod = new Map<string, FeatureName>();
   /** Live feature set provider; defaults to allow-all (treats all gates as on). */
   private getFeatures: () => ReadonlySet<FeatureName> = () =>
-    new Set<FeatureName>(["teach", "procedures"]);
+    new Set<FeatureName>(["procedures"]);
 
   register(method: string, handler: Handler, opts?: RegisterOptions): void {
     if (this.handlers.has(method)) {
