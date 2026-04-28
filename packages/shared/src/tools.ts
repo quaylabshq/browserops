@@ -1420,6 +1420,10 @@ const proceduresSearch: ToolDef = {
   description:
     "Full-text search over the procedure catalogue using pre-tokenized index fields. " +
     "Returns ranked metadata-only matches; retrieve the YAML body with procedures_get. " +
+    "Scoring is coverage-based: `score` is the fraction of distinct query tokens that appear " +
+    "anywhere in the procedure's union of indexed-field tokens (name + triggers + description + " +
+    "inputs + tags + domain). A 4-token query that matches 2 tokens scores 0.5 regardless of which " +
+    "fields they hit; ties are broken by a weighted-sum signal that favours name + trigger matches. " +
     "By default only status:trusted procedures are returned — pass include_drafts:true to also see draft entries " +
     "(authored but not yet success-confirmed). " +
     "Draft fallback: when include_drafts is false AND the trusted result set is empty, draft hits are surfaced " +
@@ -1433,13 +1437,23 @@ const proceduresSearch: ToolDef = {
     properties: {
       query: { type: "string", minLength: 1, maxLength: 200 },
       limit: { type: "integer", minimum: 1, maximum: 25, default: 10 },
-      min_score: { type: "number", minimum: 0, maximum: 1, default: 0.2 },
+      min_score: {
+        type: "number",
+        minimum: 0,
+        maximum: 1,
+        default: 0.2,
+        description:
+          "Minimum coverage ratio (matched query tokens / total query tokens) for a procedure to surface. " +
+          "Default 0.2 means at least 1 in 5 query tokens must appear somewhere in the procedure's indexed fields.",
+      },
       domain: { type: "string", pattern: domainPattern },
       scope: { type: "string", pattern: scopePattern, default: "all" },
       deep: {
         type: "boolean",
         default: false,
-        description: "When true, also scores tokens from step bodies (slower).",
+        description:
+          "When true, step-body tokens join the indexed-field union before coverage is computed, " +
+          "so a query whose tokens only appear inside step actions/args can still surface (slower; loads YAML).",
       },
       include_drafts: {
         type: "boolean",
