@@ -256,6 +256,12 @@ Common chord recipes:
 
 - Replays a saved procedure step-by-step, checking expected effects at each step. Halts on divergence. Use when reproducing a flaky flow for debugging, or when the user wants a dry-run before committing.
 
+### Auto-teach (`procedures_autoteach_*`)
+
+- For "learn to do X then remember it" requests, switch to the **auto-teach skill** — it owns the consent flow, the per-run replay loop, the side-effect policies, and the failure-mode map for the optimization loop. Don't drive the loop from this file.
+- Available only when `procedures_autoteach_start` is in your tool catalogue (the `autoteach` feature is opt-in: `browserops feature enable autoteach`). If the tool family is missing, fall through to teach mode + manual save instead.
+- Always run `procedures_search` first. Auto-teach is for new flows; an existing trusted procedure scoring ≥0.5 wins by default.
+
 ---
 
 ## 5. Failure mode → fix-it map
