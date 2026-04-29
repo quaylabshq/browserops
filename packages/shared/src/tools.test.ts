@@ -4,11 +4,15 @@ import { ERROR_CODES } from "./errors.js";
 import { KNOWN_FEATURES } from "./features.js";
 
 describe("TOOL_DEFS catalogue", () => {
-  it("every tool name is prefixed browser_ or procedures_ and unique", () => {
+  it("every tool name is prefixed browser_, procedures_, or lore_ and unique", () => {
     const names = TOOL_DEFS.map((t) => t.name);
     expect(new Set(names).size).toBe(names.length);
     for (const n of names)
-      expect(n.startsWith("browser_") || n.startsWith("procedures_")).toBe(true);
+      expect(
+        n.startsWith("browser_") ||
+          n.startsWith("procedures_") ||
+          n.startsWith("lore_"),
+      ).toBe(true);
   });
 
   it("every tool name matches the MCP-recommended pattern ^[a-zA-Z0-9_-]+$", () => {
@@ -44,10 +48,12 @@ describe("TOOL_DEFS catalogue", () => {
     }
   });
 
-  it("procedures_* tools are gated as 'procedures' and browser_* tools are ungated", () => {
+  it("procedures_* gated as 'procedures', lore_* gated as 'lore', browser_* ungated", () => {
     for (const t of TOOL_DEFS) {
       if (t.name.startsWith("procedures_")) {
         expect(t.feature).toBe("procedures");
+      } else if (t.name.startsWith("lore_")) {
+        expect(t.feature).toBe("lore");
       } else {
         expect(t.feature).toBeUndefined();
       }

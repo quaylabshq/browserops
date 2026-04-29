@@ -209,6 +209,11 @@ const PROC_CODES = [
   "PROC_OWNER_INVALID",
   "PROC_DOMAIN_INVALID",
 ] as const satisfies readonly ErrorCode[];
+const LORE_CODES = [
+  "LORE_NOT_FOUND",
+  "LORE_ALREADY_EXISTS",
+  "LORE_SCHEMA_INVALID",
+] as const satisfies readonly ErrorCode[];
 
 // ---------------------------------------------------------------------------
 // Tool definitions
@@ -1665,6 +1670,215 @@ const proceduresExecute: ToolDef = {
 } as const;
 
 
+// ---------------------------------------------------------------------------
+// Cross-agent lore tools (feature: "lore")
+//
+// Lore entries are markdown files under ~/browserops/lore/, with a small
+// YAML frontmatter block carrying name/description/type/source/timestamps.
+// Every MCP client (Claude Code, Cursor, Zed, custom SDK) sees the same
+// store, so a lesson learned in one session can be reused in another.
+// ---------------------------------------------------------------------------
+
+const loreNamePattern = "^[a-z][a-z0-9._-]{0,79}$";
+const loreTypeEnum = ["user", "feedback", "project", "reference"] as const;
+
+const loreFrontmatterSchema: JSONSchemaObject = {
+  type: "object",
+  additionalProperties: false,
+  required: ["name", "description", "type", "source", "created", "updated"] as const,
+  properties: {
+    name: { type: "string", pattern: loreNamePattern },
+    description: { type: "string", minLength: 1, maxLength: 500 },
+    type: { enum: loreTypeEnum },
+    source: { enum: ["mcp-tool", "cli"] as const },
+    created: { type: "string" },
+    updated: { type: "string" },
+  },
+} as const;
+
+const loreSearchMatchSchema: JSONSchemaObject = {
+  type: "object",
+  additionalProperties: false,
+  required: ["name", "description", "type", "score", "snippet"] as const,
+  properties: {
+    name: { type: "string" },
+    description: { type: "string" },
+    type: { enum: loreTypeEnum },
+    score: { type: "number", minimum: 0, maximum: 1 },
+    snippet: { type: "string" },
+  },
+} as const;
+
+const loreSave: ToolDef = {
+  name: "lore_save",
+  feature: "lore",
+  description:
+    "Persist a markdown lore entry under ~/browserops/lore/<name>.md, visible to every MCP client. " +
+    "Use this when you want a lesson, preference, or context to outlive the current session and " +
+    "be reachable from a different agent (e.g. a Cursor session) later. By default duplicate names " +
+    "are rejected with LORE_ALREADY_EXISTS — set replace:true to overwrite. " +
+    "type categorises the entry (user|feedback|project|reference) so lore_search can filter. " +
+    'REQUIRED ARGUMENTS: {"name": "<id>", "description": "<one-liner>", "type": "<category>", "body": "<markdown>"}.',
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["name", "description", "type", "body"] as const,
+    properties: {
+      name: {
+        type: "string",
+        pattern: loreNamePattern,
+        description:
+          "Stable identifier, e.g. \"feedback_terse_responses\" or \"project_q2_migration\". Lowercase, dot/underscore/hyphen separators.",
+      },
+      description: {
+        type: "string",
+        minLength: 1,
+        maxLength: 500,
+        description:
+          "One-line summary used by lore_search to decide relevance. Be specific — vague descriptions don't surface in searches.",
+      },
+      type: {
+        enum: loreTypeEnum,
+        description:
+          "Category. user = facts about the human, feedback = how-to-collaborate corrections, project = ongoing-work context, reference = pointers to external systems.",
+      },
+      body: {
+        type: "string",
+        minLength: 1,
+        maxLength: 65536,
+        description: "Full markdown body of the lore entry.",
+      },
+      replace: {
+        type: "boolean",
+        default: false,
+        description:
+          "When true, overwrite an existing lore entry with the same name. Default false rejects duplicates with LORE_ALREADY_EXISTS.",
+      },
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["saved", "path", "created"] as const,
+    properties: {
+      saved: { const: true },
+      path: { type: "string" },
+      created: {
+        type: "boolean",
+        description: "True when a new lore entry was created, false when an existing one was overwritten.",
+      },
+    },
+  },
+  action_weight: 0.5,
+  risky: "never",
+  errorCodes: [...BASE_CODES, ...LORE_CODES] as const,
+} as const;
+
+const loreSearch: ToolDef = {
+  name: "lore_search",
+  feature: "lore",
+  description:
+    "Coverage-based search over the cross-agent lore store. Returns ranked metadata-only matches " +
+    "(name + description + type + score + body snippet) — fetch the full body with lore_get. " +
+    "Score is the fraction of distinct query tokens that appear anywhere in the entry's name, " +
+    "description, type, or body. Tie-break favours name and description matches over body matches. " +
+    "Pass type to filter by category. " +
+    'REQUIRED ARGUMENTS: {"query": "<search tokens>"}.',
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["query"] as const,
+    properties: {
+      query: { type: "string", minLength: 1, maxLength: 200 },
+      type: {
+        enum: loreTypeEnum,
+        description: "If set, only return memories whose type matches.",
+      },
+      limit: { type: "integer", minimum: 1, maximum: 25, default: 10 },
+      min_score: {
+        type: "number",
+        minimum: 0,
+        maximum: 1,
+        default: 0.2,
+        description:
+          "Minimum coverage ratio (matched query tokens / total query tokens). Default 0.2.",
+      },
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["matches", "total", "truncated"] as const,
+    properties: {
+      matches: { type: "array", items: loreSearchMatchSchema },
+      total: { type: "integer", minimum: 0 },
+      truncated: { type: "boolean" },
+    },
+  },
+  action_weight: 0,
+  risky: "never",
+  errorCodes: [...BASE_CODES, ...LORE_CODES] as const,
+} as const;
+
+const loreGet: ToolDef = {
+  name: "lore_get",
+  feature: "lore",
+  description:
+    "Retrieve the full body and frontmatter for a single lore entry by name. " +
+    "Errors with LORE_NOT_FOUND if the name is not in the store. " +
+    'REQUIRED ARGUMENTS: {"name": "<id>"}.',
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["name"] as const,
+    properties: {
+      name: { type: "string", pattern: loreNamePattern },
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["meta", "body", "path"] as const,
+    properties: {
+      meta: loreFrontmatterSchema,
+      body: { type: "string" },
+      path: { type: "string" },
+    },
+  },
+  action_weight: 0,
+  risky: "never",
+  errorCodes: [...BASE_CODES, ...LORE_CODES] as const,
+} as const;
+
+const loreDelete: ToolDef = {
+  name: "lore_delete",
+  feature: "lore",
+  description:
+    "Remove a lore entry from the store by name. " +
+    "Errors with LORE_NOT_FOUND if the name is not present. " +
+    'REQUIRED ARGUMENTS: {"name": "<id>"}.',
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["name"] as const,
+    properties: {
+      name: { type: "string", pattern: loreNamePattern },
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["deleted", "path"] as const,
+    properties: {
+      deleted: { const: true },
+      path: { type: "string" },
+    },
+  },
+  action_weight: 0.5,
+  risky: "never",
+  errorCodes: [...BASE_CODES, ...LORE_CODES] as const,
+} as const;
+
 const setSessionName: ToolDef = {
   name: "browser_set_session_name",
   description:
@@ -1760,6 +1974,10 @@ export const TOOL_DEFS: readonly ToolDef[] = [
   proceduresSave,
   proceduresDelete,
   proceduresExecute,
+  loreSave,
+  loreSearch,
+  loreGet,
+  loreDelete,
 ] as const;
 
 export const TOOL_DEF_MAP: Record<string, ToolDef> = Object.freeze(
