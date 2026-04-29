@@ -72,6 +72,7 @@ export async function runInit(opts: InitOpts = {}): Promise<void> {
 
   await copyExtensionFiles(opts.dryRun ?? false);
   await seedDefaultLauncher(opts.dryRun ?? false);
+  printSafeModePolicy();
 
   if (opts.mcp === false) {
     info("skipping MCP-client install (--no-mcp)");
@@ -128,7 +129,19 @@ async function seedDefaultLauncher(dryRun: boolean): Promise<void> {
     return;
   }
   await setConfigValue("default_launcher", "claude");
-  ok(`default_launcher: claude  ${dim('(change with: browserops config set default_launcher cursor)')}`);
+  ok(`default_launcher: claude  ${dim('(change with: browserops config set default_launcher codex)')}`);
+}
+
+function printSafeModePolicy(): void {
+  process.stdout.write(
+    `\n${c.bold("Safe mode")} ${dim("(off by default)")}\n` +
+    `  browserops invokes ${c.cyan("claude --dangerously-skip-permissions")} and ${c.cyan("codex exec --full-auto")}\n` +
+    `  so the agent runs without per-action approval prompts. Browser-side risky\n` +
+    `  actions (executing JS, sensitive domains, procedures marked ${c.cyan("risky")}) are\n` +
+    `  still gated by browserops' own approval system, regardless of safe mode.\n\n` +
+    `  Turn it on:  ${c.cyan("browserops config set safe_mode true")}\n` +
+    `  ${dim("Cursor has no CLI flag for this — set Settings → Agent → Auto-Run to \"Allow\".")}\n\n`,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -275,10 +288,13 @@ function printNextSteps(port: number): void {
   }
   process.stdout.write("\n");
   process.stdout.write(
-    `Then try: ${c.cyan(`browserops --claude "summarize my open tabs"`)}\n`,
+    `Try first:    ${c.cyan(`browserops "open hacker news and read me the top story"`)}\n`,
   );
   process.stdout.write(
-    `Bridge listening on ws://127.0.0.1:${port}. Logs: ${dim("~/.browserops/log.jsonl")}\n\n`,
+    `Then this:    ${c.cyan(`browserops "check my gmail and summarize my last 3 emails"`)}\n`,
+  );
+  process.stdout.write(
+    `\nBridge listening on ws://127.0.0.1:${port}. Logs: ${dim("~/.browserops/log.jsonl")}\n\n`,
   );
 
   copyToClipboardBestEffort(ext);

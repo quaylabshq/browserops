@@ -11,15 +11,19 @@ import { dirname } from "node:path";
 import { atomicWrite, backup } from "./fs.js";
 import { configPath, STATE_DIR } from "./paths.js";
 
-export type LauncherId = "claude" | "cursor" | "codex";
+export type LauncherId = "claude" | "codex" | "cursor";
 
 export interface BrowserOpsConfig {
   default_launcher?: LauncherId;
+  safe_mode?: boolean;
 }
 
 export type ConfigKey = keyof BrowserOpsConfig;
 
-const VALID_LAUNCHERS: readonly LauncherId[] = ["claude", "cursor", "codex"];
+const VALID_LAUNCHERS: readonly LauncherId[] = ["claude", "codex", "cursor"];
+
+const TRUTHY = new Set(["true", "1", "yes", "on"]);
+const FALSY = new Set(["false", "0", "no", "off"]);
 
 interface KeySpec {
   description: string;
@@ -34,6 +38,16 @@ export const CONFIG_SCHEMA: Record<ConfigKey, KeySpec> = {
         return { ok: true, value: value as LauncherId };
       }
       return { ok: false, error: `must be one of: ${VALID_LAUNCHERS.join(", ")}` };
+    },
+  },
+  safe_mode: {
+    description:
+      "When true, launchers run with their normal permission prompts. When false (default), claude is invoked with --dangerously-skip-permissions and codex with --full-auto so the agent runs without per-action approvals. Browser-side risky-action gating in the bridge is unaffected.",
+    validate(value) {
+      const v = value.trim().toLowerCase();
+      if (TRUTHY.has(v)) return { ok: true, value: true };
+      if (FALSY.has(v)) return { ok: true, value: false };
+      return { ok: false, error: "must be true or false" };
     },
   },
 };
@@ -112,4 +126,14 @@ export async function getDefaultLauncher(): Promise<{
     return { id: v, configured: true };
   }
   return { id: "claude", configured: false };
+}
+
+/**
+ * Returns true when the user has opted into safe mode (launchers run with
+ * their normal per-action approval prompts). Default false: claude gets
+ * --dangerously-skip-permissions, codex gets --full-auto.
+ */
+export async function getSafeMode(): Promise<boolean> {
+  const cfg = await readConfig();
+  return cfg.safe_mode === true;
 }
