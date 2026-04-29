@@ -41,7 +41,14 @@ function isBrowseropsEntry(s: unknown, specCommand: string): boolean {
   if (typeof s !== "object" || s === null) return false;
   const transport = (s as Record<string, unknown>)["transport"] as Record<string, unknown> | undefined;
   const cmd = transport?.["command"];
-  return typeof cmd === "string" && (cmd.includes("browserops-bridge") || cmd === specCommand);
+  if (typeof cmd !== "string") return false;
+  if (cmd.includes("browserops-bridge") || cmd === specCommand) return true;
+  // command may be "node" with args pointing at the bridge dist
+  const args = transport?.["args"];
+  if (Array.isArray(args)) {
+    return args.some((a) => typeof a === "string" && a.includes("browserops"));
+  }
+  return false;
 }
 
 export const continueInstaller: ClientInstaller = {
