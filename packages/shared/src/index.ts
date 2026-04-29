@@ -6,6 +6,7 @@ export * from "./constants.js";
 export * from "./tools.js";
 export * from "./read-slice.js";
 export * from "./procedures.js";
+export * from "./memory.js";
 export * from "./destructive-chords.js";
 export * from "./effects.js";
 export * from "./trace.js";
