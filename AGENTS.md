@@ -53,6 +53,9 @@ The procedure-memory family (`procedures_search`, `procedures_get`, `procedures_
 Before any browser task, call `procedures_search` with tokens from the user's request — but only when `procedures_search` is in your tool catalogue (the procedures feature is opt-in; see above).
 If score >= 0.5, use that procedure. Do not re-plan steps that are already encoded.
 
+### Cross-agent memory (`memory_*`) is opt-in too
+The four `memory_*` tools (`memory_save`, `memory_search`, `memory_get`, `memory_delete`) are gated behind the `memory` feature, off by default. They live in `~/browserops/memory/` and are visible to every MCP client (Claude Code, Cursor, Zed, custom SDK), so a lesson saved from one session is reusable in another. Use them for browserops behavior, browser-flow gotchas, and project context that benefits any agent picking up the same bridge — keep Claude-only preferences (keybindings, response style) in the `~/.claude/projects/.../memory/` auto-memory store. The `browserops` skill section "memory_save / memory_search / memory_get / memory_delete" is the source of truth for tool shapes and decision rules.
+
 ### Prefer `browser_quick_read` over `browser_read`
 When you need to find a specific element (a button, input, link) by its label, use `browser_quick_read` instead of `browser_read`. It searches the a11y tree by accessible name and returns only matching refs — much cheaper than a full page read. Fall back to `browser_read` only when you need the full page structure or when `browser_quick_read` returns no matches.
 
