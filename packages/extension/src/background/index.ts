@@ -11,6 +11,8 @@ import { registerScreenshotHandler } from "./handlers/screenshot.js";
 import { registerReadHandler } from "./handlers/read.js";
 import { registerInputHandlers } from "./handlers/input.js";
 import { registerSafetyHandler, resolveSafetyDecision } from "./handlers/safety.js";
+import { registerTeachHandlers } from "./handlers/teach.js";
+import { TeachRecorder } from "./teach-recorder.js";
 
 // Yellow icon variants — `?url` suffix forces vite to emit them as files
 // (the small PNGs would otherwise be inlined as base64, which
@@ -55,6 +57,15 @@ registerScreenshotHandler(router, { tabIdMap: tabIdToChromeId });
 registerReadHandler(router, { tabIdMap: tabIdToChromeId, refCache });
 registerInputHandlers(router, { tabIdMap: tabIdToChromeId, refCache, cdp, network });
 registerSafetyHandler(router, { restoreBadge: () => setBadge(currentConnected) });
+
+const teachRecorder = new TeachRecorder({
+  resolveTabId: (chromeTabId: number) => chromeIdToTabId.get(chromeTabId),
+  emit: (ev) => wsClient?.sendEvent("teach_event", ev),
+  onStatusChanged: () => {
+    chrome.runtime.sendMessage({ type: "teach_status_changed" }).catch(() => {});
+  },
+});
+registerTeachHandlers(router, { recorder: teachRecorder });
 
 router.register("assign_tab_id", async (params) => {
   const chromeTabId = params["chrome_tab_id"];
@@ -235,6 +246,7 @@ chrome.tabs.onCreated.addListener((tab) => {
     index: tab.index,
     active: tab.active,
   });
+  void teachRecorder.maybeInject(tab.id);
 });
 
 chrome.tabs.onRemoved.addListener((chromeTabId) => {
@@ -272,6 +284,17 @@ chrome.webNavigation.onCommitted.addListener((d) => {
   if (tabId === undefined) return;
   refCache.invalidate(tabId);
   ctx.emitEvent("page_navigated", { tab_id: tabId, url: d.url, transition_type: d.transitionType });
+  // Teach mode: capture the navigation as its own event, then re-inject the
+  // capture script (the previous instance died with the page).
+  if (teachRecorder.isActive()) {
+    teachRecorder.onCapturedStep(
+      d.tabId,
+      d.url,
+      { kind: "navigate", url: d.url, transition: d.transitionType },
+      Date.now(),
+    );
+    void teachRecorder.maybeInject(d.tabId);
+  }
 });
 
 chrome.webNavigation.onHistoryStateUpdated.addListener((d) => {
@@ -318,10 +341,63 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 
 // --- popup / options messages --------------------------------------------
 
-chrome.runtime.onMessage.addListener((msg: unknown, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
   if (typeof msg !== "object" || msg === null) return false;
   const m = msg as { kind?: unknown; type?: unknown };
   const tag = typeof m.type === "string" ? m.type : typeof m.kind === "string" ? m.kind : "";
+  if (tag === "teach_capture") {
+    const senderTabId = sender.tab?.id;
+    if (senderTabId === undefined) return false;
+    const mm = m as { step?: unknown; url?: unknown; ts?: unknown };
+    if (typeof mm.step !== "object" || mm.step === null) return false;
+    const url = typeof mm.url === "string" ? mm.url : "";
+    const ts = typeof mm.ts === "number" ? mm.ts : Date.now();
+    teachRecorder.onCapturedStep(
+      senderTabId,
+      url,
+      mm.step as Parameters<typeof teachRecorder.onCapturedStep>[2],
+      ts,
+    );
+    sendResponse({ ok: true });
+    return false;
+  }
+  if (tag === "teach_start") {
+    void (async () => {
+      const mm = m as { scope?: unknown; narration_hint?: unknown };
+      const scope = mm.scope === "active_tab" ? "active_tab" : "all_tabs";
+      const hint = typeof mm.narration_hint === "string" ? mm.narration_hint : undefined;
+      const r = await teachRecorder.start(scope, hint);
+      sendResponse(r);
+    })();
+    return true;
+  }
+  if (tag === "teach_stop") {
+    void (async () => {
+      const r = await teachRecorder.stop();
+      sendResponse(r ?? { ok: false });
+    })();
+    return true;
+  }
+  if (tag === "teach_status") {
+    sendResponse(teachRecorder.status());
+    return false;
+  }
+  if (tag === "teach_marker") {
+    const mm = m as { label?: unknown };
+    teachRecorder.recordMarker(typeof mm.label === "string" ? mm.label : undefined);
+    sendResponse({ ok: true });
+    return false;
+  }
+  if (tag === "teach_narration") {
+    const mm = m as { text?: unknown };
+    if (typeof mm.text !== "string" || mm.text === "") {
+      sendResponse({ ok: false });
+      return false;
+    }
+    teachRecorder.recordNarration(mm.text);
+    sendResponse({ ok: true });
+    return false;
+  }
   if (tag === "kill_switch") {
     void (async () => {
       await setDisabled(true);
@@ -364,5 +440,6 @@ void (async () => {
       return undefined;
     }
   });
+  await teachRecorder.rehydrate();
   await startClient();
 })();
