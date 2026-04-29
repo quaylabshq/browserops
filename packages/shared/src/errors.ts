@@ -31,6 +31,10 @@ export const ERROR_CODES = [
   "CHAINED_ACTION_FAILED",
   "REPEATED_FAILURE",
   "DISPATCH_FAILED_ON_GATED_DOMAIN",
+  // Cross-agent lore store errors
+  "LORE_NOT_FOUND",
+  "LORE_ALREADY_EXISTS",
+  "LORE_SCHEMA_INVALID",
 ] as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[number];
