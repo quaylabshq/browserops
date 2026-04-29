@@ -283,6 +283,46 @@ Authoring checklist (still applies when authoring procedures by hand):
 - Prefer explicit waits and success criteria over implicit assumptions.
 - If the UI changes, fix the leaf first, then update the composite.
 
+## Lore (cross-agent)
+
+> **Experimental — off by default.** Enable with `browserops feature enable lore` (then `browserops restart`). With the feature off, the four `lore_*` tools below are hidden from `tools/list` and any direct call returns `FEATURE_DISABLED`.
+
+A small markdown store at `~/browserops/lore/<name>.md` that any MCP client can read or write. The point is **cross-agent persistence**: a lesson saved from a Claude Code session is visible to a Cursor or Zed session opening the same browserops bridge later. It sits alongside (not on top of) Claude Code's own auto-memory at `~/.claude/projects/.../memory/`, which stays Claude-only by definition.
+
+### When to use it
+
+Save a lore entry when the lesson is useful to *any* MCP client that might pick up the same browserops bridge — browserops behavior, browser-flow gotchas, selectors that survive across sessions, project context. Keep Claude-private things (keybindings, response style) in the auto-lore store.
+
+### MCP tools
+
+| Tool | Inputs | Output |
+|---|---|---|
+| `lore_save` | `name`, `description`, `type` (`user`\|`feedback`\|`project`\|`reference`), `body`, `replace?:bool` | `{saved, path, created}` |
+| `lore_search` | `query`, `type?`, `limit?` (1..25, default 10), `min_score?` (0..1, default 0.2) | `{matches, total, truncated}` |
+| `lore_get` | `name` | `{meta, body, path}` |
+| `lore_delete` | `name` | `{deleted, path}` |
+
+`name` matches `^[a-z][a-z0-9._-]{0,79}$`. Duplicate names reject with `LORE_ALREADY_EXISTS` unless `replace:true`. Search returns metadata only — fetch the body with `lore_get`.
+
+### Storage
+
+Each lore entry is one markdown file with YAML frontmatter:
+
+```markdown
+---
+name: feedback_terse_responses
+description: user wants terse responses
+type: feedback
+source: mcp-tool
+created: 2026-04-29T12:00:00.000Z
+updated: 2026-04-29T12:00:00.000Z
+---
+
+Keep responses under three sentences whenever possible.
+```
+
+There is no index manifest by design — the bridge globs the directory and parses frontmatter on every `lore_search`. Override the root with `BROWSEROPS_LORE_DIR`.
+
 ## Gated domains
 
 > **Experimental — on by default.** Disable with `browserops feature disable gated-domains` (then `browserops restart`) if you'd rather avoid Chrome's "controlled by automation" banner on the listed domains.
