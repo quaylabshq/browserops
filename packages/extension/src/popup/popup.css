@@ -336,6 +336,51 @@ body {
 .safety-actions { display: flex; gap: 6px; }
 .safety-actions .btn { flex: 1; }
 
+/* Teach mode pane — record / stop demonstration sessions */
+.section.teach { gap: 10px; padding-top: 0; }
+.teach-state { display: none; flex-direction: column; gap: 8px; }
+.teach-state.active { display: flex; }
+.teach-input {
+  width: 100%;
+  box-sizing: border-box;
+  height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 4px;
+  font: inherit;
+  font-size: 11px;
+  background: var(--color-ink-04);
+  color: var(--color-ink);
+  box-shadow: inset 0 0 0 1px var(--color-ink-12);
+  transition: box-shadow 80ms ease, background 80ms ease;
+}
+.teach-input:focus-visible {
+  outline: 0;
+  background: var(--color-surface);
+  box-shadow: inset 0 0 0 1px var(--color-brand), 0 0 0 3px var(--color-brand-08);
+}
+.teach-input::placeholder { color: var(--color-ink-45); }
+.teach-active-row { display: flex; align-items: center; gap: 8px; }
+.teach-counter { font-size: 11px; color: var(--color-ink-60); font-variant-numeric: tabular-nums; }
+.teach-id {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--color-ink-45);
+  word-break: break-all;
+}
+.teach-actions { display: flex; gap: 6px; }
+.teach-actions .btn { flex: 1; height: 26px; font-size: 11px; }
+.pill--rec {
+  background: var(--color-danger-bg);
+  color: var(--color-danger-ink);
+  box-shadow: inset 0 0 0 1px var(--color-danger-border);
+  animation: teach-pulse 1.4s ease-in-out infinite;
+}
+@keyframes teach-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
 /* Footer — flat, holds only the primary block CTA */
 .footer {
   display: flex;
