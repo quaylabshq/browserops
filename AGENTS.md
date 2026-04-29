@@ -25,7 +25,7 @@ user's real Chrome tabs (with existing logins intact)
 
 **Wire protocol.** The bridge translates each MCP `tools/call` into a WebSocket `{type:"request", id, method, params, timeout_ms}` envelope. The extension routes `method` to a handler registered in `packages/extension/src/background/handlers/`. Responses go back as `{type:"response", id, ok, result|error}`.
 
-**Procedure memory.** Named, parameterised action graphs stored under `~/browserops/procedures/` as YAML. Six `procedures_*` tools (list, search, get, save, promote, delete) manage them. The bridge does NOT execute procedures — agents read the YAML and call the `browser_*` primitives themselves.
+**Procedure memory.** Named, parameterised action graphs stored under `~/browserops/procedures/` as YAML. Five `procedures_*` tools (search, get, save, delete, execute) manage them. The store ships empty — new procedures are authored on-demand by the `browserops-teach` skill (autonomous) or by hand.
 
 ## Where to look
 
@@ -38,7 +38,6 @@ user's real Chrome tabs (with existing logins intact)
 | Procedure YAML schema + search ranker | `packages/shared/src/procedures.ts` + `packages/bridge/src/procedures/` |
 | Error codes + WebSocket close codes | `packages/shared/src/errors.ts` |
 | Rate limiter + risky-action gate | `packages/bridge/src/rate-limiter.ts` + `packages/bridge/src/safety.ts` |
-| Seed procedures to copy and learn from | `examples/procedures/` |
 | browserops-teach skill (autonomous procedure authoring, replaces teach + autoteach) | `~/.claude/skills/browserops-teach/SKILL.md` (mirror at `skills/browserops-teach.md`) |
 | User-facing setup (registration for every major MCP client) | `README.md` |
 
@@ -66,10 +65,9 @@ Pass only: procedure name, inputs, tab_id.
 Do NOT copy procedure steps into the prompt — the sub-agent calls `procedures_get` itself.
 
 ```
-Run the gmail.send_email procedure on tab t_3 with:
-- to: foo@example.com
-- subject: Hello
-- body: Hi there.
+Run <procedure_name> on tab t_3 with:
+- <input_1>: <value_1>
+- <input_2>: <value_2>
 Report success or failure.
 ```
 
@@ -81,7 +79,7 @@ Only screenshot when a step returns an error or unexpected state.
 When a composite procedure covers the full flow, the sub-agent brief references ONLY the composite name — one `procedures_get`, no re-planning steps.
 
 ```
-Run gmail.send_email. Report whether the message was sent successfully.
+Run <composite_procedure>. Report whether it succeeded.
 ```
 
 ## Keyboard chords
@@ -109,7 +107,7 @@ Common chord recipes:
 
 **Clearing fields.** For the common case ("overwrite this bad text with new text"), use `browser_type` with `clear_mode: "auto"` (or `clear_first: true`) rather than a two-step chord — `auto` picks the fastest safe strategy per element type, verifies emptiness, and falls back to keyboard Delete if execCommand was ignored by a rich editor.
 
-For clearing as an independent step (no typing follow-up), use the bundled `meta.clear_field` procedure.
+For clearing as an independent step (no typing follow-up), bind a `browser_press` chord directly: `["Primary", "KeyA"]` followed by `["Delete"]`.
 
 **Destructive chords are refused by the extension.** `Primary+W`, `Primary+Q`, `Primary+Shift+W`, `Alt+F4`, `Primary+T`, `Primary+N`, `Primary+Shift+N` would close tabs / quit the browser / open new contexts the user didn't ask for. Don't try to route around the deny-list — if you need something destructive, ask first.
 

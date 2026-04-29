@@ -25,7 +25,6 @@ import { loadOrCreateToken } from "./token.js";
 import { WSBridge } from "./ws-server.js";
 import { ensureIndex } from "./procedures/index-builder.js";
 import { proceduresRoot } from "./procedures/paths.js";
-import { seedBundledProcedures } from "./procedures/seed.js";
 import { loadConfigFeatures } from "./config.js";
 
 export interface DaemonRuntime {
@@ -152,19 +151,6 @@ export async function bootDaemonRuntime(opts: BootDaemonRuntimeOptions): Promise
   const safety = new Safety(riskyMatcher, wsBridge.confirmation, logger, traceWriter);
 
   if (enabledFeatures.current.has("procedures")) {
-    try {
-      const seedReport = await seedBundledProcedures();
-      if (seedReport.copied.length > 0) {
-        await logger.write({
-          dir: "system",
-          event: "procedures_seeded",
-          copied: seedReport.copied,
-        });
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      process.stderr.write(`browserops: warn: procedure seed failed: ${msg}\n`);
-    }
     try {
       await ensureIndex(proceduresRoot());
       await logger.write({ dir: "system", event: "procedure_index_ready" });
