@@ -31,6 +31,10 @@ export const ERROR_CODES = [
   "CHAINED_ACTION_FAILED",
   "REPEATED_FAILURE",
   "DISPATCH_FAILED_ON_GATED_DOMAIN",
+  // Cross-agent memory store errors
+  "MEMORY_NOT_FOUND",
+  "MEMORY_ALREADY_EXISTS",
+  "MEMORY_SCHEMA_INVALID",
 ] as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[number];
