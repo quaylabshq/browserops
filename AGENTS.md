@@ -59,6 +59,9 @@ The four `lore_*` tools (`lore_save`, `lore_search`, `lore_get`, `lore_delete`) 
 ### Skills stay in sync with the installed package
 Skills bundled with the CLI (`browserops`, `browserops-teach`) are kept in sync via `browserops upgrade` (which now calls `browserops sync` internally) or directly via `browserops sync skills`. After every package bump the on-disk `~/.claude/skills/<name>/SKILL.md` is refreshed atomically, with a timestamped `.bak` if local edits were detected. If a skill ever feels out of step with the tool catalogue you're seeing, run `browserops sync skills`.
 
+### Server instructions adapt to enabled features
+The text the bridge surfaces via MCP `initialize.result.instructions` is built per-server-instance from the active feature set, so disabled features don't bloat the prompt with documentation for tools the agent can't call. With `procedures` off the Procedures section collapses to a one-line opt-in hint; with `lore` on a short Cross-agent-lore paragraph is appended; the procedure-prompt entry (`browserops_procedure`) is hidden from `prompts/list` whenever `procedures` is off. That's why the procedure-first orchestration rule above is conditional on `procedures_search` actually being in your tool catalogue.
+
 ### Prefer `browser_quick_read` over `browser_read`
 When you need to find a specific element (a button, input, link) by its label, use `browser_quick_read` instead of `browser_read`. It searches the a11y tree by accessible name and returns only matching refs — much cheaper than a full page read. Fall back to `browser_read` only when you need the full page structure or when `browser_quick_read` returns no matches.
 
