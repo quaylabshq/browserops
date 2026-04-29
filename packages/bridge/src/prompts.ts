@@ -6,6 +6,7 @@ import {
   McpError,
   ErrorCode as McpErrorCode,
 } from "@modelcontextprotocol/sdk/types.js";
+import type { FeatureName } from "@browserops/shared";
 import { handleGet } from "./procedures/handlers.js";
 
 // ---------------------------------------------------------------------------
@@ -21,6 +22,14 @@ export interface PromptListEntry {
 export interface PromptMessage {
   role: "user" | "assistant";
   content: { type: "text"; text: string };
+}
+
+export interface PromptRegistry {
+  listPrompts(): { prompts: PromptListEntry[] };
+  getPrompt(
+    name: string,
+    args: Record<string, string> | undefined,
+  ): Promise<{ description?: string; messages: PromptMessage[] }>;
 }
 
 // ---------------------------------------------------------------------------
@@ -72,128 +81,147 @@ function shortPreamble(skillText: string): string {
 
 // ---------------------------------------------------------------------------
 // Prompt catalogue
+//
+// `browserops`           — always available; runs a browser task with the
+//                          operating guide preamble.
+// `browserops_procedure` — gated by the `procedures` feature. Hidden from
+//                          listPrompts() and rejected with a feature-aware
+//                          error when the feature is off.
 // ---------------------------------------------------------------------------
 
-const PROMPTS: PromptListEntry[] = [
-  {
-    name: "browserops",
-    description:
-      "Run a browser task using the browserops operating guide and procedure-first orchestration.",
-    arguments: [
-      {
-        name: "task",
-        description: "What you want done in the browser.",
-        required: true,
-      },
-    ],
-  },
-  {
-    name: "browserops_procedure",
-    description:
-      "Run a saved browserops procedure by name. Inlines the procedure YAML so the agent has the exact step graph in context.",
-    arguments: [
-      {
-        name: "name",
-        description: "Procedure name (e.g. 'gmail.send_email').",
-        required: true,
-      },
-      {
-        name: "task",
-        description: "Optional instance-specific task or input notes.",
-        required: false,
-      },
-    ],
-  },
-];
+const BROWSEROPS_PROMPT: PromptListEntry = {
+  name: "browserops",
+  description:
+    "Run a browser task using the browserops operating guide and procedure-first orchestration.",
+  arguments: [
+    {
+      name: "task",
+      description: "What you want done in the browser.",
+      required: true,
+    },
+  ],
+};
+
+const BROWSEROPS_PROCEDURE_PROMPT: PromptListEntry = {
+  name: "browserops_procedure",
+  description:
+    "Run a saved browserops procedure by name. Inlines the procedure YAML so the agent has the exact step graph in context.",
+  arguments: [
+    {
+      name: "name",
+      description: "Procedure name (e.g. 'gmail.send_email').",
+      required: true,
+    },
+    {
+      name: "task",
+      description: "Optional instance-specific task or input notes.",
+      required: false,
+    },
+  ],
+};
 
 // ---------------------------------------------------------------------------
-// listPrompts
+// createPromptRegistry — feature-aware list/get
 // ---------------------------------------------------------------------------
 
-export function listPrompts(): { prompts: PromptListEntry[] } {
-  return { prompts: PROMPTS };
+export function createPromptRegistry(
+  enabledFeatures: ReadonlySet<FeatureName>,
+): PromptRegistry {
+  const proceduresOn = enabledFeatures.has("procedures");
+
+  function listPrompts(): { prompts: PromptListEntry[] } {
+    const prompts: PromptListEntry[] = [BROWSEROPS_PROMPT];
+    if (proceduresOn) prompts.push(BROWSEROPS_PROCEDURE_PROMPT);
+    return { prompts };
+  }
+
+  async function getPrompt(
+    name: string,
+    args: Record<string, string> | undefined,
+  ): Promise<{ description?: string; messages: PromptMessage[] }> {
+    if (name === "browserops") return await getBrowseropsPrompt(args);
+    if (name === "browserops_procedure") {
+      if (!proceduresOn) {
+        throw new McpError(
+          McpErrorCode.InvalidParams,
+          "browserops_procedure requires the 'procedures' feature — enable with `browserops feature enable procedures` (then `browserops restart`)",
+        );
+      }
+      return await getBrowseropsProcedurePrompt(args);
+    }
+    throw new McpError(McpErrorCode.InvalidParams, `unknown prompt: ${name}`);
+  }
+
+  return { listPrompts, getPrompt };
 }
 
 // ---------------------------------------------------------------------------
-// getPrompt
+// Per-prompt builders
 // ---------------------------------------------------------------------------
 
-export async function getPrompt(
-  name: string,
+async function getBrowseropsPrompt(
   args: Record<string, string> | undefined,
 ): Promise<{ description?: string; messages: PromptMessage[] }> {
-  if (name === "browserops") {
-    const skillText = await loadSkillText();
-    if (!skillText) {
-      throw new McpError(
-        McpErrorCode.InternalError,
-        "browserops skill content not bundled",
-      );
-    }
-
-    const task = args?.["task"];
-    if (!task || task.trim() === "") {
-      throw new McpError(McpErrorCode.InvalidParams, "task argument required");
-    }
-
-    const text = skillText + "\n\n## Task\n" + task;
-
-    return {
-      description:
-        "Run a browser task using the browserops operating guide and procedure-first orchestration.",
-      messages: [
-        {
-          role: "user",
-          content: { type: "text", text },
-        },
-      ],
-    };
+  const skillText = await loadSkillText();
+  if (!skillText) {
+    throw new McpError(
+      McpErrorCode.InternalError,
+      "browserops skill content not bundled",
+    );
   }
 
-  if (name === "browserops_procedure") {
-    const procedureName = args?.["name"];
-    if (!procedureName || procedureName.trim() === "") {
-      throw new McpError(McpErrorCode.InvalidParams, "name argument required");
-    }
-
-    let yaml: string;
-    try {
-      const result = await handleGet({ name: procedureName });
-      yaml = result.yaml;
-    } catch (err) {
-      throw new McpError(
-        McpErrorCode.InvalidParams,
-        `no procedure named ${procedureName} — discover with \`procedures_search\``,
-      );
-    }
-
-    const skillText = await loadSkillText();
-    const preamble = skillText
-      ? "You are running a saved browserops procedure. Follow the step graph exactly, using the browser_* primitives.\n\n" +
-        shortPreamble(skillText)
-      : "You are running a saved browserops procedure. Follow the step graph exactly, using the browser_* primitives.";
-
-    const task = args?.["task"];
-    const taskSection = task ? `\n\n## Task\n${task}` : "";
-
-    const text =
-      preamble +
-      `\n\n## Procedure: ${procedureName}\n\n` +
-      "```yaml\n" +
-      yaml +
-      "\n```" +
-      taskSection;
-
-    return {
-      description: `Run the saved browserops procedure: ${procedureName}.`,
-      messages: [
-        {
-          role: "user",
-          content: { type: "text", text },
-        },
-      ],
-    };
+  const task = args?.["task"];
+  if (!task || task.trim() === "") {
+    throw new McpError(McpErrorCode.InvalidParams, "task argument required");
   }
 
-  throw new McpError(McpErrorCode.InvalidParams, `unknown prompt: ${name}`);
+  const text = skillText + "\n\n## Task\n" + task;
+
+  return {
+    description:
+      "Run a browser task using the browserops operating guide and procedure-first orchestration.",
+    messages: [{ role: "user", content: { type: "text", text } }],
+  };
+}
+
+async function getBrowseropsProcedurePrompt(
+  args: Record<string, string> | undefined,
+): Promise<{ description?: string; messages: PromptMessage[] }> {
+  const procedureName = args?.["name"];
+  if (!procedureName || procedureName.trim() === "") {
+    throw new McpError(McpErrorCode.InvalidParams, "name argument required");
+  }
+
+  let yaml: string;
+  try {
+    const result = await handleGet({ name: procedureName });
+    yaml = result.yaml;
+  } catch {
+    throw new McpError(
+      McpErrorCode.InvalidParams,
+      `no procedure named ${procedureName} — discover with \`procedures_search\``,
+    );
+  }
+
+  const skillText = await loadSkillText();
+  const preamble = skillText
+    ? "You are running a saved browserops procedure. Follow the step graph exactly, using the browser_* primitives.\n\n" +
+      shortPreamble(skillText)
+    : "You are running a saved browserops procedure. Follow the step graph exactly, using the browser_* primitives.";
+
+  const task = args?.["task"];
+  const taskSection = task ? `\n\n## Task\n${task}` : "";
+
+  const text =
+    preamble +
+    `\n\n## Procedure: ${procedureName}\n\n` +
+    "```yaml\n" +
+    yaml +
+    "\n```" +
+    taskSection;
+
+  return {
+    description: `Run the saved browserops procedure: ${procedureName}.`,
+    messages: [{ role: "user", content: { type: "text", text } }],
+  };
 }
