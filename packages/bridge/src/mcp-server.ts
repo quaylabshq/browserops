@@ -33,6 +33,7 @@ import type { Logger } from "./logger.js";
 import type { TraceWriter } from "./trace-writer.js";
 import type { GatedDomainMatcher } from "./gated-domains.js";
 import { buildProcedureHandlers } from "./procedures/handlers.js";
+import { MEMORY_HANDLERS } from "./memory/handlers.js";
 import { listPrompts, getPrompt } from "./prompts.js";
 import { checkBreaker, recordResult as recordBreakerResult } from "./circuit-breaker.js";
 
@@ -328,6 +329,7 @@ export class McpBridgeServer {
   private readonly server: Server;
   private readonly validators = new Map<string, ValidateFunction>();
   private readonly procedureHandlers: Record<string, (raw: Record<string, unknown>) => Promise<unknown>>;
+  private readonly memoryHandlers: Record<string, (raw: Record<string, unknown>) => Promise<unknown>>;
   private transport?: Transport;
   /**
    * Per-session "last successfully-acted-on tab." browser_current_tab
@@ -340,6 +342,7 @@ export class McpBridgeServer {
   constructor(deps: McpBridgeDeps) {
     this.deps = deps;
     this.procedureHandlers = buildProcedureHandlers(deps.wsBridge);
+    this.memoryHandlers = MEMORY_HANDLERS;
 
     const ajv = new Ajv({ allErrors: true, strict: false, useDefaults: true });
     addFormats(ajv);
@@ -547,6 +550,26 @@ export class McpBridgeServer {
         return result;
       }
       // Unknown procedures_* tool — fall through to let MethodNotFound fire below.
+    }
+
+    // 4c. In-process memory handlers — pure filesystem, no extension round-trip.
+    if (name.startsWith("memory_")) {
+      const handler = this.memoryHandlers[name];
+      if (handler) {
+        let result: ToolCallResult;
+        try {
+          const handlerResult = await handler(params);
+          result = await this.reply(id, name, toolOk(handlerResult));
+        } catch (err) {
+          const code = extractErrorCode(err);
+          const message = err instanceof Error ? err.message : String(err);
+          const details = err instanceof Error && "details" in err
+            ? (err as { details?: unknown }).details
+            : undefined;
+          result = await this.reply(id, name, toolError({ code, message, details }));
+        }
+        return result;
+      }
     }
 
     // 4b. Look up tab info + enforce per-session ownership.
