@@ -39,17 +39,16 @@ user's real Chrome tabs (with existing logins intact)
 | Error codes + WebSocket close codes | `packages/shared/src/errors.ts` |
 | Rate limiter + risky-action gate | `packages/bridge/src/rate-limiter.ts` + `packages/bridge/src/safety.ts` |
 | Seed procedures to copy and learn from | `examples/procedures/` |
-| Teach mode (recorder, content script, session store, MCP tools) | `packages/extension/src/background/teach-recorder.ts` + `packages/extension/src/content/capture-events.ts` + `packages/bridge/src/teach/` |
-| Auto-teach (handlers, distiller pipeline, convergence, variance gate, trace bindings) | `packages/bridge/src/autoteach/` (`handlers.ts`, `distiller.ts` + `stage-*.ts`, `convergence.ts`, `variance-gate.ts`, `bindings.ts`, `store.ts`) |
+| browserops-teach skill (autonomous procedure authoring, replaces teach + autoteach) | `~/.claude/skills/browserops-teach/SKILL.md` (mirror at `skills/browserops-teach.md`) |
 | User-facing setup (registration for every major MCP client) | `README.md` |
 
 ## browserops orchestration rules
 
 _Agent runtime rules (planning, delegation, checkpoints, stuck-state escalation) live in the `browserops` skill at `~/.claude/skills/browserops/SKILL.md`. The rules below are a summary for repo contributors — the skill is the source of truth._
 
-### Discover available tools from `tools/list` — do not assume `procedures_*` or `procedures_teach_*` exist
+### Discover available tools from `tools/list` — do not assume `procedures_*` exist
 
-Both the procedure family (`procedures_list`, `procedures_search`, `procedures_get`, `procedures_save`, `procedures_promote`, `procedures_delete`, `procedures_compile`, `procedures_execute`) and the teach-mode family (`procedures_teach_*`) are **experimental, opt-in features**. They are off by default; users enable them via `browserops feature enable <name>`. If a tool isn't in the catalogue, the feature is off — fall back to direct `browser_*` orchestration for that conversation, and optionally suggest the user enable the feature for next time. Calling a disabled tool returns `FEATURE_DISABLED` with a hint that includes the enable command.
+The procedure family (`procedures_search`, `procedures_get`, `procedures_save`, `procedures_delete`, `procedures_execute`) is gated behind a single **experimental, opt-in feature**: `procedures`. Off by default; users enable it via `browserops feature enable procedures`. If a `procedures_*` tool isn't in the catalogue, the feature is off — fall back to direct `browser_*` orchestration for that conversation, and optionally suggest the user enable the feature for next time. Calling a disabled tool returns `FEATURE_DISABLED` with a hint that includes the enable command.
 
 ### Procedure-first: always search before planning
 Before any browser task, call `procedures_search` with tokens from the user's request — but only when `procedures_search` is in your tool catalogue (the procedures feature is opt-in; see above).
@@ -146,74 +145,31 @@ browserops runs in **auto-approve mode by default**: risky actions (`browser_exe
 
 If the user has opted into gating (via `--approval=gate`, `BROWSEROPS_APPROVAL=gate` env var, or the extension popup toggle), risky actions will be gated — respect a `USER_DECLINED` response and do not retry.
 
-## Teach mode
+## Authoring new procedures (browserops-teach)
 
-> **Experimental — off by default.** The `procedures_teach_*` tools only appear in your catalogue when the user has run `browserops feature enable teach`. If they aren't present, do not suggest teach mode — there is nothing you can call. When suggesting teach to a user whose catalogue doesn't have it, point them at `browserops feature enable teach` (and `procedures`, since teach's output is a procedure draft).
+> **Experimental — off by default.** The five procedure tools only appear in your catalogue when the user has run `browserops feature enable procedures`. With the feature off, neither the procedure store nor the browserops-teach skill are usable — direct `browser_*` orchestration is the only path.
 
-Teach mode lets the user demonstrate a flow in their real browser while you watch live. It's the bootstrap path for any flow that has no existing procedure: instead of re-planning from scratch every time, the user shows you once and you turn it into a procedure.
+When `procedures_search` returns nothing trusted for a non-trivial flow AND the user signals they want to remember it ("learn to do X", "figure this out and save it", "remember how to <task>"), the **`browserops-teach` skill** at `~/.claude/skills/browserops-teach/SKILL.md` (mirrored to `skills/browserops-teach.md`) is the canonical guide. It covers the autonomous flow end-to-end: pre-flight checks, the three hard safety gates that justify a single user clarifier, the per-app safe-dummy registry, the in-context YAML authoring loop, the goal-grounded verification predicate, and the single-message report format.
 
-### When to suggest it
+Don't try to drive procedure authoring from this file alone — the skill is the source of truth.
 
-If `procedures_search` returns nothing relevant for a non-trivial flow the user is asking about, ask once: *"I don't have a procedure for this. Want to teach me — just demonstrate it once and I'll record it?"* If they agree, proceed. Don't suggest teach mode for one-shot tasks where the user is unlikely to repeat the flow.
+If `procedures_search` DOES return a trusted match at score ≥0.5, point the user at the existing procedure. The skill is for new flows, not reruns of existing ones.
 
-### The loop (strictly agent-driven)
+### What changed (vs. the old teach + autoteach pair)
 
-1. `procedures_teach_start({ narration_hint? })` → returns `session_id`.
-2. Tell the user "go ahead — click through the flow." Stay quiet while they work.
-3. `procedures_teach_observe({ session_id, since_seq, wait_ms: 30000 })` to long-poll the timeline. Loop until `finished: true` or you have enough context to insert a sync point.
-4. As the user demonstrates, optionally insert sync points:
-   - `procedures_teach_marker({ label? })` — hard split boundary the distiller respects.
-   - `procedures_teach_narration({ text })` — free-text note attached to the timeline.
-5. When the user signals they're done (or you observe a clear terminal state), call `procedures_teach_stop`. Returns `event_count` and `duration_ms`.
-6. Build the procedure from the timeline and call `procedures_save` **only after replay succeeds** — same "never save an untested procedure" rule as everywhere else.
+The old `teach` and `autoteach` features and their 16 tools (`procedures_teach_*` + `procedures_autoteach_*`) are gone. With autonomous-by-default, the agent watches its own `browser_*` calls and authors the YAML in its own context — no separate keystroke recorder, no iterative bridge-side replay loop. One feature flag (`procedures`), five sync tools + one execute, one skill.
 
-### Activation is agent-only
+### Storage
 
-There is no "Start teaching" button in the popup. The user starts by talking to you. While a session is active the popup shows a red `REC` bar with a single Stop button — that's an escape valve, not a normal control surface. Don't tell users to press it; tell them to ask you to stop.
-
-### Privacy: redaction is at capture, not afterthought
-
-The content script blanks the value of any input where:
-- `type="password"`, or `autocomplete` is `current-password` / `new-password` / `one-time-code`, or `name`/`id` matches `/(password|secret|otp|2fa|mfa)/`
-- The free-text content matches a known secret regex (`sk-*`, `AKIA*`, `ghp_*`, `xox*-*`, JWTs)
-
-Redacted typing arrives with `value: ""`, `redacted: true`, and a `redaction_reason`. Treat redacted fields as required parameters: when distilling, surface them as procedure inputs the runner provides at execution time, not literals baked into the YAML.
-
-### Sessions live on disk
-
-`~/browserops/teach-sessions/<session_id>.jsonl` (events) + `<session_id>.meta.json` (sidecar). Override with `BROWSEROPS_TEACH_DIR`. Use `procedures_teach_list` to find sessions started before you had context — useful if the user starts demonstrating from the popup or via another agent before naming the goal.
-
-## Auto-teach
-
-> **Experimental — off by default.** The `procedures_autoteach_*` family only appears when the user has run `browserops feature enable autoteach`. If those tools aren't in your catalogue, don't suggest auto-teach — there is nothing you can call. Auto-teach also requires `procedures` enabled (it saves into the procedure store); demo mode also requires `teach`.
-
-Auto-teach is the procedure-bootstrapping loop. The user asks the agent to "learn to do X"; the agent captures one demonstration (or, when the caller opts in, explores cold), distills it into a draft, then iteratively replays-and-optimizes the draft applying ONE optimization per run until the metrics stop improving. The bridge owns the persistent state, distiller, convergence detector, and variance gate; the agent owns the loop body and the user-facing consent flow.
-
-### When to suggest it
-
-If `procedures_search` returns nothing relevant for a non-trivial flow AND the user signals they want to remember the flow ("learn to do X", "figure this out and save it", "auto-teach"), invoke the **auto-teach skill** (`skills/auto-teach.md` in this repo, mirrored to `~/.claude/skills/auto-teach/SKILL.md`). Don't try to drive the loop from this file alone — the skill is the canonical guide for the consent script, the per-run replay logic, the side-effect policies, and the failure-mode → fix-it map.
-
-If `procedures_search` DOES return a trusted match at score >= 0.5, point the user at it instead. Auto-teach is for new flows.
-
-### The 9 tools
-
-`procedures_autoteach_start`, `_attach`, `_record_trace`, `_distill`, `_record_run`, `_status`, `_finalize`, `_list`, `_resume`. All gated behind `autoteach`. The skill covers what each one does in the loop; the schemas are in `packages/shared/src/tools.ts`.
-
-### Side-effect handling
-
-The distiller flags leaves whose steps exercise destructive surfaces (Send/Pay/Post/Delete buttons, confirmation URLs after a network burst). Three policies the user picks at consent: `use_dummies`, `pause_at_destructive`, `read_only_only`. Inputs feeding destructive surfaces get `destructive: true` on the saved procedure — future callers can require a dummy substitute or refuse. Replay during the loop **must** use the dummy values from `consent.dummies`; running 9 replays of "send real email to real person" would be a bug.
-
-### Sessions live on disk
-
-`~/browserops/autoteach-sessions/<session_id>/` holds: `session.json` (metadata + consent), `trace.jsonl` (per-run browser_* records), `runs.jsonl` (per-run metrics + optimization tried), `drafts/v<N>.yaml` (distiller output at each iteration). Override with `BROWSEROPS_AUTOTEACH_DIR`. `procedures_autoteach_list` enumerates sessions for the calling MCP owner; `procedures_autoteach_resume` reloads one across conversations.
+`~/browserops/procedures/` holds the YAML files plus the `index.json` search manifest. No transient session state on disk; the agent's own conversation context is the session. Override the root with `BROWSEROPS_PROCEDURES_DIR`.
 
 ## Procedure authoring rules
 
 > Applies whenever the `procedures` feature is enabled and you're authoring or maintaining procedure YAML. With `procedures` off these tools and rules don't apply — the user is on the minimal `browser_*`-only path.
 
 ### Never save an untested procedure
-- Write the procedure → run it in the same session → fix what breaks → then call `procedures_save`.
-- A procedure is trusted only when `success_count >= 1` and the current UI still matches what was verified.
+- Write the procedure → run it in the same session → fix what breaks → then call `procedures_save` with `bump_success: true`.
+- A procedure is trusted only when it has been saved with `bump_success: true` (which flips status:draft → status:trusted) and the current UI still matches what was verified.
 - For multi-step flows: test each leaf individually first, then compose.
 - Treat the live UI as source of truth. If the next screen, button label, or route is not confirmed, do not guess it.
 - Model every stable UI transition as its own leaf. Split setup, onboarding, branching, and final extraction into separate procedures.
