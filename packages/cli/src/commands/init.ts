@@ -24,7 +24,7 @@ import {
   applyFeaturePartial,
   getFeatureStates,
 } from "../lib/config.js";
-import { installClaudeSkill } from "../installers/skill.js";
+import { installAllClaudeSkills } from "../installers/skill.js";
 import {
   FEATURES,
   FEATURE_METADATA,
@@ -116,20 +116,31 @@ async function runSkillInstaller(dryRun: boolean): Promise<void> {
     return;
   }
 
-  try {
-    const result = await installClaudeSkill({ scope: "user", dryRun });
+  const { results, failed } = await installAllClaudeSkills({
+    scope: "user",
+    dryRun,
+  });
+
+  if (results.length === 0 && failed.length === 0) {
+    warn("no bundled skills found — rebuild the CLI package (`pnpm -F browserops build`).");
+    return;
+  }
+
+  for (const result of results) {
     if (result.changed) {
       const tail = result.backupPath ? ` ${dim(`(backup: ${result.backupPath})`)}` : "";
-      ok(`Claude skill: ${result.message}${tail}`);
+      ok(`Claude skill ${result.skillName}: ${result.message}${tail}`);
     } else {
-      info(`Claude skill: ${result.message}`);
+      info(`Claude skill ${result.skillName}: ${result.message}`);
     }
-    process.stdout.write(
-      `  ${dim(`→ invoke in Claude Code via ${c.cyan("/browserops")}; run ${c.cyan("browserops install-skill --scope project")} to also install per-project.`)}\n`,
-    );
-  } catch (e) {
-    warn(`Claude skill install failed: ${e instanceof Error ? e.message : String(e)}`);
   }
+  for (const f of failed) {
+    warn(`Claude skill ${f.skillName} install failed: ${f.error.message}`);
+  }
+
+  process.stdout.write(
+    `  ${dim(`→ invoke in Claude Code via ${c.cyan("/browserops")}; run ${c.cyan("browserops install-skill --scope project")} to also install per-project.`)}\n`,
+  );
 }
 
 async function seedDefaultLauncher(dryRun: boolean): Promise<void> {

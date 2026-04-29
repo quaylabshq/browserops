@@ -7,7 +7,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..", "..");
 const extensionDist = path.resolve(repoRoot, "packages", "extension", "dist");
 const agentsMd = path.resolve(repoRoot, "AGENTS.md");
-const skillMd = path.resolve(repoRoot, "skills", "browserops.md");
+const skillsDir = path.resolve(repoRoot, "skills");
 const assetsDir = path.resolve(here, "dist", "assets");
 
 async function copyAssetsIntoDist(): Promise<void> {
@@ -33,15 +33,20 @@ async function copyAssetsIntoDist(): Promise<void> {
     // AGENTS.md missing — install-rules will warn at runtime
   }
 
-  // Bundle the canonical skill so `browserops install-skill` can drop it into
-  // ~/.claude/skills/browserops/ (and anywhere else with a skill-dir convention).
+  // Bundle every skill at <repoRoot>/skills/<name>.md so `browserops install-skill`
+  // (and the upgrade/sync paths) can drop them into ~/.claude/skills/<name>/SKILL.md.
+  // The target layout is one directory per skill: assets/skills/<name>/SKILL.md.
   try {
-    await fs.access(skillMd);
-    const skillTarget = path.resolve(assetsDir, "skills", "browserops");
-    await fs.mkdir(skillTarget, { recursive: true });
-    await fs.cp(skillMd, path.resolve(skillTarget, "SKILL.md"));
+    const entries = await fs.readdir(skillsDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
+      const skillName = entry.name.slice(0, -".md".length);
+      const skillTarget = path.resolve(assetsDir, "skills", skillName);
+      await fs.mkdir(skillTarget, { recursive: true });
+      await fs.cp(path.resolve(skillsDir, entry.name), path.resolve(skillTarget, "SKILL.md"));
+    }
   } catch {
-    // skill missing — install-skill will warn at runtime
+    // skills dir missing — install-skill will warn at runtime
   }
 }
 
