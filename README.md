@@ -24,7 +24,7 @@ You can also use `pnpm add -g browserops` or run ad-hoc with `npx browserops`.
 browserops init
 ```
 
-This is a one-shot wizard. It mints `~/.browserops/token`, seeds bundled procedure examples into `~/browserops/procedures/shared/`, starts the bridge daemon on `127.0.0.1:57321`, copies the unpacked Chrome extension to `~/.browserops/extension/`, then detects your installed MCP clients (Claude Code, Cursor, Zed, Continue, Windsurf, Codex) and offers to register `browserops` in each of their configs. Re-running it is safe and idempotent.
+This is a one-shot wizard. It mints `~/.browserops/token`, creates an empty `~/browserops/procedures/shared/` directory, starts the bridge daemon on `127.0.0.1:57321`, copies the unpacked Chrome extension to `~/.browserops/extension/`, then detects your installed MCP clients (Claude Code, Cursor, Zed, Continue, Windsurf, Codex) and offers to register `browserops` in each of their configs. Re-running it is safe and idempotent.
 
 Flags:
 - `--yes` — non-interactive (accept all detected clients)
@@ -249,11 +249,11 @@ Full JSON schemas for each tool are declared in `packages/shared/src/tools.ts`.
 
 ## Procedures
 
-> **Experimental — off by default.** Enable with `browserops feature enable procedures` (then `browserops restart`), or pick it during `browserops init`. With this feature off, the five `procedures_*` tools are hidden from your agent's catalogue, the on-disk `~/browserops/procedures/` directory isn't seeded, and the in-process index isn't built — minimal token overhead for users who only want browser automation.
+> **Experimental — off by default.** Enable with `browserops feature enable procedures` (then `browserops restart`), or pick it during `browserops init`. With this feature off, the five `procedures_*` tools are hidden from your agent's catalogue and the in-process index isn't built — minimal token overhead for users who only want browser automation.
 
 Procedures are named, parameterised, reusable action graphs the agent can discover and replay without re-planning from a screenshot every time. They live in `~/browserops/procedures/` (user-visible, not hidden) and are surfaced through five MCP tools: `procedures_search`, `procedures_get`, `procedures_save`, `procedures_delete`, `procedures_execute`.
 
-The bridge auto-seeds `examples/procedures/` into `~/browserops/procedures/shared/` on first start (and on every `pnpm setup` / `node packages/bridge/dist/index.js init` run). Local copies are never overwritten — if a bundled example ships an update, the bridge logs a notice on stderr and you copy it manually if you want the new version.
+The store ships empty — there are no bundled "default" procedures. New ones are authored on-demand by the **`browserops-teach`** skill (autonomous) or by hand via `procedures_save`. Past sessions accumulate via `bump_success: true`, so the store grows as the user uses it; nothing is shipped in the box.
 
 Procedures default to `status: draft` until verified. `procedures_search` excludes drafts by default and falls back to including them when no trusted match exists. To mark a procedure trusted, call `procedures_save` with `bump_success: true` after a verified run; status flips to `trusted` and the entry surfaces in default search.
 
@@ -380,7 +380,7 @@ browserops/
 │   ├── bridge/        # @browserops/bridge — MCP + WebSocket server
 │   ├── extension/     # MV3 extension (background SW, options, popup)
 │   └── cli/           # browserops — CLI orchestrator (init, daemon, launchers)
-└── examples/          # seed procedures you can copy into ~/browserops/procedures
+└── skills/            # browserops + browserops-teach skill prompts
 ```
 
 ## Published packages
