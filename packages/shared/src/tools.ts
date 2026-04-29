@@ -209,6 +209,11 @@ const PROC_CODES = [
   "PROC_OWNER_INVALID",
   "PROC_DOMAIN_INVALID",
 ] as const satisfies readonly ErrorCode[];
+const MEMORY_CODES = [
+  "MEMORY_NOT_FOUND",
+  "MEMORY_ALREADY_EXISTS",
+  "MEMORY_SCHEMA_INVALID",
+] as const satisfies readonly ErrorCode[];
 
 // ---------------------------------------------------------------------------
 // Tool definitions
@@ -1665,6 +1670,215 @@ const proceduresExecute: ToolDef = {
 } as const;
 
 
+// ---------------------------------------------------------------------------
+// Cross-agent memory tools (feature: "memory")
+//
+// Memories are markdown files under ~/browserops/memory/, with a small
+// YAML frontmatter block carrying name/description/type/source/timestamps.
+// Every MCP client (Claude Code, Cursor, Zed, custom SDK) sees the same
+// store, so a lesson learned in one session can be reused in another.
+// ---------------------------------------------------------------------------
+
+const memoryNamePattern = "^[a-z][a-z0-9._-]{0,79}$";
+const memoryTypeEnum = ["user", "feedback", "project", "reference"] as const;
+
+const memoryFrontmatterSchema: JSONSchemaObject = {
+  type: "object",
+  additionalProperties: false,
+  required: ["name", "description", "type", "source", "created", "updated"] as const,
+  properties: {
+    name: { type: "string", pattern: memoryNamePattern },
+    description: { type: "string", minLength: 1, maxLength: 500 },
+    type: { enum: memoryTypeEnum },
+    source: { enum: ["mcp-tool", "cli"] as const },
+    created: { type: "string" },
+    updated: { type: "string" },
+  },
+} as const;
+
+const memorySearchMatchSchema: JSONSchemaObject = {
+  type: "object",
+  additionalProperties: false,
+  required: ["name", "description", "type", "score", "snippet"] as const,
+  properties: {
+    name: { type: "string" },
+    description: { type: "string" },
+    type: { enum: memoryTypeEnum },
+    score: { type: "number", minimum: 0, maximum: 1 },
+    snippet: { type: "string" },
+  },
+} as const;
+
+const memorySave: ToolDef = {
+  name: "memory_save",
+  feature: "memory",
+  description:
+    "Persist a markdown memory under ~/browserops/memory/<name>.md, visible to every MCP client. " +
+    "Use this when you want a lesson, preference, or context to outlive the current session and " +
+    "be reachable from a different agent (e.g. a Cursor session) later. By default duplicate names " +
+    "are rejected with MEMORY_ALREADY_EXISTS — set replace:true to overwrite. " +
+    "type categorises the memory (user|feedback|project|reference) so memory_search can filter. " +
+    'REQUIRED ARGUMENTS: {"name": "<id>", "description": "<one-liner>", "type": "<category>", "body": "<markdown>"}.',
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["name", "description", "type", "body"] as const,
+    properties: {
+      name: {
+        type: "string",
+        pattern: memoryNamePattern,
+        description:
+          "Stable identifier, e.g. \"feedback_terse_responses\" or \"project_q2_migration\". Lowercase, dot/underscore/hyphen separators.",
+      },
+      description: {
+        type: "string",
+        minLength: 1,
+        maxLength: 500,
+        description:
+          "One-line summary used by memory_search to decide relevance. Be specific — vague descriptions don't surface in searches.",
+      },
+      type: {
+        enum: memoryTypeEnum,
+        description:
+          "Category. user = facts about the human, feedback = how-to-collaborate corrections, project = ongoing-work context, reference = pointers to external systems.",
+      },
+      body: {
+        type: "string",
+        minLength: 1,
+        maxLength: 65536,
+        description: "Full markdown body of the memory.",
+      },
+      replace: {
+        type: "boolean",
+        default: false,
+        description:
+          "When true, overwrite an existing memory with the same name. Default false rejects duplicates with MEMORY_ALREADY_EXISTS.",
+      },
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["saved", "path", "created"] as const,
+    properties: {
+      saved: { const: true },
+      path: { type: "string" },
+      created: {
+        type: "boolean",
+        description: "True when a new memory was created, false when an existing one was overwritten.",
+      },
+    },
+  },
+  action_weight: 0.5,
+  risky: "never",
+  errorCodes: [...BASE_CODES, ...MEMORY_CODES] as const,
+} as const;
+
+const memorySearch: ToolDef = {
+  name: "memory_search",
+  feature: "memory",
+  description:
+    "Coverage-based search over the cross-agent memory store. Returns ranked metadata-only matches " +
+    "(name + description + type + score + body snippet) — fetch the full body with memory_get. " +
+    "Score is the fraction of distinct query tokens that appear anywhere in the entry's name, " +
+    "description, type, or body. Tie-break favours name and description matches over body matches. " +
+    "Pass type to filter by category. " +
+    'REQUIRED ARGUMENTS: {"query": "<search tokens>"}.',
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["query"] as const,
+    properties: {
+      query: { type: "string", minLength: 1, maxLength: 200 },
+      type: {
+        enum: memoryTypeEnum,
+        description: "If set, only return memories whose type matches.",
+      },
+      limit: { type: "integer", minimum: 1, maximum: 25, default: 10 },
+      min_score: {
+        type: "number",
+        minimum: 0,
+        maximum: 1,
+        default: 0.2,
+        description:
+          "Minimum coverage ratio (matched query tokens / total query tokens). Default 0.2.",
+      },
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["matches", "total", "truncated"] as const,
+    properties: {
+      matches: { type: "array", items: memorySearchMatchSchema },
+      total: { type: "integer", minimum: 0 },
+      truncated: { type: "boolean" },
+    },
+  },
+  action_weight: 0,
+  risky: "never",
+  errorCodes: [...BASE_CODES, ...MEMORY_CODES] as const,
+} as const;
+
+const memoryGet: ToolDef = {
+  name: "memory_get",
+  feature: "memory",
+  description:
+    "Retrieve the full body and frontmatter for a single memory by name. " +
+    "Errors with MEMORY_NOT_FOUND if the name is not in the store. " +
+    'REQUIRED ARGUMENTS: {"name": "<id>"}.',
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["name"] as const,
+    properties: {
+      name: { type: "string", pattern: memoryNamePattern },
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["meta", "body", "path"] as const,
+    properties: {
+      meta: memoryFrontmatterSchema,
+      body: { type: "string" },
+      path: { type: "string" },
+    },
+  },
+  action_weight: 0,
+  risky: "never",
+  errorCodes: [...BASE_CODES, ...MEMORY_CODES] as const,
+} as const;
+
+const memoryDelete: ToolDef = {
+  name: "memory_delete",
+  feature: "memory",
+  description:
+    "Remove a memory from the store by name. " +
+    "Errors with MEMORY_NOT_FOUND if the name is not present. " +
+    'REQUIRED ARGUMENTS: {"name": "<id>"}.',
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["name"] as const,
+    properties: {
+      name: { type: "string", pattern: memoryNamePattern },
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["deleted", "path"] as const,
+    properties: {
+      deleted: { const: true },
+      path: { type: "string" },
+    },
+  },
+  action_weight: 0.5,
+  risky: "never",
+  errorCodes: [...BASE_CODES, ...MEMORY_CODES] as const,
+} as const;
+
 const setSessionName: ToolDef = {
   name: "browser_set_session_name",
   description:
@@ -1760,6 +1974,10 @@ export const TOOL_DEFS: readonly ToolDef[] = [
   proceduresSave,
   proceduresDelete,
   proceduresExecute,
+  memorySave,
+  memorySearch,
+  memoryGet,
+  memoryDelete,
 ] as const;
 
 export const TOOL_DEF_MAP: Record<string, ToolDef> = Object.freeze(
