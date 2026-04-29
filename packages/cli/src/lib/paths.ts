@@ -26,8 +26,14 @@ export const extensionInstallDir = (): string => join(STATE_DIR, "extension");
 /**
  * Resolve the bundled-asset directory inside the published CLI package
  * (cli/dist/assets/). Falls back to the source repo path when running via tsx.
+ *
+ * BROWSEROPS_ASSETS_DIR overrides the resolved path. Used by tests to point
+ * at a synthetic asset tree without going through the full tsup build, and
+ * by hackers running a global install against a development fixture.
  */
 export function bundledAssetsDir(): string {
+  const override = process.env["BROWSEROPS_ASSETS_DIR"];
+  if (override !== undefined && override !== "") return override;
   const here = fileURLToPath(import.meta.url);
   // dist build: <pkg>/dist/index.js → ../assets
   // dev build:  <pkg>/src/lib/paths.ts → ../../dist/assets
