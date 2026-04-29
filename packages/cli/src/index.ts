@@ -30,6 +30,7 @@ import { runInstallRules } from "./commands/install-rules.js";
 import { runInstallSkill } from "./commands/install-skill.js";
 import { runConfig } from "./commands/config.js";
 import { runFeature } from "./commands/feature.js";
+import { runSyncCommand } from "./commands/sync.js";
 import { runClaudeLauncher } from "./launchers/claude.js";
 import { runCursorLauncher } from "./launchers/cursor.js";
 import { runCodexLauncher } from "./launchers/codex.js";
@@ -50,6 +51,7 @@ const KNOWN_SUBCOMMANDS = new Set([
   "install-skill",
   "config",
   "feature",
+  "sync",
 ]);
 
 const cli = cac("browserops");
@@ -120,6 +122,17 @@ cli
     "List, enable, or disable gated experimental features (procedures, gated-domains)",
   )
   .action((action: string | undefined, name: string | undefined) => runFeature(action, name));
+
+cli
+  .command(
+    "sync [target]",
+    "Refresh installed assets to match the bundled package (target: all, skills, extension, mcp)",
+  )
+  .option("--force", "Skip drift detection on skills; overwrite unconditionally")
+  .option("--dry-run", "Print what would change without writing")
+  .action((target: string | undefined, opts: { force?: boolean; dryRun?: boolean }) =>
+    runSyncCommand(target, opts),
+  );
 
 // Top-level launcher flags. cac surfaces these as --claude, --cursor, --codex
 // on the root command (i.e. `browserops --claude "task"`).
