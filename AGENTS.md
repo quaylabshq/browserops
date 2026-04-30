@@ -39,6 +39,7 @@ user's real Chrome tabs (with existing logins intact)
 | Error codes + WebSocket close codes | `packages/shared/src/errors.ts` |
 | Rate limiter + risky-action gate | `packages/bridge/src/rate-limiter.ts` + `packages/bridge/src/safety.ts` |
 | Seed procedures to copy and learn from | `examples/procedures/` |
+| Teach mode (recorder, content script, session store, MCP tools) | `packages/extension/src/background/teach-recorder.ts` + `packages/extension/src/content/capture-events.ts` + `packages/bridge/src/teach/` |
 | User-facing setup (registration for every major MCP client) | `README.md` |
 
 ## browserops orchestration rules
@@ -137,6 +138,41 @@ browser_execute_js(tab_id, `
 browserops runs in **auto-approve mode by default**: risky actions (`browser_execute_js`, click/type on sensitive domains, procedures marked `risky: true`) execute without prompting. Destructive keyboard chords and navigations to `javascript:`, `file://`, or `chrome://` URLs are refused regardless of mode.
 
 If the user has opted into gating (via `--approval=gate`, `BROWSEROPS_APPROVAL=gate` env var, or the extension popup toggle), risky actions will be gated — respect a `USER_DECLINED` response and do not retry.
+
+## Teach mode
+
+Teach mode lets the user demonstrate a flow in their real browser while you watch live. It's the bootstrap path for any flow that has no existing procedure: instead of re-planning from scratch every time, the user shows you once and you turn it into a procedure.
+
+### When to suggest it
+
+If `procedures_search` returns nothing relevant for a non-trivial flow the user is asking about, ask once: *"I don't have a procedure for this. Want to teach me — just demonstrate it once and I'll record it?"* If they agree, proceed. Don't suggest teach mode for one-shot tasks where the user is unlikely to repeat the flow.
+
+### The loop (strictly agent-driven)
+
+1. `procedures_teach_start({ narration_hint? })` → returns `session_id`.
+2. Tell the user "go ahead — click through the flow." Stay quiet while they work.
+3. `procedures_teach_observe({ session_id, since_seq, wait_ms: 30000 })` to long-poll the timeline. Loop until `finished: true` or you have enough context to insert a sync point.
+4. As the user demonstrates, optionally insert sync points:
+   - `procedures_teach_marker({ label? })` — hard split boundary the distiller respects.
+   - `procedures_teach_narration({ text })` — free-text note attached to the timeline.
+5. When the user signals they're done (or you observe a clear terminal state), call `procedures_teach_stop`. Returns `event_count` and `duration_ms`.
+6. Build the procedure from the timeline and call `procedures_save` **only after replay succeeds** — same "never save an untested procedure" rule as everywhere else.
+
+### Activation is agent-only
+
+There is no "Start teaching" button in the popup. The user starts by talking to you. While a session is active the popup shows a red `REC` bar with a single Stop button — that's an escape valve, not a normal control surface. Don't tell users to press it; tell them to ask you to stop.
+
+### Privacy: redaction is at capture, not afterthought
+
+The content script blanks the value of any input where:
+- `type="password"`, or `autocomplete` is `current-password` / `new-password` / `one-time-code`, or `name`/`id` matches `/(password|secret|otp|2fa|mfa)/`
+- The free-text content matches a known secret regex (`sk-*`, `AKIA*`, `ghp_*`, `xox*-*`, JWTs)
+
+Redacted typing arrives with `value: ""`, `redacted: true`, and a `redaction_reason`. Treat redacted fields as required parameters: when distilling, surface them as procedure inputs the runner provides at execution time, not literals baked into the YAML.
+
+### Sessions live on disk
+
+`~/browserops/teach-sessions/<session_id>.jsonl` (events) + `<session_id>.meta.json` (sidecar). Override with `BROWSEROPS_TEACH_DIR`. Use `procedures_teach_list` to find sessions started before you had context — useful if the user starts demonstrating from the popup or via another agent before naming the goal.
 
 ## Procedure authoring rules
 
