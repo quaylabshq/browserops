@@ -18,16 +18,8 @@ const safetyTool = $<HTMLDivElement>("safety-tool");
 const safetyReason = $<HTMLDivElement>("safety-reason");
 const safetyAllow = $<HTMLButtonElement>("safety-allow");
 const safetyDeny = $<HTMLButtonElement>("safety-deny");
-const teachIdle = $<HTMLDivElement>("teach-idle");
-const teachActive = $<HTMLDivElement>("teach-active");
-const teachHint = $<HTMLInputElement>("teach-hint");
-const teachStartBtn = $<HTMLButtonElement>("teach-start");
+const teachActiveBar = $<HTMLDivElement>("teach-active-bar");
 const teachStopBtn = $<HTMLButtonElement>("teach-stop");
-const teachCounter = $<HTMLSpanElement>("teach-counter");
-const teachId = $<HTMLDivElement>("teach-id");
-const teachNote = $<HTMLInputElement>("teach-note");
-const teachAddNoteBtn = $<HTMLButtonElement>("teach-add-note");
-const teachMarkerBtn = $<HTMLButtonElement>("teach-marker");
 
 interface PendingSafetyPrompt {
   tool: string;
@@ -80,21 +72,10 @@ function renderSafety(prompt: PendingSafetyPrompt | null): void {
 
 interface TeachStatus {
   active: boolean;
-  session_id?: string;
-  event_count?: number;
-  started_at?: number;
-  narration_hint?: string;
 }
 
 function renderTeach(status: TeachStatus): void {
-  const isActive = status.active === true;
-  teachIdle.classList.toggle("active", !isActive);
-  teachActive.classList.toggle("active", isActive);
-  if (isActive) {
-    const n = typeof status.event_count === "number" ? status.event_count : 0;
-    teachCounter.textContent = `${n} event${n === 1 ? "" : "s"}`;
-    teachId.textContent = status.session_id ?? "";
-  }
+  teachActiveBar.classList.toggle("active", status.active === true);
 }
 
 async function refreshTeach(): Promise<void> {
@@ -198,23 +179,9 @@ runSetupBtn.addEventListener("click", () => {
   window.close();
 });
 
-teachStartBtn.addEventListener("click", () => {
-  teachStartBtn.disabled = true;
-  const hint = teachHint.value.trim();
-  void chrome.runtime
-    .sendMessage({
-      type: "teach_start",
-      scope: "all_tabs",
-      narration_hint: hint !== "" ? hint : undefined,
-    })
-    .catch(() => {})
-    .finally(() => {
-      teachStartBtn.disabled = false;
-      teachHint.value = "";
-      void refreshTeach();
-    });
-});
-
+// Emergency stop only — start / marker / narration are agent-driven through
+// the procedures_teach_* MCP tools. The popup is the escape valve for when
+// the agent is gone or stuck.
 teachStopBtn.addEventListener("click", () => {
   teachStopBtn.disabled = true;
   void chrome.runtime
@@ -222,34 +189,6 @@ teachStopBtn.addEventListener("click", () => {
     .catch(() => {})
     .finally(() => {
       teachStopBtn.disabled = false;
-      void refreshTeach();
-    });
-});
-
-teachAddNoteBtn.addEventListener("click", () => {
-  const text = teachNote.value.trim();
-  if (text === "") return;
-  void chrome.runtime
-    .sendMessage({ type: "teach_narration", text })
-    .catch(() => {})
-    .finally(() => {
-      teachNote.value = "";
-      void refreshTeach();
-    });
-});
-
-teachNote.addEventListener("keydown", (ev) => {
-  if (ev.key === "Enter") {
-    ev.preventDefault();
-    teachAddNoteBtn.click();
-  }
-});
-
-teachMarkerBtn.addEventListener("click", () => {
-  void chrome.runtime
-    .sendMessage({ type: "teach_marker" })
-    .catch(() => {})
-    .finally(() => {
       void refreshTeach();
     });
 });

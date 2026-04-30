@@ -336,40 +336,27 @@ body {
 .safety-actions { display: flex; gap: 6px; }
 .safety-actions .btn { flex: 1; }
 
-/* Teach mode pane — record / stop demonstration sessions */
-.section.teach { gap: 10px; padding-top: 0; }
-.teach-state { display: none; flex-direction: column; gap: 8px; }
-.teach-state.active { display: flex; }
-.teach-input {
-  width: 100%;
-  box-sizing: border-box;
-  height: 28px;
-  padding: 0 10px;
-  border: 0;
-  border-radius: 4px;
-  font: inherit;
+/* Teach-mode active bar — appears only while a session is recording.
+   Activation lives with the agent; this bar is the always-visible privacy
+   indicator + emergency stop. Sits between the brand row and the safety
+   pane so it stays visible regardless of #main / #safety state. */
+#teach-active-bar {
+  display: none;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: var(--color-danger-bg);
+  border-top: 1px solid var(--color-danger-border);
+  border-bottom: 1px solid var(--color-danger-border);
+}
+#teach-active-bar.active { display: flex; }
+.teach-bar-label {
+  flex: 1;
   font-size: 11px;
-  background: var(--color-ink-04);
-  color: var(--color-ink);
-  box-shadow: inset 0 0 0 1px var(--color-ink-12);
-  transition: box-shadow 80ms ease, background 80ms ease;
+  font-weight: 500;
+  color: var(--color-danger-ink);
 }
-.teach-input:focus-visible {
-  outline: 0;
-  background: var(--color-surface);
-  box-shadow: inset 0 0 0 1px var(--color-brand), 0 0 0 3px var(--color-brand-08);
-}
-.teach-input::placeholder { color: var(--color-ink-45); }
-.teach-active-row { display: flex; align-items: center; gap: 8px; }
-.teach-counter { font-size: 11px; color: var(--color-ink-60); font-variant-numeric: tabular-nums; }
-.teach-id {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  color: var(--color-ink-45);
-  word-break: break-all;
-}
-.teach-actions { display: flex; gap: 6px; }
-.teach-actions .btn { flex: 1; height: 26px; font-size: 11px; }
+#teach-active-bar .btn { height: 24px; padding: 0 10px; font-size: 11px; }
 .pill--rec {
   background: var(--color-danger-bg);
   color: var(--color-danger-ink);
