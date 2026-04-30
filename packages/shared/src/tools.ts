@@ -1933,12 +1933,13 @@ const proceduresTeachMarker: ToolDef = {
 const proceduresTeachDistill: ToolDef = {
   name: "procedures_teach_distill",
   description:
-    "Convert a recorded teach session into a draft procedure YAML. Single-leaf MVP: every interaction " +
-    "(click / type / key / navigate) becomes one step in one leaf; scroll, narration, and marker events " +
-    "are dropped; multi-tab sessions are flattened onto the dominant tab with a warning. Redacted typing " +
-    "events become required string inputs (password / otp_code / secret). The returned YAML is a draft — " +
-    'replay it before calling procedures_save. REQUIRED: {"session_id": "ts_..."}. ' +
-    'OPTIONAL: {"name": "<procedure name>", "description": "<one-liner>"}.',
+    "Convert a recorded teach session into one or more draft procedure YAMLs. Splits the timeline into " +
+    "leaves on user markers, tab change, URL host change, idle gap > 4s, and form-submit events; emits a " +
+    "composite that uses each leaf in order when there is more than one. Redacted typing always becomes a " +
+    "required input; non-redacted typing matching email or URL patterns is auto-parameterised; everything " +
+    "else is surfaced as a parameter_candidate the agent can choose to lift. Save each procedure with " +
+    "procedures_save AFTER replaying it — leaves first, composite last. " +
+    'REQUIRED: {"session_id": "ts_..."}. OPTIONAL: {"name", "description"}.',
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -1952,16 +1953,56 @@ const proceduresTeachDistill: ToolDef = {
   outputSchema: {
     type: "object",
     additionalProperties: false,
-    required: ["yaml", "warnings", "redacted_inputs"] as const,
+    required: ["procedures", "warnings", "redacted_inputs", "parameter_candidates"] as const,
     properties: {
-      yaml: { type: "string" },
+      procedures: {
+        type: "array",
+        description:
+          "Leaves in execution order; composite (if any) is the last entry. " +
+          "Save them in this order via procedures_save.",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["name", "kind", "yaml"] as const,
+          properties: {
+            name: { type: "string" },
+            kind: { type: "string", enum: ["leaf", "composite"] as const },
+            yaml: { type: "string" },
+          },
+        },
+      },
       warnings: { type: "array", items: { type: "string" } },
       redacted_inputs: {
         type: "array",
         items: { type: "string" },
         description:
-          "Names of procedure inputs that were created from redacted typing events. " +
-          "The runner must supply values for these at execution time.",
+          "Names of inputs the runner must supply at execution time (created from redacted typing).",
+      },
+      parameter_candidates: {
+        type: "array",
+        description:
+          "Typed values the distiller noticed that look like they should be procedure inputs. " +
+          "Email and URL values are already auto_parameterized; other strings are surfaced for the " +
+          "agent to lift manually if they're meant to vary across runs.",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "seq",
+            "value",
+            "suggested_name",
+            "suggested_type",
+            "auto_parameterized",
+          ] as const,
+          properties: {
+            seq: { type: "integer", minimum: 1 },
+            value: { type: "string" },
+            suggested_name: { type: "string" },
+            suggested_type: { type: "string", enum: ["string"] as const },
+            auto_parameterized: { type: "boolean" },
+            target_field_label: { type: "string" },
+          },
+        },
       },
     },
   },
