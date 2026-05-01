@@ -20,6 +20,8 @@ export interface WsClientOptions {
   onConnectionChange: (connected: boolean) => void;
   /** Called when the socket closes without scheduling a reconnect (fatal or user-disconnect). */
   onFatalClose?: (code: number) => void;
+  /** Called once per HelloAck with the bridge's currently-enabled feature names. */
+  onFeatures?: (features: string[]) => void;
 }
 
 // Fatal close codes from the bridge — do not auto-reconnect.
@@ -130,6 +132,10 @@ export class WsClient {
       }
       this.ackReceived = true;
       this.reconnectAttempt = 0;
+      const features = Array.isArray(parsed.features)
+        ? parsed.features.filter((f): f is string => typeof f === "string")
+        : [];
+      this.opts.onFeatures?.(features);
       this.opts.onConnectionChange(true);
       return;
     }
