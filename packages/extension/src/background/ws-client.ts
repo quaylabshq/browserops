@@ -22,6 +22,8 @@ export interface WsClientOptions {
   onFatalClose?: (code: number) => void;
   /** Called once per HelloAck with the bridge's currently-enabled feature names. */
   onFeatures?: (features: string[]) => void;
+  /** Called once per HelloAck with the resolved gated-domain glob list (empty when feature is off). */
+  onGatedDomains?: (patterns: string[]) => void;
 }
 
 // Fatal close codes from the bridge — do not auto-reconnect.
@@ -136,6 +138,10 @@ export class WsClient {
         ? parsed.features.filter((f): f is string => typeof f === "string")
         : [];
       this.opts.onFeatures?.(features);
+      const domains = Array.isArray(parsed.gated_domains)
+        ? parsed.gated_domains.filter((d): d is string => typeof d === "string")
+        : [];
+      this.opts.onGatedDomains?.(domains);
       this.opts.onConnectionChange(true);
       return;
     }
