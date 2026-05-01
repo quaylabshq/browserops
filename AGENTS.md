@@ -46,8 +46,12 @@ user's real Chrome tabs (with existing logins intact)
 
 _Agent runtime rules (planning, delegation, checkpoints, stuck-state escalation) live in the `browserops` skill at `~/.claude/skills/browserops/SKILL.md`. The rules below are a summary for repo contributors — the skill is the source of truth._
 
+### Discover available tools from `tools/list` — do not assume `procedures_*` or `procedures_teach_*` exist
+
+Both the procedure family (`procedures_list`, `procedures_search`, `procedures_get`, `procedures_save`, `procedures_promote`, `procedures_delete`, `procedures_compile`, `procedures_execute`) and the teach-mode family (`procedures_teach_*`) are **experimental, opt-in features**. They are off by default; users enable them via `browserops feature enable <name>`. If a tool isn't in the catalogue, the feature is off — fall back to direct `browser_*` orchestration for that conversation, and optionally suggest the user enable the feature for next time. Calling a disabled tool returns `FEATURE_DISABLED` with a hint that includes the enable command.
+
 ### Procedure-first: always search before planning
-Before any browser task, call `procedures_search` with tokens from the user's request.
+Before any browser task, call `procedures_search` with tokens from the user's request — but only when `procedures_search` is in your tool catalogue (the procedures feature is opt-in; see above).
 If score >= 0.5, use that procedure. Do not re-plan steps that are already encoded.
 
 ### Prefer `browser_quick_read` over `browser_read`
@@ -141,6 +145,8 @@ If the user has opted into gating (via `--approval=gate`, `BROWSEROPS_APPROVAL=g
 
 ## Teach mode
 
+> **Experimental — off by default.** The `procedures_teach_*` tools only appear in your catalogue when the user has run `browserops feature enable teach`. If they aren't present, do not suggest teach mode — there is nothing you can call. When suggesting teach to a user whose catalogue doesn't have it, point them at `browserops feature enable teach` (and `procedures`, since teach's output is a procedure draft).
+
 Teach mode lets the user demonstrate a flow in their real browser while you watch live. It's the bootstrap path for any flow that has no existing procedure: instead of re-planning from scratch every time, the user shows you once and you turn it into a procedure.
 
 ### When to suggest it
@@ -175,6 +181,8 @@ Redacted typing arrives with `value: ""`, `redacted: true`, and a `redaction_rea
 `~/browserops/teach-sessions/<session_id>.jsonl` (events) + `<session_id>.meta.json` (sidecar). Override with `BROWSEROPS_TEACH_DIR`. Use `procedures_teach_list` to find sessions started before you had context — useful if the user starts demonstrating from the popup or via another agent before naming the goal.
 
 ## Procedure authoring rules
+
+> Applies whenever the `procedures` feature is enabled and you're authoring or maintaining procedure YAML. With `procedures` off these tools and rules don't apply — the user is on the minimal `browser_*`-only path.
 
 ### Never save an untested procedure
 - Write the procedure → run it in the same session → fix what breaks → then call `procedures_save`.

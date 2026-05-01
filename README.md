@@ -57,14 +57,20 @@ Or open the editor you registered in Step 2 and just talk to it — `browserops`
 ### Daily lifecycle
 
 ```bash
-browserops status      # PID, port, uptime, last errors
-browserops start       # bring the daemon up (no-op if already running)
+browserops status            # PID, port, uptime, last errors
+browserops start             # bring the daemon up (no-op if already running)
 browserops stop
 browserops restart
-browserops logs -f     # tail ~/.browserops/log.jsonl
-browserops doctor      # diagnose Node / port / token / extension / clients
-browserops upgrade     # bump the global install + refresh extension files
+browserops logs -f           # tail ~/.browserops/log.jsonl
+browserops doctor            # diagnose Node / port / token / extension / clients / features
+browserops upgrade           # bump the global install + refresh extension files
+
+browserops feature list                # show experimental features and their state
+browserops feature enable <name>       # opt into procedures or teach
+browserops feature disable <name>      # opt out
 ```
+
+Both `procedures` and `teach` ship as **experimental** features — off by default. With both off, your agent gets the 26 always-on `browser_*` tools and nothing else: minimum token overhead for users who only want basic browser automation. Opt in with `browserops feature enable procedures` (or `teach`) and run `browserops restart` so the daemon broadcasts the new feature set to the extension.
 
 ### Per-project rules (optional)
 
@@ -243,6 +249,8 @@ Full JSON schemas for each tool are declared in `packages/shared/src/tools.ts`.
 
 ## Procedure runtime
 
+> **Experimental — off by default.** Enable with `browserops feature enable procedures` (then `browserops restart`), or pick it during `browserops init`. With this feature off, the eight `procedures_*` tools are hidden from your agent's catalogue, the on-disk `~/browserops/procedures/` directory isn't seeded, and the in-process index isn't built — minimal token overhead for users who only want browser automation.
+
 Procedures are named, parameterised, reusable action graphs that the agent can discover and replay without re-planning from a screenshot every time. They live in `~/browserops/procedures/` (user-visible, not hidden) and are surfaced through six MCP tools: `procedures_list`, `procedures_search`, `procedures_get`, `procedures_save`, `procedures_promote`, `procedures_delete`.
 
 The bridge auto-seeds `examples/procedures/` into `~/browserops/procedures/shared/` on first start (and on every `pnpm setup` / `node packages/bridge/dist/index.js init` run). Local copies are never overwritten — if a bundled example ships an update, the bridge logs a notice on stderr and you copy it manually if you want the new version.
@@ -264,6 +272,8 @@ Authoring checklist:
 - If the UI changes, fix the leaf first, then update the composite.
 
 ## Teach mode
+
+> **Experimental — off by default.** Enable with `browserops feature enable teach` (then `browserops restart`), or pick it during `browserops init`. Teach mode also requires `procedures` enabled (since its output is a procedure draft). Both ship off by default to keep the agent's tool catalogue minimal for users who don't need them.
 
 Teach mode lets you demonstrate a flow once in your real browser while your agent watches live, then turns the recording into a reusable procedure. The whole workflow is agent-driven — there is no "record" button in the popup.
 
@@ -334,6 +344,7 @@ Currently ~220 unit tests total across shared (envelope guards, tool catalogue i
 | `BROWSEROPS_APPROVAL` | `auto` | `auto` (default) or `gate`; controls approval mode for risky actions |
 | `BROWSEROPS_TRACE` | unset | `=1` writes trace events including auto-approvals to `~/.browserops/trace.jsonl` |
 | `BROWSEROPS_TEACH_DIR` | `~/browserops/teach-sessions` | Override the directory where teach-mode sessions are recorded |
+| `BROWSEROPS_FEATURES` | unset | Comma-separated experimental feature names to force-enable (e.g. `teach,procedures`). Overrides `~/.browserops/config.json` when explicitly set; an empty string disables everything. Persistent toggles use `browserops feature enable/disable <name>` instead. |
 
 ## Troubleshooting
 
