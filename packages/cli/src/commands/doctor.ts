@@ -4,7 +4,7 @@ import { createConnection } from "node:net";
 import { execFile } from "node:child_process";
 import { join } from "node:path";
 import { isBridgeAlive } from "../lib/daemon.js";
-import { getSafeMode } from "../lib/config.js";
+import { getSafeMode, getFeatureStates } from "../lib/config.js";
 import { STATE_DIR, tokenPath, bundledAssetsDir } from "../lib/paths.js";
 import { DEFAULT_WS_PORT, ENV } from "@browserops/shared";
 import { ok, err, info, warn } from "../lib/ui.js";
@@ -36,19 +36,49 @@ export async function runDoctor(): Promise<void> {
 
 async function runAllChecks(): Promise<Check[]> {
   const port = Number(process.env[ENV.PORT] ?? DEFAULT_WS_PORT);
-  const [nodeCheck, stateDirCheck, tokenCheck, portCheck, socketCheck, extensionCheck, postureCheck, ...clientChecks] =
-    await Promise.all([
-      checkNode(),
-      checkStateDir(),
-      checkToken(),
-      checkPort(port),
-      checkSocket(),
-      checkExtension(),
-      checkPermissionPosture(),
-      ...checkClients(),
-    ]);
+  const [
+    nodeCheck,
+    stateDirCheck,
+    tokenCheck,
+    portCheck,
+    socketCheck,
+    extensionCheck,
+    postureCheck,
+    featuresCheck,
+    ...clientChecks
+  ] = await Promise.all([
+    checkNode(),
+    checkStateDir(),
+    checkToken(),
+    checkPort(port),
+    checkSocket(),
+    checkExtension(),
+    checkPermissionPosture(),
+    checkFeatures(),
+    ...checkClients(),
+  ]);
 
-  return [nodeCheck, stateDirCheck, tokenCheck, portCheck, socketCheck, extensionCheck, postureCheck, ...clientChecks];
+  return [
+    nodeCheck,
+    stateDirCheck,
+    tokenCheck,
+    portCheck,
+    socketCheck,
+    extensionCheck,
+    postureCheck,
+    featuresCheck,
+    ...clientChecks,
+  ];
+}
+
+async function checkFeatures(): Promise<Check> {
+  const states = await getFeatureStates();
+  const labels = states.map((s) => `${s.name}=${s.enabled ? "on" : "off"}`);
+  return {
+    ok: true,
+    informational: true,
+    label: `Features: ${labels.join(", ")}  (toggle with \`browserops feature enable/disable <name>\`)`,
+  };
 }
 
 async function checkPermissionPosture(): Promise<Check> {
