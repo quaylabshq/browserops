@@ -29,6 +29,7 @@ export const ERROR_CODES = [
   "PROC_DOMAIN_INVALID",
   "CHAINED_ACTION_FAILED",
   "REPEATED_FAILURE",
+  "DISPATCH_FAILED_ON_GATED_DOMAIN",
 ] as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[number];

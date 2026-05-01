@@ -13,7 +13,7 @@
  * extension router dispatch) cover everything else.
  */
 
-export const FEATURES = ["teach", "procedures"] as const;
+export const FEATURES = ["teach", "procedures", "gated-domains"] as const;
 
 export type FeatureName = (typeof FEATURES)[number];
 
@@ -43,6 +43,12 @@ export const FEATURE_METADATA: Record<FeatureName, FeatureMetadata> = {
   procedures: {
     description:
       "Procedure runtime — list/search/save/run named, parameterised action graphs from ~/browserops/procedures/.",
+    stability: "experimental",
+    default: false,
+  },
+  "gated-domains": {
+    description:
+      "Auto-attach CDP and bias the agent toward browser_execute_js on a curated list of rich-editor / SPA domains (Gmail, Slack, Notion, Linear, Discord, …). Extend the list via ~/.browserops/gated-domains.json.",
     stability: "experimental",
     default: false,
   },
