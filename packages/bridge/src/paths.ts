@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
+  GATED_DOMAINS_FILENAME,
   LOG_FILENAME,
   RISKY_DOMAINS_FILENAME,
   STATE_DIR_NAME,
@@ -22,6 +23,10 @@ export function logPath(): string {
 
 export function riskyDomainsPath(): string {
   return join(stateDir(), RISKY_DOMAINS_FILENAME);
+}
+
+export function gatedDomainsPath(): string {
+  return join(stateDir(), GATED_DOMAINS_FILENAME);
 }
 
 export function controlSocketPath(): string {
