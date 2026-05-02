@@ -2,7 +2,7 @@
  * WebSocket transport defaults.
  */
 export const DEFAULT_WS_HOST = "127.0.0.1";
-export const DEFAULT_WS_PORT = 8765;
+export const DEFAULT_WS_PORT = 57321;
 
 /**
  * Max WebSocket frame size. 16 MiB gives headroom for full-page 4K screenshots.
@@ -40,6 +40,8 @@ export const STATE_DIR_NAME = ".browserops";
 export const TOKEN_FILENAME = "token";
 export const LOG_FILENAME = "log.jsonl";
 export const RISKY_DOMAINS_FILENAME = "risky-domains.json";
+export const GATED_DOMAINS_FILENAME = "gated-domains.json";
+export const CONTROL_SOCKET_FILENAME = "bridge.sock";
 
 /**
  * Environment variable names read by the bridge.
@@ -57,4 +59,10 @@ export const ENV = {
   TRACE: "BROWSEROPS_TRACE",
   /** Override the directory where trace .jsonl files are written. */
   TRACE_DIR: "BROWSEROPS_TRACE_DIR",
+  /**
+   * Comma-separated gated feature names (e.g. "teach,procedures").
+   * When set, overrides ~/.browserops/config.json's features block.
+   * Set to empty string to explicitly disable everything.
+   */
+  FEATURES: "BROWSEROPS_FEATURES",
 } as const;

@@ -11,7 +11,7 @@ MCP client (Claude Code / Cursor / Zed / …)
       │ stdio MCP (JSON-RPC)
       ▼
 packages/bridge  — Node process: MCP server + WebSocket server + rate limiter + risky-action gate + procedure runtime
-      │ WebSocket on 127.0.0.1:8765, token-authed
+      │ WebSocket on 127.0.0.1:57321, token-authed
       ▼
 packages/extension  — Chrome MV3 extension: background service worker + content scripts + popup + options
       │ chrome.tabs / chrome.scripting / chrome.debugger
@@ -39,12 +39,19 @@ user's real Chrome tabs (with existing logins intact)
 | Error codes + WebSocket close codes | `packages/shared/src/errors.ts` |
 | Rate limiter + risky-action gate | `packages/bridge/src/rate-limiter.ts` + `packages/bridge/src/safety.ts` |
 | Seed procedures to copy and learn from | `examples/procedures/` |
+| Teach mode (recorder, content script, session store, MCP tools) | `packages/extension/src/background/teach-recorder.ts` + `packages/extension/src/content/capture-events.ts` + `packages/bridge/src/teach/` |
 | User-facing setup (registration for every major MCP client) | `README.md` |
 
 ## browserops orchestration rules
 
+_Agent runtime rules (planning, delegation, checkpoints, stuck-state escalation) live in the `browserops` skill at `~/.claude/skills/browserops/SKILL.md`. The rules below are a summary for repo contributors — the skill is the source of truth._
+
+### Discover available tools from `tools/list` — do not assume `procedures_*` or `procedures_teach_*` exist
+
+Both the procedure family (`procedures_list`, `procedures_search`, `procedures_get`, `procedures_save`, `procedures_promote`, `procedures_delete`, `procedures_compile`, `procedures_execute`) and the teach-mode family (`procedures_teach_*`) are **experimental, opt-in features**. They are off by default; users enable them via `browserops feature enable <name>`. If a tool isn't in the catalogue, the feature is off — fall back to direct `browser_*` orchestration for that conversation, and optionally suggest the user enable the feature for next time. Calling a disabled tool returns `FEATURE_DISABLED` with a hint that includes the enable command.
+
 ### Procedure-first: always search before planning
-Before any browser task, call `procedures_search` with tokens from the user's request.
+Before any browser task, call `procedures_search` with tokens from the user's request — but only when `procedures_search` is in your tool catalogue (the procedures feature is opt-in; see above).
 If score >= 0.5, use that procedure. Do not re-plan steps that are already encoded.
 
 ### Prefer `browser_quick_read` over `browser_read`
@@ -74,7 +81,7 @@ Only screenshot when a step returns an error or unexpected state.
 When a composite procedure covers the full flow, the sub-agent brief references ONLY the composite name — one `procedures_get`, no re-planning steps.
 
 ```
-Run example.qa_signup. Report the temp email used and the API key string.
+Run gmail.send_email. Report whether the message was sent successfully.
 ```
 
 ## Keyboard chords
@@ -116,7 +123,9 @@ Do **not** enable CDP for standard websites — synthetic dispatch works fine an
 
 ## Rich-text editors (Slack, Gmail, Discord, Notion, Linear)
 
-Rich editors (Quill, ProseMirror, Slate, Draft.js, Lexical) work with synthetic dispatch — `browser_type` automatically uses one-shot `execCommand("insertText")` on contenteditable elements, which avoids the focus-stealing issues that per-character keystroke mode has on these editors.
+The `gated-domains` feature is **on by default**. browserops automatically attaches CDP ("debug mode") on navigation to these domains, which pre-configures the trusted-input dispatch path. Navigation results include `gated_domain: true`, and synthetic `browser_click` / `browser_type` / `browser_press` calls are nudged toward `browser_execute_js` when they detect zero observable change on the page. The tradeoff is Chrome's "controlled by automation" banner, visible while the feature is active — users who want to avoid it can opt out with `browserops feature disable gated-domains`. Custom domains can be added by writing a JSON array of glob patterns to `~/.browserops/gated-domains.json` — same format as `~/.browserops/risky-domains.json`.
+
+For users without the feature enabled, or as a fallback when CDP dispatch alone is insufficient: Rich editors (Quill, ProseMirror, Slate, Draft.js, Lexical) work with synthetic dispatch — `browser_type` automatically uses one-shot `execCommand("insertText")` on contenteditable elements, which avoids the focus-stealing issues that per-character keystroke mode has on these editors.
 
 If `browser_type` still fails (returns `WRITE_NOT_REFLECTED`), **do not retry** — go straight to `browser_execute_js`:
 
@@ -136,7 +145,46 @@ browserops runs in **auto-approve mode by default**: risky actions (`browser_exe
 
 If the user has opted into gating (via `--approval=gate`, `BROWSEROPS_APPROVAL=gate` env var, or the extension popup toggle), risky actions will be gated — respect a `USER_DECLINED` response and do not retry.
 
+## Teach mode
+
+> **Experimental — off by default.** The `procedures_teach_*` tools only appear in your catalogue when the user has run `browserops feature enable teach`. If they aren't present, do not suggest teach mode — there is nothing you can call. When suggesting teach to a user whose catalogue doesn't have it, point them at `browserops feature enable teach` (and `procedures`, since teach's output is a procedure draft).
+
+Teach mode lets the user demonstrate a flow in their real browser while you watch live. It's the bootstrap path for any flow that has no existing procedure: instead of re-planning from scratch every time, the user shows you once and you turn it into a procedure.
+
+### When to suggest it
+
+If `procedures_search` returns nothing relevant for a non-trivial flow the user is asking about, ask once: *"I don't have a procedure for this. Want to teach me — just demonstrate it once and I'll record it?"* If they agree, proceed. Don't suggest teach mode for one-shot tasks where the user is unlikely to repeat the flow.
+
+### The loop (strictly agent-driven)
+
+1. `procedures_teach_start({ narration_hint? })` → returns `session_id`.
+2. Tell the user "go ahead — click through the flow." Stay quiet while they work.
+3. `procedures_teach_observe({ session_id, since_seq, wait_ms: 30000 })` to long-poll the timeline. Loop until `finished: true` or you have enough context to insert a sync point.
+4. As the user demonstrates, optionally insert sync points:
+   - `procedures_teach_marker({ label? })` — hard split boundary the distiller respects.
+   - `procedures_teach_narration({ text })` — free-text note attached to the timeline.
+5. When the user signals they're done (or you observe a clear terminal state), call `procedures_teach_stop`. Returns `event_count` and `duration_ms`.
+6. Build the procedure from the timeline and call `procedures_save` **only after replay succeeds** — same "never save an untested procedure" rule as everywhere else.
+
+### Activation is agent-only
+
+There is no "Start teaching" button in the popup. The user starts by talking to you. While a session is active the popup shows a red `REC` bar with a single Stop button — that's an escape valve, not a normal control surface. Don't tell users to press it; tell them to ask you to stop.
+
+### Privacy: redaction is at capture, not afterthought
+
+The content script blanks the value of any input where:
+- `type="password"`, or `autocomplete` is `current-password` / `new-password` / `one-time-code`, or `name`/`id` matches `/(password|secret|otp|2fa|mfa)/`
+- The free-text content matches a known secret regex (`sk-*`, `AKIA*`, `ghp_*`, `xox*-*`, JWTs)
+
+Redacted typing arrives with `value: ""`, `redacted: true`, and a `redaction_reason`. Treat redacted fields as required parameters: when distilling, surface them as procedure inputs the runner provides at execution time, not literals baked into the YAML.
+
+### Sessions live on disk
+
+`~/browserops/teach-sessions/<session_id>.jsonl` (events) + `<session_id>.meta.json` (sidecar). Override with `BROWSEROPS_TEACH_DIR`. Use `procedures_teach_list` to find sessions started before you had context — useful if the user starts demonstrating from the popup or via another agent before naming the goal.
+
 ## Procedure authoring rules
+
+> Applies whenever the `procedures` feature is enabled and you're authoring or maintaining procedure YAML. With `procedures` off these tools and rules don't apply — the user is on the minimal `browser_*`-only path.
 
 ### Never save an untested procedure
 - Write the procedure → run it in the same session → fix what breaks → then call `procedures_save`.

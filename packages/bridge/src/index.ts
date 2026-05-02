@@ -15,6 +15,7 @@ import { controlSocketPath } from "./paths.js";
 import { RateLimiter } from "./rate-limiter.js";
 import { RemoteWSBridge } from "./remote-ws-bridge.js";
 import { loadRiskyDomainMatcher } from "./risky-domains.js";
+import { loadGatedDomainMatcher } from "./gated-domains.js";
 import { Safety } from "./safety.js";
 import { TabRegistry, type TabRecord } from "./tab-registry.js";
 import { loadOrCreateToken } from "./token.js";
@@ -23,8 +24,11 @@ import { ensureIndex } from "./procedures/index-builder.js";
 import { proceduresRoot } from "./procedures/paths.js";
 import { seedBundledProcedures } from "./procedures/seed.js";
 import { runInit } from "./cli-init.js";
+import { TeachSessionStore } from "./teach/session-store.js";
+import type { FeatureName, TeachEvent } from "@browserops/shared";
+import { loadConfigFeatures } from "./config.js";
 
-const VERSION = "0.1.0";
+const VERSION = "0.0.4";
 
 async function main(): Promise<void> {
   installProcessErrorHandlers();
@@ -60,9 +64,39 @@ async function main(): Promise<void> {
     10,
   );
 
-  const riskyMatcher = await loadRiskyDomainMatcher();
+  const [riskyMatcher, gatedMatcher] = await Promise.all([
+    loadRiskyDomainMatcher(),
+    loadGatedDomainMatcher(),
+  ]);
   const tabs = new TabRegistry();
   const rateLimiter = new RateLimiter(RATE_LIMIT_PER_TAB_PER_MIN, globalCap);
+  const teachStore = new TeachSessionStore();
+
+  // Resolve gated feature flags. Config file at ~/.browserops/config.json,
+  // overridable via BROWSEROPS_FEATURES. Both teach and procedures default
+  // to OFF — users opt in explicitly via `browserops feature enable <name>`.
+  // Wrapped in a mutable holder so the control-server can swap the set
+  // when the CLI toggles features without restarting the daemon.
+  const featuresHolder: { current: Set<FeatureName> } = { current: new Set() };
+  try {
+    const resolved = await loadConfigFeatures();
+    featuresHolder.current = resolved.enabled;
+    if (resolved.unknownEnv.length > 0) {
+      process.stderr.write(
+        `[browserops] BROWSEROPS_FEATURES contains unknown name(s): ${resolved.unknownEnv.join(", ")} — ignored\n`,
+      );
+    }
+    await logger.write({
+      dir: "system",
+      event: "features_loaded",
+      source: resolved.source,
+      enabled: [...resolved.enabled],
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`[browserops] warn: failed to load features: ${msg} — using defaults\n`);
+  }
+
   const sockPath = controlSocketPath();
 
   // ---------------------------------------------------------------------
@@ -99,30 +133,31 @@ async function main(): Promise<void> {
     role === "primary" ? wsBridge!.confirmation : (wsLike as RemoteWSBridge).confirmation;
   const safety = new Safety(riskyMatcher, confirmation, logger, traceWriter);
 
-  // Seed bundled examples into the user's procedures dir if absent. Failures
-  // are logged but never fatal — a broken seed must not block boot.
-  try {
-    const seedReport = await seedBundledProcedures();
-    if (seedReport.copied.length > 0) {
-      await logger.write({
-        dir: "system",
-        event: "procedures_seeded",
-        copied: seedReport.copied,
-      });
+  // Seed bundled examples + build the procedure index — only when the
+  // procedures feature is enabled. Saves cold-start time and avoids
+  // creating ~/browserops/procedures/ for users who never opt in.
+  if (featuresHolder.current.has("procedures")) {
+    try {
+      const seedReport = await seedBundledProcedures();
+      if (seedReport.copied.length > 0) {
+        await logger.write({
+          dir: "system",
+          event: "procedures_seeded",
+          copied: seedReport.copied,
+        });
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`browserops: warn: procedure seed failed: ${msg}\n`);
     }
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`browserops: warn: procedure seed failed: ${msg}\n`);
-  }
 
-  // Ensure procedure index is up-to-date before starting the MCP server.
-  // A broken procedure tree must not prevent the bridge from starting.
-  try {
-    await ensureIndex(proceduresRoot());
-    await logger.write({ dir: "system", event: "procedure_index_ready" });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`browserops: warn: failed to build procedure index: ${msg}\n`);
+    try {
+      await ensureIndex(proceduresRoot());
+      await logger.write({ dir: "system", event: "procedure_index_ready" });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`browserops: warn: failed to build procedure index: ${msg}\n`);
+    }
   }
 
   const mcp = new McpBridgeServer({
@@ -132,7 +167,10 @@ async function main(): Promise<void> {
     tabs,
     logger,
     version: VERSION,
+    teachStore,
+    enabledFeatures: featuresHolder.current,
     traceWriter,
+    gatedMatcher,
   });
 
   process.stderr.write(
@@ -182,7 +220,13 @@ async function main(): Promise<void> {
 
   process.on("SIGINT", () => shutdown("SIGINT"));
   process.on("SIGTERM", () => shutdown("SIGTERM"));
-  process.stdin.on("end", () => shutdown("stdin_closed"));
+  // Tear down on stdin EOF only when the bridge is acting as an MCP stdio
+  // server for a parent client. When BROWSEROPS_DAEMON=1, the CLI orchestrator
+  // spawned us with stdio:ignore (i.e. /dev/null on stdin) — the immediate EOF
+  // would otherwise kill the daemon a millisecond after it bound the port.
+  if (process.env["BROWSEROPS_DAEMON"] !== "1") {
+    process.stdin.on("end", () => shutdown("stdin_closed"));
+  }
   process.on("beforeExit", () => {
     void traceWriter.close();
   });
@@ -204,6 +248,22 @@ async function main(): Promise<void> {
       bridgeVersion: VERSION,
       logger,
       onEvent: (name, payload) => {
+        if (name === "teach_event") {
+          // Drop teach events on the floor when the feature is off — the
+          // extension shouldn't be sending them in this state, but we don't
+          // want a misconfigured/old extension to write to the JSONL.
+          if (!featuresHolder.current.has("teach")) return;
+          const ev = payload as unknown as TeachEvent;
+          teachStore.appendEvent(ev).catch((err: unknown) => {
+            void logger.write({
+              dir: "system",
+              event: "teach_append_failed",
+              error: err instanceof Error ? err.message : String(err),
+            });
+          });
+          if (controlServer) controlServer.broadcastEvent(name, payload);
+          return;
+        }
         const minted = handleEvent(name, payload, tabs, rateLimiter, logger);
         if (minted) {
           // Close the loop with the extension: it's polling its chromeIdToTabId
@@ -231,6 +291,9 @@ async function main(): Promise<void> {
       onConnectionChange: (connected) => {
         if (controlServer) controlServer.broadcastConn(connected);
       },
+      getFeatures: () => [...featuresHolder.current],
+      getGatedDomains: () =>
+        featuresHolder.current.has("gated-domains") ? [...gatedMatcher.patterns] : undefined,
     });
     try {
       await bridge.start();

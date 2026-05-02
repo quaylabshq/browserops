@@ -1,0 +1,67 @@
+{
+  "name": "browserops",
+  "version": "0.0.4",
+  "type": "module",
+  "description": "Drive your real Chrome browser from any MCP-compatible AI client (Claude Code, Cursor, Codex, Continue, Windsurf). CLI + MCP server with procedure runtime.",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "claude",
+    "claude-code",
+    "cursor",
+    "codex",
+    "browser-automation",
+    "chrome",
+    "chrome-extension",
+    "agent",
+    "ai",
+    "automation",
+    "browserops"
+  ],
+  "homepage": "https://github.com/quaylabshq/browserops#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/quaylabshq/browserops.git",
+    "directory": "packages/cli"
+  },
+  "bugs": {
+    "url": "https://github.com/quaylabshq/browserops/issues"
+  },
+  "license": "MIT",
+  "author": "Saket Aryan",
+  "bin": {
+    "browserops": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "typecheck": "tsc -b --noEmit",
+    "clean": "rm -rf dist *.tsbuildinfo",
+    "test": "vitest run --passWithNoTests",
+    "prepublishOnly": "pnpm build"
+  },
+  "dependencies": {
+    "@browserops/bridge": "workspace:*",
+    "cac": "^6.7.14",
+    "jsonc-parser": "^3.3.1",
+    "picocolors": "^1.1.1",
+    "prompts": "^2.4.2"
+  },
+  "devDependencies": {
+    "@browserops/shared": "workspace:*",
+    "@types/node": "^20.14.0",
+    "@types/prompts": "^2.4.9",
+    "tsup": "^8.3.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.4.0",
+    "vitest": "^2.0.0"
+  }
+}

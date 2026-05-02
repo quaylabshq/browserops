@@ -1,6 +1,6 @@
 {
-  "name": "browserops",
-  "version": "0.1.0",
+  "name": "@browserops/monorepo",
+  "version": "0.0.4",
   "private": true,
   "description": "MCP server that drives a live Chrome browser profile",
   "type": "module",
@@ -10,10 +10,10 @@
   },
   "packageManager": "pnpm@9.12.0",
   "scripts": {
-    "setup": "pnpm install && pnpm build && node packages/bridge/dist/index.js init",
-    "start": "pnpm build && node packages/bridge/dist/index.js",
-    "start:fast": "node packages/bridge/dist/index.js",
-    "dev": "concurrently -n shared,bridge,ext -c cyan,green,magenta \"pnpm -F @browserops/shared dev\" \"pnpm -F @browserops/bridge dev\" \"pnpm -F @browserops/extension dev\"",
+    "setup": "pnpm install && pnpm build && node packages/cli/dist/index.js init",
+    "start": "pnpm build && node packages/cli/dist/index.js start",
+    "start:fast": "node packages/cli/dist/index.js start",
+    "dev": "concurrently -n shared,bridge,ext,cli -c cyan,green,magenta,yellow \"pnpm -F @browserops/shared dev\" \"pnpm -F @browserops/bridge dev\" \"pnpm -F @browserops/extension dev\" \"pnpm -F browserops dev\"",
     "build": "pnpm -r --sequential build",
     "typecheck": "pnpm -r typecheck",
     "lint": "eslint .",
@@ -21,7 +21,10 @@
     "test": "pnpm -r test",
     "test:integration": "pnpm --filter @browserops/bridge test:integration",
     "test:smoke": "pnpm --filter @browserops/extension test:smoke",
-    "clean": "pnpm -r clean && rm -rf node_modules"
+    "clean": "pnpm -r clean && rm -rf node_modules",
+    "bump": "node scripts/bump-version.mjs",
+    "release": "pnpm -r publish --access public --no-git-checks",
+    "release:dry": "pnpm -r publish --access public --no-git-checks --dry-run"
   },
   "devDependencies": {
     "@typescript-eslint/eslint-plugin": "^8.0.0",

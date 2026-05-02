@@ -19,11 +19,20 @@ export interface Hello {
 
 /**
  * Bridge reply to Hello.
+ *
+ * `features` carries the bridge's currently-enabled gated feature names
+ * (e.g. "teach", "procedures"). Extension stores them in
+ * chrome.storage.local.features and uses them to decide whether to
+ * register optional handlers and surface optional UI.
+ * `gated_domains` carries the resolved domain glob list when the
+ * "gated-domains" feature is enabled, so the extension can pre-attach CDP.
  */
 export interface HelloAck {
   type: "hello_ack";
   bridge_version: string;
   protocol_version: number;
+  features?: string[];
+  gated_domains?: string[];
 }
 
 /**
@@ -53,6 +62,8 @@ export interface ResponseErr {
     code: ErrorCode;
     message: string;
     details?: unknown;
+    next_action?: string;
+    diagnostic?: Record<string, unknown>;
   };
   meta?: ResponseMeta;
 }
