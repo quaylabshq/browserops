@@ -27,11 +27,13 @@ export interface FeatureMetadata {
 }
 
 /**
- * Both initial gated features ship `experimental` and `default: false` —
- * users opt in explicitly via `browserops feature enable <name>` (or env).
- * The "off by default" stance is the entire point of the gating system:
- * the agent's tools/list catalogue stays minimal for users who only want
- * basic browser automation.
+ * Default state per feature is set explicitly below. `teach` and
+ * `procedures` ship off so the agent's tools/list catalogue stays minimal
+ * for users who only want basic browser automation. `gated-domains` ships
+ * on because the in-band advisor and auto-CDP only deliver value when the
+ * agent actually sees them — users who want to avoid Chrome's
+ * "controlled by automation" banner on Gmail/Slack/etc. can disable it
+ * with `browserops feature disable gated-domains`.
  */
 export const FEATURE_METADATA: Record<FeatureName, FeatureMetadata> = {
   teach: {
@@ -50,7 +52,7 @@ export const FEATURE_METADATA: Record<FeatureName, FeatureMetadata> = {
     description:
       "Auto-attach CDP and bias the agent toward browser_execute_js on a curated list of rich-editor / SPA domains (Gmail, Slack, Notion, Linear, Discord, …). Extend the list via ~/.browserops/gated-domains.json.",
     stability: "experimental",
-    default: false,
+    default: true,
   },
 };
 
