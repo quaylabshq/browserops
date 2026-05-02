@@ -44,6 +44,13 @@ export const GATED_DOMAINS_FILENAME = "gated-domains.json";
 export const CONTROL_SOCKET_FILENAME = "bridge.sock";
 
 /**
+ * Multi-session daemon paths. The shim binary connects to this socket;
+ * the daemon holds a pidfile lock to enforce a single instance per user.
+ */
+export const DAEMON_SOCKET_FILENAME = "daemon.sock";
+export const DAEMON_PIDFILE_FILENAME = "daemon.pid";
+
+/**
  * Environment variable names read by the bridge.
  */
 export const ENV = {
