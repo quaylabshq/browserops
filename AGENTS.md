@@ -123,7 +123,9 @@ Do **not** enable CDP for standard websites — synthetic dispatch works fine an
 
 ## Rich-text editors (Slack, Gmail, Discord, Notion, Linear)
 
-Rich editors (Quill, ProseMirror, Slate, Draft.js, Lexical) work with synthetic dispatch — `browser_type` automatically uses one-shot `execCommand("insertText")` on contenteditable elements, which avoids the focus-stealing issues that per-character keystroke mode has on these editors.
+When the `gated-domains` feature is enabled (via `browserops feature enable gated-domains`), browserops automatically attaches CDP ("debug mode") on navigation to these domains, which pre-configures the trusted-input dispatch path. Navigation results include `gated_domain: true`, and synthetic `browser_click` / `browser_type` / `browser_press` calls are nudged toward `browser_execute_js` when they detect zero observable change on the page. The tradeoff is Chrome's "controlled by automation" banner, visible while the feature is active. Custom domains can be added by writing a JSON array of glob patterns to `~/.browserops/gated-domains.json` — same format as `~/.browserops/risky-domains.json`.
+
+For users without the feature enabled, or as a fallback when CDP dispatch alone is insufficient: Rich editors (Quill, ProseMirror, Slate, Draft.js, Lexical) work with synthetic dispatch — `browser_type` automatically uses one-shot `execCommand("insertText")` on contenteditable elements, which avoids the focus-stealing issues that per-character keystroke mode has on these editors.
 
 If `browser_type` still fails (returns `WRITE_NOT_REFLECTED`), **do not retry** — go straight to `browser_execute_js`:
 
