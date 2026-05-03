@@ -7,7 +7,11 @@
  * clients can drive the same Chrome profile concurrently without
  * stomping on each other.
  */
-import { ENV } from "@browserops/shared";
+import {
+  ENV,
+  RATE_LIMIT_GLOBAL_PER_MIN_DEFAULT,
+  RATE_LIMIT_PER_TAB_PER_MIN,
+} from "@browserops/shared";
 import { Logger, type LogLevel } from "./logger.js";
 import {
   acquirePidfile,
@@ -19,6 +23,7 @@ import { SessionRegistry, type DaemonSession } from "./daemon-sessions.js";
 import { daemonPidfilePath, daemonSocketPath } from "./paths.js";
 import { bootDaemonRuntime, type DaemonRuntime } from "./daemon-runtime.js";
 import { McpBridgeServer } from "./mcp-server.js";
+import { RateLimiter } from "./rate-limiter.js";
 import { SocketServerTransport } from "./socket-mcp-transport.js";
 
 const VERSION = "0.0.5";
@@ -27,6 +32,7 @@ interface ActiveSession {
   session: DaemonSession;
   mcp: McpBridgeServer;
   transport: SocketServerTransport;
+  rateLimiter: RateLimiter;
 }
 
 async function main(): Promise<void> {
@@ -59,6 +65,16 @@ async function main(): Promise<void> {
   });
 
   const active = new Map<string, ActiveSession>();
+
+  // Fan tab_closed → forgetTab across every active session's bucket so a
+  // closed tab can't continue eating quota. Buckets are otherwise fully
+  // isolated: one session's burst never touches another's allowance.
+  runtime.onTabClosed = (tabId: string) => {
+    for (const entry of active.values()) {
+      entry.rateLimiter.forgetTab(tabId);
+    }
+  };
+
   const sessions = new SessionRegistry({
     onCreate: (s) => {
       void runtime.logger.write({
@@ -141,10 +157,20 @@ async function attachMcpSession(
   session: DaemonSession,
   runtime: DaemonRuntime,
 ): Promise<ActiveSession> {
+  // Per-session rate limiter: bursts in one session never throttle
+  // another. Caps are sourced from the same env vars the legacy bridge
+  // honoured (BROWSEROPS_GLOBAL_CAP), so existing operator config
+  // continues to apply — just per-session rather than process-wide.
+  const globalCap = Number.parseInt(
+    process.env[ENV.GLOBAL_CAP] ?? String(RATE_LIMIT_GLOBAL_PER_MIN_DEFAULT),
+    10,
+  );
+  const rateLimiter = new RateLimiter(RATE_LIMIT_PER_TAB_PER_MIN, globalCap);
+
   const transport = new SocketServerTransport(conn, session.id);
   const mcp = new McpBridgeServer({
     wsBridge: runtime.wsBridge,
-    rateLimiter: runtime.sharedRateLimiter,
+    rateLimiter,
     safety: runtime.safety,
     tabs: runtime.tabs,
     logger: runtime.logger,
@@ -161,7 +187,7 @@ async function attachMcpSession(
     event: "session_mcp_ready",
     session_id: session.id,
   });
-  return { session, mcp, transport };
+  return { session, mcp, transport, rateLimiter };
 }
 
 function applyDaemonCliFlags(argv: readonly string[]): void {
