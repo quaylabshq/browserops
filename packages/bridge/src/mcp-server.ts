@@ -323,6 +323,13 @@ export class McpBridgeServer {
   private readonly validators = new Map<string, ValidateFunction>();
   private readonly procedureHandlers: Record<string, (raw: Record<string, unknown>) => Promise<unknown>>;
   private transport?: Transport;
+  /**
+   * Per-session "last successfully-acted-on tab." browser_current_tab
+   * falls back to this when the OS-level foreground tab is owned by
+   * another session (and therefore invisible to us). Updated after
+   * every successful dispatch that named a tab.
+   */
+  private lastActiveTabId: string | null = null;
 
   constructor(deps: McpBridgeDeps) {
     this.deps = deps;
@@ -582,9 +589,27 @@ export class McpBridgeServer {
         return result;
       }
       this.maybeClaimNewTab(name, extResult);
-      const result = await this.reply(id, name, advisedResult);
+
+      // list_tabs / current_tab need a session-aware view layered on
+      // the extension's response — see applySessionFilter for the
+      // visibility + lastActiveTab fallback rules. Only path to error
+      // here is current_tab with nothing visible, which surfaces as
+      // TAB_NOT_FOUND.
+      const filtered = this.applySessionFilter(name, extResult);
+      const finalResult = filtered ?? advisedResult;
+      if (finalResult.isError) {
+        const result = await this.reply(id, name, finalResult);
+        recordBreakerResult(breakerCall, { ok: false, error_code: "TAB_NOT_FOUND" });
+        this.emitTrace(id, name, params, startMs, result);
+        return result;
+      }
+      const result = await this.reply(id, name, finalResult);
       recordBreakerResult(breakerCall, { ok: true });
       this.emitTrace(id, name, params, startMs, result);
+      // Track per-session "last touched tab" so browser_current_tab
+      // can fall back to it when the OS-level foreground belongs to
+      // someone else.
+      if (tabId) this.lastActiveTabId = tabId;
       return result;
     } catch (err) {
       const code = extractErrorCode(err);
@@ -643,6 +668,68 @@ export class McpBridgeServer {
       ok: false,
       error: { code: "TAB_NOT_FOUND", message: `tab ${tabId} not found` },
     };
+  }
+
+  /**
+   * Post-call shaping for the two tab-discovery tools so each session
+   * sees a coherent view of the profile that respects ownership.
+   *
+   *   browser_list_tabs → filtered to own + user-owned tabs.
+   *   browser_current_tab → returns the foreground tab if visible;
+   *     otherwise falls back to this session's lastActiveTab; if
+   *     neither is visible, surfaces TAB_NOT_FOUND so the caller
+   *     can branch instead of receiving a stale tab_id from another
+   *     session.
+   *
+   * Legacy / single-session mode (sessionId === \"\") is a no-op.
+   */
+  private applySessionFilter(toolName: string, extResult: unknown): ToolCallResult | undefined {
+    const sessionId = this.deps.sessionId;
+    if (sessionId === "") return undefined;
+
+    if (toolName === "browser_list_tabs") {
+      if (!extResult || typeof extResult !== "object") return undefined;
+      const obj = extResult as Record<string, unknown>;
+      const tabs = obj["tabs"];
+      if (!Array.isArray(tabs)) return undefined;
+      const filtered = tabs.filter((t) => {
+        const tabId = (t as { tab_id?: unknown }).tab_id;
+        if (typeof tabId !== "string") return false;
+        return this.deps.tabs.getVisibleTo(tabId, sessionId) !== undefined;
+      });
+      return toolOk({ ...obj, tabs: filtered });
+    }
+
+    if (toolName === "browser_current_tab") {
+      const obj = (extResult && typeof extResult === "object")
+        ? (extResult as Record<string, unknown>)
+        : undefined;
+      const reportedId = obj && typeof obj["tab_id"] === "string" ? (obj["tab_id"] as string) : undefined;
+
+      if (reportedId) {
+        const rec = this.deps.tabs.getVisibleTo(reportedId, sessionId);
+        if (rec) return toolOk(obj);
+      }
+
+      if (this.lastActiveTabId) {
+        const rec = this.deps.tabs.getVisibleTo(this.lastActiveTabId, sessionId);
+        if (rec) {
+          return toolOk({
+            tab_id: rec.tab_id,
+            url: rec.url,
+            title: rec.title ?? "",
+            active: true,
+          });
+        }
+      }
+
+      return toolError({
+        code: "TAB_NOT_FOUND",
+        message: "no tab visible to this session — open one with browser_new_tab",
+      });
+    }
+
+    return undefined;
   }
 
   /**
