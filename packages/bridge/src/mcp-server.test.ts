@@ -84,7 +84,9 @@ function makeDeps(overrides: Partial<McpBridgeDeps> = {}): McpBridgeDeps {
     tabs: new TabRegistry(),
     logger: makeLogger(),
     version: "0.0.0-test",
+    sessionId: "test-session",
     teachStore: new TeachSessionStore(),
+    gatedMatcher: { patterns: [], matches: () => false },
     // Test default: every gated feature on, so existing tool-call tests
     // (which call browser_* + procedures_* tools) keep working without
     // needing to reason about the feature gate per case. Gate-specific
