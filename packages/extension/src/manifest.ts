@@ -22,7 +22,7 @@ export default defineManifest({
   version: "0.0.5",
   minimum_chrome_version: "120",
   key: EXTENSION_KEY,
-  permissions: ["tabs", "scripting", "debugger", "storage", "alarms", "webNavigation", "webRequest"],
+  permissions: ["tabs", "tabGroups", "scripting", "debugger", "storage", "alarms", "webNavigation", "webRequest"],
   host_permissions: ["<all_urls>"],
   background: {
     service_worker: "src/background/index.ts",
