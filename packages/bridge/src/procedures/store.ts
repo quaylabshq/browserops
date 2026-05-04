@@ -9,6 +9,36 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
 // ---------------------------------------------------------------------------
+// Write mutex
+//
+// Multiple concurrent sessions may issue procedures_save / _delete /
+// _promote / _compile at once now that the daemon hosts N MCP servers
+// in one process. The atomic-rename pattern protects each individual
+// file against torn writes, but two sessions saving *different* files
+// in the same procedure directory could still race against each
+// other's mkdir/index work. Serialise every write through a single
+// promise chain so the on-disk tree is mutated by exactly one writer
+// at a time. Reads stay outside the chain — they're already safe
+// against atomic rename.
+// ---------------------------------------------------------------------------
+
+let writeChain: Promise<void> = Promise.resolve();
+function withWriteLock<T>(op: () => Promise<T>): Promise<T> {
+  const prev = writeChain;
+  let release!: () => void;
+  writeChain = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return prev.then(async () => {
+    try {
+      return await op();
+    } finally {
+      release();
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Coded error
 // ---------------------------------------------------------------------------
 
@@ -43,23 +73,25 @@ export async function atomicWriteFile(
   absPath: string,
   text: string,
 ): Promise<void> {
-  const dir = path.dirname(absPath);
-  const tmpPath = `${absPath}.tmp-${process.pid}-${Date.now()}`;
+  return withWriteLock(async () => {
+    const dir = path.dirname(absPath);
+    const tmpPath = `${absPath}.tmp-${process.pid}-${Date.now()}`;
 
-  await fs.mkdir(dir, { recursive: true });
+    await fs.mkdir(dir, { recursive: true });
 
-  try {
-    await fs.writeFile(tmpPath, text, "utf8");
-    await fs.rename(tmpPath, absPath);
-  } catch (err) {
-    await fs.unlink(tmpPath).catch(() => undefined);
-    const nodeErr = err as NodeJS.ErrnoException;
-    throw new CodedError(
-      "INTERNAL",
-      `failed to write file: ${absPath}: ${nodeErr.message}`,
-      { path: absPath, cause: nodeErr.code },
-    );
-  }
+    try {
+      await fs.writeFile(tmpPath, text, "utf8");
+      await fs.rename(tmpPath, absPath);
+    } catch (err) {
+      await fs.unlink(tmpPath).catch(() => undefined);
+      const nodeErr = err as NodeJS.ErrnoException;
+      throw new CodedError(
+        "INTERNAL",
+        `failed to write file: ${absPath}: ${nodeErr.message}`,
+        { path: absPath, cause: nodeErr.code },
+      );
+    }
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -109,24 +141,26 @@ export async function writeProcedureYamlAtomic(
   absPath: string,
   yamlText: string,
 ): Promise<void> {
-  const dir = path.dirname(absPath);
-  const tmpPath = `${absPath}.tmp-${process.pid}-${Date.now()}`;
+  return withWriteLock(async () => {
+    const dir = path.dirname(absPath);
+    const tmpPath = `${absPath}.tmp-${process.pid}-${Date.now()}`;
 
-  await fs.mkdir(dir, { recursive: true });
+    await fs.mkdir(dir, { recursive: true });
 
-  try {
-    await fs.writeFile(tmpPath, yamlText, "utf8");
-    await fs.rename(tmpPath, absPath);
-  } catch (err) {
-    // Best-effort cleanup — ignore secondary error.
-    await fs.unlink(tmpPath).catch(() => undefined);
-    const nodeErr = err as NodeJS.ErrnoException;
-    throw new CodedError(
-      "INTERNAL",
-      `failed to write procedure.yaml: ${absPath}: ${nodeErr.message}`,
-      { path: absPath, cause: nodeErr.code },
-    );
-  }
+    try {
+      await fs.writeFile(tmpPath, yamlText, "utf8");
+      await fs.rename(tmpPath, absPath);
+    } catch (err) {
+      // Best-effort cleanup — ignore secondary error.
+      await fs.unlink(tmpPath).catch(() => undefined);
+      const nodeErr = err as NodeJS.ErrnoException;
+      throw new CodedError(
+        "INTERNAL",
+        `failed to write procedure.yaml: ${absPath}: ${nodeErr.message}`,
+        { path: absPath, cause: nodeErr.code },
+      );
+    }
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -147,47 +181,49 @@ export async function deleteProcedureDir(
   absDirPath: string,
   cascade: boolean,
 ): Promise<void> {
-  // Verify the directory exists first.
-  try {
-    await fs.access(absDirPath);
-  } catch {
-    throw new CodedError(
-      "PROC_NOT_FOUND",
-      `procedure directory not found: ${absDirPath}`,
-      { path: absDirPath },
-    );
-  }
-
-  const subsPath = path.join(absDirPath, "subs");
-
-  if (!cascade) {
-    // Check whether subs/ exists and is non-empty.
-    let subsEntries: string[] = [];
+  return withWriteLock(async () => {
+    // Verify the directory exists first.
     try {
-      const entries = await fs.readdir(subsPath);
-      subsEntries = entries;
-    } catch (err) {
-      const nodeErr = err as NodeJS.ErrnoException;
-      if (nodeErr.code !== "ENOENT") {
-        throw new CodedError(
-          "INTERNAL",
-          `failed to read subs directory: ${subsPath}: ${nodeErr.message}`,
-          { path: subsPath, cause: nodeErr.code },
-        );
-      }
-      // ENOENT → subs/ doesn't exist, safe to proceed.
-    }
-
-    if (subsEntries.length > 0) {
+      await fs.access(absDirPath);
+    } catch {
       throw new CodedError(
-        "PROC_IN_USE",
-        `cannot delete procedure with non-empty subs/ (use cascade=true): ${absDirPath}`,
-        { path: absDirPath, subs: subsEntries },
+        "PROC_NOT_FOUND",
+        `procedure directory not found: ${absDirPath}`,
+        { path: absDirPath },
       );
     }
-  }
 
-  await fs.rm(absDirPath, { recursive: true });
+    const subsPath = path.join(absDirPath, "subs");
+
+    if (!cascade) {
+      // Check whether subs/ exists and is non-empty.
+      let subsEntries: string[] = [];
+      try {
+        const entries = await fs.readdir(subsPath);
+        subsEntries = entries;
+      } catch (err) {
+        const nodeErr = err as NodeJS.ErrnoException;
+        if (nodeErr.code !== "ENOENT") {
+          throw new CodedError(
+            "INTERNAL",
+            `failed to read subs directory: ${subsPath}: ${nodeErr.message}`,
+            { path: subsPath, cause: nodeErr.code },
+          );
+        }
+        // ENOENT → subs/ doesn't exist, safe to proceed.
+      }
+
+      if (subsEntries.length > 0) {
+        throw new CodedError(
+          "PROC_IN_USE",
+          `cannot delete procedure with non-empty subs/ (use cascade=true): ${absDirPath}`,
+          { path: absDirPath, subs: subsEntries },
+        );
+      }
+    }
+
+    await fs.rm(absDirPath, { recursive: true });
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -206,52 +242,54 @@ export async function moveProcedureDir(
   fromAbs: string,
   toAbs: string,
 ): Promise<void> {
-  // Verify source exists.
-  try {
-    await fs.access(fromAbs);
-  } catch {
-    throw new CodedError(
-      "PROC_NOT_FOUND",
-      `source procedure directory not found: ${fromAbs}`,
-      { path: fromAbs },
-    );
-  }
-
-  // Verify target does not exist.
-  try {
-    await fs.access(toAbs);
-    // If we reach here, the target exists — that's an error.
-    throw new CodedError(
-      "PROC_ALREADY_EXISTS",
-      `target procedure directory already exists: ${toAbs}`,
-      { path: toAbs },
-    );
-  } catch (err) {
-    if (err instanceof CodedError) {
-      throw err;
-    }
-    // ENOENT on the access check → target doesn't exist, safe to proceed.
-    const nodeErr = err as NodeJS.ErrnoException;
-    if (nodeErr.code !== "ENOENT") {
+  return withWriteLock(async () => {
+    // Verify source exists.
+    try {
+      await fs.access(fromAbs);
+    } catch {
       throw new CodedError(
-        "INTERNAL",
-        `failed to check target directory: ${toAbs}: ${nodeErr.message}`,
-        { path: toAbs, cause: nodeErr.code },
+        "PROC_NOT_FOUND",
+        `source procedure directory not found: ${fromAbs}`,
+        { path: fromAbs },
       );
     }
-  }
 
-  // Ensure the parent of the target exists.
-  await fs.mkdir(path.dirname(toAbs), { recursive: true });
+    // Verify target does not exist.
+    try {
+      await fs.access(toAbs);
+      // If we reach here, the target exists — that's an error.
+      throw new CodedError(
+        "PROC_ALREADY_EXISTS",
+        `target procedure directory already exists: ${toAbs}`,
+        { path: toAbs },
+      );
+    } catch (err) {
+      if (err instanceof CodedError) {
+        throw err;
+      }
+      // ENOENT on the access check → target doesn't exist, safe to proceed.
+      const nodeErr = err as NodeJS.ErrnoException;
+      if (nodeErr.code !== "ENOENT") {
+        throw new CodedError(
+          "INTERNAL",
+          `failed to check target directory: ${toAbs}: ${nodeErr.message}`,
+          { path: toAbs, cause: nodeErr.code },
+        );
+      }
+    }
 
-  try {
-    await fs.rename(fromAbs, toAbs);
-  } catch (err) {
-    const nodeErr = err as NodeJS.ErrnoException;
-    throw new CodedError(
-      "INTERNAL",
-      `failed to move procedure directory: ${fromAbs} → ${toAbs}: ${nodeErr.message}`,
-      { from: fromAbs, to: toAbs, cause: nodeErr.code },
-    );
-  }
+    // Ensure the parent of the target exists.
+    await fs.mkdir(path.dirname(toAbs), { recursive: true });
+
+    try {
+      await fs.rename(fromAbs, toAbs);
+    } catch (err) {
+      const nodeErr = err as NodeJS.ErrnoException;
+      throw new CodedError(
+        "INTERNAL",
+        `failed to move procedure directory: ${fromAbs} → ${toAbs}: ${nodeErr.message}`,
+        { from: fromAbs, to: toAbs, cause: nodeErr.code },
+      );
+    }
+  });
 }
