@@ -2062,6 +2062,63 @@ const proceduresTeachNarration: ToolDef = {
   errorCodes: [...BASE_CODES, "INVALID_STATE", "EXTENSION_DISCONNECTED"] as const,
 } as const;
 
+const setSessionName: ToolDef = {
+  name: "browser_set_session_name",
+  description:
+    "Rename this MCP session. The new name updates the Chrome tab-group label so the user " +
+    "can tell at a glance which agent is responsible for which tabs. Default names come from " +
+    "the MCP client (\"Claude Code\", \"Cursor\", …); use this when multiple sessions are alive " +
+    "and you want a task-specific label like \"scrape-amazon\". Keep names short — Chrome " +
+    "truncates long tab-group titles aggressively.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["name"] as const,
+    properties: {
+      name: { type: "string", minLength: 1, maxLength: 64 },
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["session_id", "name"] as const,
+    properties: {
+      session_id: { type: "string" },
+      name: { type: "string" },
+    },
+  },
+  action_weight: 0,
+  risky: "never",
+  errorCodes: [...BASE_CODES, "INVALID_STATE"] as const,
+} as const;
+
+const releaseTab: ToolDef = {
+  name: "browser_release_tab",
+  description:
+    "Release a tab back to user-owned. After this call the tab leaves this session's tab " +
+    "group and any session (or the user) can interact with it again. Use to hand a tab " +
+    "back when you're done; otherwise tabs auto-orphan when this session disconnects.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["tab_id"] as const,
+    properties: {
+      tab_id: tabIdSchema,
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["released"] as const,
+    properties: {
+      released: { const: true },
+    },
+  },
+  action_weight: 0,
+  risky: "never",
+  errorCodes: [...BASE_CODES, ...TAB_CODES] as const,
+} as const;
+
 // ---------------------------------------------------------------------------
 // Public catalogue
 // ---------------------------------------------------------------------------
@@ -2093,6 +2150,8 @@ export const TOOL_DEFS: readonly ToolDef[] = [
   querySelector,
   executeJs,
   setCdp,
+  setSessionName,
+  releaseTab,
   proceduresList,
   proceduresSearch,
   proceduresGet,
