@@ -342,7 +342,7 @@ export class McpBridgeServer {
 
   constructor(deps: McpBridgeDeps) {
     this.deps = deps;
-    this.procedureHandlers = buildProcedureHandlers(deps.wsBridge, deps.teachStore);
+    this.procedureHandlers = buildProcedureHandlers(deps.wsBridge, deps.teachStore, deps.sessionId);
 
     const ajv = new Ajv({ allErrors: true, strict: false, useDefaults: true });
     addFormats(ajv);
