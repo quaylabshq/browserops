@@ -1,5 +1,5 @@
 import { spawnSync, spawn } from "node:child_process";
-import { ensureBridgeRunning } from "../lib/daemon.js";
+import { ensureDaemonRunning } from "../lib/daemon.js";
 import { ok, info, warn, c } from "../lib/ui.js";
 
 const BIN = "cursor";
@@ -46,11 +46,11 @@ function tryClipboard(text: string): boolean {
 }
 
 export async function runCursorLauncher(task: string): Promise<void> {
-  const result = await ensureBridgeRunning({});
+  const result = await ensureDaemonRunning({});
   if (result.alreadyRunning) {
-    info("bridge already running");
+    info("daemon already running");
   } else {
-    ok(`bridge started — pid ${result.pid}`);
+    ok(`daemon started — pid ${result.pid}`);
   }
 
   const prompt = `Use the /browserops skill. Task: ${task}`;

@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import { status } from "../lib/daemon.js";
-import { logPath, controlSocketPath } from "../lib/paths.js";
+import { logPath, daemonSocketPath } from "../lib/paths.js";
 import { DEFAULT_WS_PORT, ENV } from "@browserops/shared";
 import { c, dim } from "../lib/ui.js";
 
@@ -10,7 +10,7 @@ export async function runStatus(): Promise<void> {
 
   const statusLabel = st.running ? c.green("running") : c.red("stopped");
   const pidLabel = st.running && st.pid != null ? String(st.pid) : "—";
-  const socketLabel = st.running ? controlSocketPath() : "—";
+  const socketLabel = st.running ? daemonSocketPath() : "—";
 
   process.stdout.write(`\nbrowserops daemon\n`);
   process.stdout.write(`  status:    ${statusLabel}\n`);

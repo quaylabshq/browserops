@@ -1,15 +1,15 @@
-import { isBridgeAlive, spawnBridge } from "../lib/daemon.js";
-import { controlSocketPath } from "../lib/paths.js";
+import { isDaemonAlive, spawnDaemon } from "../lib/daemon.js";
+import { daemonSocketPath } from "../lib/paths.js";
 import { ok, info, err } from "../lib/ui.js";
 
 export async function runStart(): Promise<void> {
-  if (await isBridgeAlive()) {
-    info("bridge already running");
+  if (await isDaemonAlive()) {
+    info("daemon already running");
     return;
   }
   try {
-    const { pid } = await spawnBridge({});
-    ok(`bridge started — pid ${pid}  socket ${controlSocketPath()}`);
+    const { pid } = await spawnDaemon({});
+    ok(`daemon started — pid ${pid}  socket ${daemonSocketPath()}`);
   } catch (e) {
     err(e instanceof Error ? e.message : String(e));
     process.exit(1);

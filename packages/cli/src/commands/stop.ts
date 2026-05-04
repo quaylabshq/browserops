@@ -1,14 +1,14 @@
 import { existsSync } from "node:fs";
-import { isBridgeAlive, stopBridge } from "../lib/daemon.js";
-import { pidPath } from "../lib/paths.js";
+import { isDaemonAlive, stopDaemon } from "../lib/daemon.js";
+import { daemonPidPath } from "../lib/paths.js";
 import { ok, info } from "../lib/ui.js";
 
 export async function runStop(): Promise<void> {
-  if (!(await isBridgeAlive()) && !existsSync(pidPath())) {
-    info("bridge not running");
+  if (!(await isDaemonAlive()) && !existsSync(daemonPidPath())) {
+    info("daemon not running");
     return;
   }
-  const stopped = await stopBridge({});
+  const stopped = await stopDaemon({});
   if (stopped) {
     ok("stopped");
   } else {

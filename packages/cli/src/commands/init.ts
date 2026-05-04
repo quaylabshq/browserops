@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { spawn } from "node:child_process";
 import prompts from "prompts";
 import { DEFAULT_WS_PORT, ENV } from "@browserops/shared";
-import { ensureBridgeRunning, isBridgeAlive, resolveBridgeBin } from "../lib/daemon.js";
+import { ensureDaemonRunning, isDaemonAlive, resolveShimBin } from "../lib/daemon.js";
 import {
   STATE_DIR,
   bundledAssetsDir,
@@ -65,12 +65,12 @@ export async function runInit(opts: InitOpts = {}): Promise<void> {
   );
 
   if (!opts.dryRun) {
-    if (await isBridgeAlive()) {
+    if (await isDaemonAlive()) {
       ok("bridge already running");
     } else {
       info("starting bridge daemon (mints token, seeds procedures)…");
       try {
-        await ensureBridgeRunning({});
+        await ensureDaemonRunning({});
         ok(`bridge running on port ${port}`);
       } catch (e) {
         err(
@@ -203,15 +203,15 @@ async function runMcpInstaller(opts: InitOpts): Promise<void> {
     return;
   }
 
-  // Resolve the bridge to an absolute `node <bridge-dist>/index.js` invocation
-  // when possible. Bare `browserops-bridge` only works if the binary is on
+  // Resolve the shim to an absolute `node <bridge-dist>/shim.js` invocation
+  // when possible. Bare `browserops-shim` only works if the binary is on
   // $PATH, but a global `npm i -g browserops` does NOT expose the transitive
   // `@browserops/bridge` bin — only the top-level package's bins get linked.
   // Writing the resolved path makes the MCP entry work without further setup.
-  const invocation = resolveBridgeBin();
-  if (invocation.command === "browserops-bridge") {
+  const invocation = resolveShimBin();
+  if (invocation.command === "browserops-shim") {
     warn(
-      "could not resolve @browserops/bridge — writing bare `browserops-bridge`. " +
+      "could not resolve @browserops/bridge — writing bare `browserops-shim`. " +
       "If your MCP client cannot find it, install browserops globally or pass --client.",
     );
   }
