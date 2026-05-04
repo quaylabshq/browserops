@@ -9,7 +9,6 @@ import {
   STATE_DIR_NAME,
   TOKEN_FILENAME,
 } from "@browserops/shared";
-import { CONTROL_SOCKET_FILENAME } from "./control-protocol.js";
 
 export function stateDir(): string {
   return join(homedir(), STATE_DIR_NAME);
@@ -29,10 +28,6 @@ export function riskyDomainsPath(): string {
 
 export function gatedDomainsPath(): string {
   return join(stateDir(), GATED_DOMAINS_FILENAME);
-}
-
-export function controlSocketPath(): string {
-  return join(stateDir(), CONTROL_SOCKET_FILENAME);
 }
 
 export function daemonSocketPath(): string {

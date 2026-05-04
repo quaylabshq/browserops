@@ -35,7 +35,7 @@ async function copySkillIntoDist(): Promise<void> {
 }
 
 export default defineConfig({
-  entry: ["src/index.ts", "src/daemon.ts", "src/shim.ts"],
+  entry: ["src/daemon.ts", "src/shim.ts"],
   format: ["esm"],
   target: "node20",
   platform: "node",
