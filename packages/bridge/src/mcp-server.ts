@@ -36,6 +36,8 @@ import { buildProcedureHandlers } from "./procedures/handlers.js";
 import { listPrompts, getPrompt } from "./prompts.js";
 import { checkBreaker, recordResult as recordBreakerResult } from "./circuit-breaker.js";
 import type { TeachSessionStore } from "./teach/session-store.js";
+import type { AutoTeachStore } from "./autoteach/store.js";
+import type { AutoTeachBindings } from "./autoteach/bindings.js";
 
 /**
  * Minimal shape McpBridgeServer needs to talk to the extension.
@@ -146,6 +148,10 @@ export interface McpBridgeDeps {
   renameSession?: (name: string) => string | undefined;
   /** Disk-backed teach-mode session store (procedures_teach_* handlers read/write here). */
   teachStore: TeachSessionStore;
+  /** Disk-backed auto-teach session store. */
+  autoteachStore: AutoTeachStore;
+  /** In-memory tab → autoteach session binding (set by attach, cleared by record_trace). */
+  autoteachBindings: AutoTeachBindings;
   /**
    * Set of currently-enabled gated features. Tools whose def.feature is set
    * but absent from this set are hidden from tools/list and rejected at
@@ -671,6 +677,7 @@ export class McpBridgeServer {
         const result = await this.reply(id, name, advisedResult);
         recordBreakerResult(breakerCall, { ok: false, error_code: "DISPATCH_FAILED_ON_GATED_DOMAIN" });
         this.emitTrace(id, name, params, startMs, result);
+        await this.appendAutoteachTrace(name, params, startMs, result);
         return result;
       }
       this.maybeClaimNewTab(name, extResult);
@@ -686,11 +693,13 @@ export class McpBridgeServer {
         const result = await this.reply(id, name, finalResult);
         recordBreakerResult(breakerCall, { ok: false, error_code: "TAB_NOT_FOUND" });
         this.emitTrace(id, name, params, startMs, result);
+        await this.appendAutoteachTrace(name, params, startMs, result);
         return result;
       }
       const result = await this.reply(id, name, finalResult);
       recordBreakerResult(breakerCall, { ok: true });
       this.emitTrace(id, name, params, startMs, result);
+      await this.appendAutoteachTrace(name, params, startMs, result);
       // Track per-session "last touched tab" so browser_current_tab
       // can fall back to it when the OS-level foreground belongs to
       // someone else.
@@ -702,6 +711,7 @@ export class McpBridgeServer {
       const result = await this.reply(id, name, toolError({ code, message }));
       recordBreakerResult(breakerCall, { ok: false, error_code: code });
       this.emitTrace(id, name, params, startMs, result);
+      await this.appendAutoteachTrace(name, params, startMs, result);
       return result;
     }
   }
@@ -850,6 +860,94 @@ export class McpBridgeServer {
         });
       }
     });
+  }
+
+  /**
+   * If the call was a browser_* on a tab bound to an active auto-teach
+   * session, append a record to the session's trace.jsonl. Best-effort —
+   * trace failures must never fail the tool call. Skipped for non-browser
+   * tools and for early-exit paths that didn't reach the extension.
+   */
+  private async appendAutoteachTrace(
+    name: string,
+    params: Record<string, unknown>,
+    startMs: number,
+    result: ToolCallResult,
+  ): Promise<void> {
+    if (!name.startsWith("browser_")) return;
+    const tabIdRaw = params["tab_id"];
+    const tabId = typeof tabIdRaw === "string" ? tabIdRaw : null;
+    if (tabId === null) return;
+    const binding = this.deps.autoteachBindings.get(tabId);
+    if (binding === undefined) return;
+
+    const text = result.content[0]?.text ?? "";
+    let resultSummary: Record<string, unknown> | undefined;
+    let pageEffect: PageEffect | undefined;
+    let errorCode: string | undefined;
+
+    if (!result.isError) {
+      try {
+        const parsed = JSON.parse(text) as Record<string, unknown>;
+        const summary: Record<string, unknown> = {};
+        for (const [k, v] of Object.entries(parsed)) {
+          // Drop large blobs to keep trace.jsonl readable.
+          if (k === "data" || k === "html" || k === "nodes" || k === "screenshot") continue;
+          if (k === "page_effect") {
+            pageEffect = v as PageEffect;
+            continue;
+          }
+          summary[k] = v;
+        }
+        resultSummary = summary;
+      } catch {
+        /* result wasn't JSON — skip summary */
+      }
+    } else {
+      try {
+        const parsed = JSON.parse(text) as { code?: unknown };
+        if (typeof parsed.code === "string") errorCode = parsed.code;
+      } catch {
+        /* skip */
+      }
+    }
+
+    // Strip large fields from params too — base64 image data on screenshot,
+    // raw js on execute_js can be long but is load-bearing for replay so
+    // keep but cap.
+    const safeParams: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(params)) {
+      if (k === "data") continue;
+      if (typeof v === "string" && v.length > 8000) {
+        safeParams[k] = v.slice(0, 8000) + "…[truncated]";
+        continue;
+      }
+      safeParams[k] = v;
+    }
+
+    try {
+      await this.deps.autoteachStore.appendTrace(binding.session_id, {
+        ts: startMs,
+        run_index: binding.run_index,
+        method: name,
+        params: safeParams,
+        ok: !result.isError,
+        ...(errorCode !== undefined ? { error_code: errorCode } : {}),
+        ...(resultSummary !== undefined ? { result_summary: resultSummary } : {}),
+        ...(pageEffect !== undefined ? { page_effect: pageEffect } : {}),
+        duration_ms: Date.now() - startMs,
+      });
+    } catch (err) {
+      // Best-effort — log and continue. The trace is a debugging aid;
+      // dropping a record beats failing the user's tool call.
+      void this.deps.logger.write({
+        dir: "system",
+        event: "autoteach_trace_append_failed",
+        session_id: binding.session_id,
+        method: name,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   /**
