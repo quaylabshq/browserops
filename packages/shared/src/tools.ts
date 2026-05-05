@@ -2062,6 +2062,557 @@ const proceduresTeachNarration: ToolDef = {
   errorCodes: [...BASE_CODES, "INVALID_STATE", "EXTENSION_DISCONNECTED"] as const,
 } as const;
 
+// ---------------------------------------------------------------------------
+// Auto-teach — bootstrap a procedure from one user demo (or one cold-start
+// exploration), then iteratively replay-and-optimize until convergence.
+// ---------------------------------------------------------------------------
+
+const autoteachConsentSchema: JSONSchemaObject = {
+  type: "object",
+  additionalProperties: false,
+  required: ["budget", "side_effect_policy"] as const,
+  properties: {
+    dummies: {
+      type: "object",
+      additionalProperties: { type: ["string", "number", "boolean"] },
+      description:
+        "Map of input name → safe dummy value to thread through training " +
+        "runs in place of any destructive input.",
+    },
+    budget: {
+      oneOf: [
+        { type: "integer", minimum: 1, maximum: 50 },
+        { const: "convergence" },
+      ],
+      description:
+        "Hard cap on optimization runs (after run 0), or 'convergence' to " +
+        "let the loop stop on its own when the metrics stop improving.",
+    },
+    side_effect_policy: {
+      enum: ["use_dummies", "pause_at_destructive", "read_only_only"] as const,
+      description:
+        "How the loop treats destructive leaves. use_dummies = replay with " +
+        "dummies; pause_at_destructive = optimize leading non-destructive " +
+        "leaves only and run destructive leaf once on finalize; " +
+        "read_only_only = refuse session if any leaf has side_effects.",
+    },
+  },
+};
+
+const autoteachOptimizationSchema: JSONSchemaObject = {
+  type: "object",
+  additionalProperties: true,
+  required: ["kind"] as const,
+  properties: {
+    kind: {
+      enum: [
+        "drop_dead_read",
+        "cache_selector",
+        "lift_to_bind",
+        "tighten_wait",
+        "swap_to_execute_js",
+        "split_leaf",
+        "reuse_existing",
+      ] as const,
+    },
+    step_id: { type: "string" },
+    new_tier: { type: "string" },
+    new_selector: { type: "string" },
+    input_name: { type: "string" },
+    source_step_id: { type: "string" },
+    new_timeout_ms: { type: "integer", minimum: 0 },
+    at_step_id: { type: "string" },
+    reason: { type: "string" },
+    leaf_name: { type: "string" },
+    replacement_name: { type: "string" },
+  },
+};
+
+const autoteachSessionSchema: JSONSchemaObject = {
+  type: "object",
+  additionalProperties: true,
+  required: [
+    "session_id",
+    "goal",
+    "mode",
+    "consent",
+    "state",
+    "draft_version",
+    "created_at",
+  ] as const,
+  properties: {
+    session_id: { type: "string" },
+    goal: { type: "string" },
+    mode: { enum: ["demo", "explore"] as const },
+    consent: autoteachConsentSchema,
+    state: {
+      enum: [
+        "consenting",
+        "capturing_demo",
+        "exploring",
+        "distilled",
+        "optimizing",
+        "finalizing",
+        "converged",
+        "stalled",
+        "aborted",
+      ] as const,
+    },
+    teach_session_id: { type: "string" },
+    attached_tab_id: { type: "string" },
+    best_procedure_name: { type: "string" },
+    draft_version: { type: "integer", minimum: 0 },
+    created_at: { type: "integer", minimum: 0 },
+    last_run_at: { type: "integer", minimum: 0 },
+  },
+};
+
+const autoteachRunSchema: JSONSchemaObject = {
+  type: "object",
+  additionalProperties: true,
+  required: [
+    "run_id",
+    "run_index",
+    "started_at",
+    "tool_count",
+    "wall_clock_ms",
+    "retries",
+    "errors",
+    "outcome",
+    "trace_ref",
+  ] as const,
+  properties: {
+    run_id: { type: "string" },
+    run_index: { type: "integer", minimum: 0 },
+    started_at: { type: "integer" },
+    ended_at: { type: "integer" },
+    tool_count: { type: "integer", minimum: 0 },
+    wall_clock_ms: { type: "integer", minimum: 0 },
+    retries: { type: "integer", minimum: 0 },
+    errors: { type: "array", items: { type: "string" } },
+    optimization_tried: autoteachOptimizationSchema,
+    outcome: { enum: ["improved", "regressed", "noop", "failed"] as const },
+    trace_ref: { type: "string" },
+  },
+};
+
+const autoteachLeafSummarySchema: JSONSchemaObject = {
+  type: "object",
+  additionalProperties: false,
+  required: ["name", "draft_status", "side_effects", "fragility"] as const,
+  properties: {
+    name: { type: "string" },
+    draft_status: { enum: ["draft", "trusted", "missing"] as const },
+    side_effects: {
+      type: "array",
+      items: {
+        enum: [
+          "send_message",
+          "payment",
+          "post_public",
+          "modify_account",
+          "delete",
+        ] as const,
+      },
+    },
+    fragility: { enum: ["low", "medium", "high"] as const },
+  },
+};
+
+const proceduresAutoteachStart: ToolDef = {
+  name: "procedures_autoteach_start",
+  feature: "autoteach",
+  description:
+    "Open an auto-teach session. Stores the user's goal + consent (mode, " +
+    "side-effect policy, dummy values, run budget) so the rest of the " +
+    "loop can reference one session_id. Mode 'demo' will additionally " +
+    "kick off a procedures_teach_start internally and return its " +
+    "teach_session_id; mode 'explore' returns no teach_session_id and " +
+    "expects the agent to call procedures_autoteach_attach + drive the " +
+    "browser itself for run 0. " +
+    'REQUIRED: {"goal", "mode", "consent"}.',
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["goal", "mode", "consent"] as const,
+    properties: {
+      goal: { type: "string", minLength: 1, maxLength: 400 },
+      mode: { enum: ["demo", "explore"] as const },
+      consent: autoteachConsentSchema,
+      narration_hint: { type: "string", maxLength: 200 },
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["session_id", "state"] as const,
+    properties: {
+      session_id: { type: "string" },
+      teach_session_id: { type: "string" },
+      state: { type: "string" },
+    },
+  },
+  action_weight: 0,
+  risky: "never",
+  errorCodes: [...BASE_CODES, "INVALID_STATE", "EXTENSION_DISCONNECTED"] as const,
+} as const;
+
+const proceduresAutoteachAttach: ToolDef = {
+  name: "procedures_autoteach_attach",
+  feature: "autoteach",
+  description:
+    "Tag a tab so every browser_* call dispatched on it is appended to " +
+    "this session's trace.jsonl with the current run_index. Used in " +
+    "explore mode to capture the agent's run 0, and in every replay run " +
+    "to capture the optimization run. Idempotent — re-attaching the " +
+    "same tab is a no-op; attaching a different tab replaces the " +
+    "previous binding for this session. " +
+    'REQUIRED: {"session_id", "tab_id", "run_index"}.',
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["session_id", "tab_id", "run_index"] as const,
+    properties: {
+      session_id: { type: "string" },
+      tab_id: tabIdSchema,
+      run_index: { type: "integer", minimum: 0 },
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["attached"] as const,
+    properties: {
+      attached: { const: true },
+    },
+  },
+  action_weight: 0,
+  risky: "never",
+  errorCodes: [...BASE_CODES, "PROC_NOT_FOUND", "INVALID_STATE"] as const,
+} as const;
+
+const proceduresAutoteachRecordTrace: ToolDef = {
+  name: "procedures_autoteach_record_trace",
+  feature: "autoteach",
+  description:
+    "Close the trace window for a given run and return its records. " +
+    "After the agent finishes a run (run 0 demo distillation, an " +
+    "optimization replay, or the explore run), call this to detach " +
+    "the tab + freeze the slice of trace.jsonl belonging to this " +
+    "run_index. Returns nothing of substance to the agent — the " +
+    "distiller reads the trace itself. " +
+    'REQUIRED: {"session_id", "run_index"}.',
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["session_id", "run_index"] as const,
+    properties: {
+      session_id: { type: "string" },
+      run_index: { type: "integer", minimum: 0 },
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["record_count"] as const,
+    properties: {
+      record_count: { type: "integer", minimum: 0 },
+    },
+  },
+  action_weight: 0,
+  risky: "never",
+  errorCodes: [...BASE_CODES, "PROC_NOT_FOUND"] as const,
+} as const;
+
+const proceduresAutoteachDistill: ToolDef = {
+  name: "procedures_autoteach_distill",
+  feature: "autoteach",
+  description:
+    "Run the auto-teach distiller over a given run's trace and emit " +
+    "draft procedure YAMLs. The distiller drops dead reads, collapses " +
+    "retries, lifts dynamic values to bind references, sets wait_for " +
+    "timeouts from observed durations, splits leaves at UI-state " +
+    "transitions, runs reuse-detection against the existing procedure " +
+    "store, classifies side effects, and scores fragility. Default " +
+    "run_index is the latest one recorded. Drafts are written to " +
+    "drafts/v<N>.yaml in the session directory and the latest draft " +
+    "becomes the new best for the next replay. " +
+    'REQUIRED: {"session_id"}. OPTIONAL: {"run_index"}.',
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["session_id"] as const,
+    properties: {
+      session_id: { type: "string" },
+      run_index: { type: "integer", minimum: 0 },
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["draft_version", "leaves", "composite_name", "validation_errors"] as const,
+    properties: {
+      draft_version: { type: "integer", minimum: 1 },
+      composite_name: { type: ["string", "null"] },
+      leaves: {
+        type: "array",
+        items: autoteachLeafSummarySchema,
+      },
+      yaml: {
+        type: "string",
+        description:
+          "The full composite + leaves YAML for the new draft (concatenated, --- separated).",
+      },
+      validation_errors: {
+        type: "array",
+        items: { type: "string" },
+        description:
+          "If non-empty, the distiller emitted but flagged issues — the " +
+          "skill should ask the user before continuing.",
+      },
+    },
+  },
+  action_weight: 0,
+  risky: "never",
+  errorCodes: [...BASE_CODES, "PROC_NOT_FOUND", "PROC_SCHEMA_INVALID"] as const,
+} as const;
+
+const proceduresAutoteachRecordRun: ToolDef = {
+  name: "procedures_autoteach_record_run",
+  feature: "autoteach",
+  description:
+    "Append run metrics to runs.jsonl and compute the run's outcome " +
+    "(improved | regressed | noop | failed) vs the prior best. Outcome " +
+    "drives the convergence detector and the next-optimization picker. " +
+    "If outcome === 'regressed', the skill should revert the " +
+    "optimization tried this run before the next replay. " +
+    'REQUIRED: {"session_id", "run_index", "metrics"}. ' +
+    'OPTIONAL: {"optimization_tried"} (echoed back into the run record).',
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["session_id", "run_index", "metrics"] as const,
+    properties: {
+      session_id: { type: "string" },
+      run_index: { type: "integer", minimum: 0 },
+      metrics: {
+        type: "object",
+        additionalProperties: false,
+        required: ["tool_count", "wall_clock_ms"] as const,
+        properties: {
+          tool_count: { type: "integer", minimum: 0 },
+          wall_clock_ms: { type: "integer", minimum: 0 },
+          retries: { type: "integer", minimum: 0, default: 0 },
+          errors: {
+            type: "array",
+            items: { type: "string" },
+            default: [],
+          },
+          succeeded: { type: "boolean", default: true },
+        },
+      },
+      optimization_tried: autoteachOptimizationSchema,
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["outcome", "delta"] as const,
+    properties: {
+      outcome: { enum: ["improved", "regressed", "noop", "failed"] as const },
+      delta: {
+        type: "object",
+        additionalProperties: false,
+        required: ["tool_count", "wall_clock_ms"] as const,
+        properties: {
+          tool_count: { type: "integer" },
+          wall_clock_ms: { type: "integer" },
+        },
+      },
+    },
+  },
+  action_weight: 0,
+  risky: "never",
+  errorCodes: [...BASE_CODES, "PROC_NOT_FOUND"] as const,
+} as const;
+
+const proceduresAutoteachStatus: ToolDef = {
+  name: "procedures_autoteach_status",
+  feature: "autoteach",
+  description:
+    "Return the session metadata, run history, current best draft, " +
+    "convergence verdict (converged | stalled | improving), and the " +
+    "next optimization the loop should try (when verdict is " +
+    "'improving'). The agent loop calls this between every replay to " +
+    "decide whether to keep going. " +
+    'REQUIRED: {"session_id"}.',
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["session_id"] as const,
+    properties: {
+      session_id: { type: "string" },
+      include_yaml: {
+        type: "boolean",
+        default: true,
+        description: "Set false to skip embedding the current best YAML.",
+      },
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["session", "history", "convergence", "leaves"] as const,
+    properties: {
+      session: autoteachSessionSchema,
+      history: {
+        type: "array",
+        items: autoteachRunSchema,
+      },
+      best_procedure_yaml: { type: "string" },
+      convergence: {
+        type: "object",
+        additionalProperties: false,
+        required: ["verdict", "reasons"] as const,
+        properties: {
+          verdict: { enum: ["converged", "stalled", "improving"] as const },
+          reasons: { type: "array", items: { type: "string" } },
+        },
+      },
+      next_optimization: autoteachOptimizationSchema,
+      leaves: {
+        type: "array",
+        items: autoteachLeafSummarySchema,
+      },
+    },
+  },
+  action_weight: 0,
+  risky: "never",
+  errorCodes: [...BASE_CODES, "PROC_NOT_FOUND"] as const,
+} as const;
+
+const proceduresAutoteachFinalize: ToolDef = {
+  name: "procedures_autoteach_finalize",
+  feature: "autoteach",
+  description:
+    "Promote the current best draft to a trusted procedure. Runs the " +
+    "replay-variance gate first: each leaf is replayed under perturbed " +
+    "starting conditions (fresh tab, varied input where applicable, " +
+    "different starting URL) — every variant must succeed for the leaf " +
+    "to promote. Side-effecting leaves run once with real values when " +
+    "side_effect_policy === 'pause_at_destructive'. Force=true skips " +
+    "the gate at the caller's risk. Writes leaves first, then the " +
+    "composite, mirroring procedures_save semantics. " +
+    'REQUIRED: {"session_id"}. OPTIONAL: {"force"}.',
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["session_id"] as const,
+    properties: {
+      session_id: { type: "string" },
+      force: { type: "boolean", default: false },
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["saved", "failed"] as const,
+    properties: {
+      saved: {
+        type: "array",
+        items: { type: "string" },
+        description: "Names of procedures successfully promoted to trusted.",
+      },
+      failed: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["name", "reason"] as const,
+          properties: {
+            name: { type: "string" },
+            reason: { type: "string" },
+          },
+        },
+      },
+    },
+  },
+  action_weight: 0,
+  risky: "conditional",
+  errorCodes: [
+    ...BASE_CODES,
+    ...PROC_CODES,
+    "RISKY_ACTION_DENIED",
+    "EXTENSION_DISCONNECTED",
+  ] as const,
+} as const;
+
+const proceduresAutoteachList: ToolDef = {
+  name: "procedures_autoteach_list",
+  feature: "autoteach",
+  description:
+    "List known auto-teach sessions on disk, newest first. Useful when " +
+    "the user resumes a long-running auto-teach across conversations.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {},
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["sessions"] as const,
+    properties: {
+      sessions: { type: "array", items: autoteachSessionSchema },
+    },
+  },
+  action_weight: 0,
+  risky: "never",
+  errorCodes: [...BASE_CODES] as const,
+} as const;
+
+const proceduresAutoteachResume: ToolDef = {
+  name: "procedures_autoteach_resume",
+  feature: "autoteach",
+  description:
+    "Reload an existing auto-teach session by session_id. Returns the " +
+    "same shape as procedures_autoteach_status so a fresh conversation " +
+    "can pick up where the previous one left off. " +
+    'REQUIRED: {"session_id"}.',
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["session_id"] as const,
+    properties: {
+      session_id: { type: "string" },
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["session", "history", "convergence", "leaves"] as const,
+    properties: {
+      session: autoteachSessionSchema,
+      history: { type: "array", items: autoteachRunSchema },
+      best_procedure_yaml: { type: "string" },
+      convergence: {
+        type: "object",
+        additionalProperties: false,
+        required: ["verdict", "reasons"] as const,
+        properties: {
+          verdict: { enum: ["converged", "stalled", "improving"] as const },
+          reasons: { type: "array", items: { type: "string" } },
+        },
+      },
+      next_optimization: autoteachOptimizationSchema,
+      leaves: { type: "array", items: autoteachLeafSummarySchema },
+    },
+  },
+  action_weight: 0,
+  risky: "never",
+  errorCodes: [...BASE_CODES, "PROC_NOT_FOUND"] as const,
+} as const;
+
 const setSessionName: ToolDef = {
   name: "browser_set_session_name",
   description:
@@ -2167,6 +2718,15 @@ export const TOOL_DEFS: readonly ToolDef[] = [
   proceduresTeachMarker,
   proceduresTeachNarration,
   proceduresTeachDistill,
+  proceduresAutoteachStart,
+  proceduresAutoteachAttach,
+  proceduresAutoteachRecordTrace,
+  proceduresAutoteachDistill,
+  proceduresAutoteachRecordRun,
+  proceduresAutoteachStatus,
+  proceduresAutoteachFinalize,
+  proceduresAutoteachList,
+  proceduresAutoteachResume,
 ] as const;
 
 export const TOOL_DEF_MAP: Record<string, ToolDef> = Object.freeze(
