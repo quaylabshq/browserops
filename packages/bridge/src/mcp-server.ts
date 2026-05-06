@@ -858,7 +858,17 @@ export class McpBridgeServer {
       if (typeof parsedResult["format"] === "string") props["screenshot_format"] = parsedResult["format"];
     }
 
-    captureEvent(t, "tool_called", props, this.commonProps);
+    if (toolName === "browser_navigate" && tab?.url && typeof input["url"] === "string") {
+      try {
+        const target = new URL(input["url"] as string);
+        const current = new URL(tab.url);
+        props["is_external_url"] = target.hostname !== current.hostname;
+      } catch {
+        /* not URLs — skip */
+      }
+    }
+
+    captureEvent(t, `mcp.${toolName}`, props, this.commonProps);
   }
 
   /**

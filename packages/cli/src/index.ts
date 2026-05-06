@@ -156,17 +156,60 @@ async function main(): Promise<void> {
 
   const startMs = Date.now();
   await initCliTelemetry(CLI_VERSION).catch(() => null);
-  const commandLabel = isSubcommand ? rawFirst : "<launcher>";
   let exitCode = 0;
-  const recordCli = (): void => {
-    getCliTelemetry()?.capture("cli_command_invoked", {
-      command: commandLabel,
+  /**
+   * Map argv[2] (raw subcommand) → cli.* event name. Subcommands that
+   * have richer events emitted from inside their handlers (init,
+   * upgrade, feature enable/disable, identify, config set/unset) are
+   * NOT in this map — recordSubcommand skips them so we don't
+   * double-emit.
+   */
+  const SUBCOMMAND_EVENT_MAP: Record<string, string> = {
+    start: "cli.start_invoked",
+    stop: "cli.stop_invoked",
+    restart: "cli.restart_invoked",
+    status: "cli.status_checked",
+    doctor: "cli.doctor_ran",
+    logs: "cli.logs_tailed",
+    sync: "cli.sync_ran",
+    "install-rules": "cli.install_rules_ran",
+    "install-skill": "cli.install_skill_ran",
+  };
+  const HANDLER_EMITTED = new Set([
+    "init",
+    "upgrade",
+    "feature",
+    "config",
+    "identify",
+  ]);
+
+  const recordSubcommand = (): void => {
+    const t = getCliTelemetry();
+    if (!t) return;
+    const props = { exit_code: exitCode, duration_ms: Date.now() - startMs };
+    if (isSubcommand && SUBCOMMAND_EVENT_MAP[rawFirst!]) {
+      t.capture(SUBCOMMAND_EVENT_MAP[rawFirst!]!, props);
+    } else if (isSubcommand && HANDLER_EMITTED.has(rawFirst!)) {
+      // The handler emits a richer event itself; nothing to do here.
+    } else if (!isSubcommand) {
+      // Launcher / help / unknown — handled outside this helper.
+    }
+  };
+  const flushTelemetry = async (): Promise<void> => {
+    try { await getCliTelemetry()?.flush(1500); } catch { /* swallow */ }
+  };
+  const recordLauncher = (launcherId: string): void => {
+    getCliTelemetry()?.capture("cli.launcher_invoked", {
+      launcher_id: launcherId,
       exit_code: exitCode,
       duration_ms: Date.now() - startMs,
     });
   };
-  const flushTelemetry = async (): Promise<void> => {
-    try { await getCliTelemetry()?.flush(1500); } catch { /* swallow */ }
+  const recordHelp = (): void => {
+    getCliTelemetry()?.capture("cli.help_shown", {
+      exit_code: exitCode,
+      duration_ms: Date.now() - startMs,
+    });
   };
 
   // --claude/--cursor/--codex force-route, regardless of whether a positional
@@ -174,19 +217,19 @@ async function main(): Promise<void> {
   if (!isSubcommand) {
     if (typeof opts["claude"] === "string") {
       await runClaudeLauncher(opts["claude"] as string);
-      recordCli();
+      recordLauncher("claude");
       await flushTelemetry();
       return;
     }
     if (typeof opts["cursor"] === "string") {
       await runCursorLauncher(opts["cursor"] as string);
-      recordCli();
+      recordLauncher("cursor");
       await flushTelemetry();
       return;
     }
     if (typeof opts["codex"] === "string") {
       await runCodexLauncher(opts["codex"] as string);
-      recordCli();
+      recordLauncher("codex");
       await flushTelemetry();
       return;
     }
@@ -194,7 +237,7 @@ async function main(): Promise<void> {
 
   if (isSubcommand) {
     await cli.runMatchedCommand();
-    recordCli();
+    recordSubcommand();
     await flushTelemetry();
     return;
   }
@@ -214,14 +257,14 @@ async function main(): Promise<void> {
       );
     }
     await dispatchLauncher(id, task);
-    recordCli();
+    recordLauncher(id);
     await flushTelemetry();
     return;
   }
 
   // Bare invocation: show help.
   cli.outputHelp();
-  recordCli();
+  recordHelp();
   await flushTelemetry();
 }
 

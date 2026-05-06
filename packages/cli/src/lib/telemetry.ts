@@ -31,11 +31,61 @@ const COMMON_PROPS = new Set([
 ]);
 
 const ALLOWED: Record<string, ReadonlySet<string>> = {
-  cli_command_invoked: new Set(["command", "exit_code", "duration_ms"]),
-  feature_changed: new Set(["feature_name", "enabled"]),
-  init_completed: new Set(["clients_installed", "features_enabled", "interactive"]),
-  upgrade_completed: new Set(["from_version", "to_version", "ok"]),
-  telemetry_changed: new Set(["enabled"]),
+  "cli.init_completed": new Set([
+    "clients_installed",
+    "features_enabled",
+    "interactive",
+    "email_provided",
+    "exit_code",
+    "duration_ms",
+  ]),
+  "cli.start_invoked": new Set(["exit_code", "duration_ms"]),
+  "cli.stop_invoked": new Set(["exit_code", "duration_ms"]),
+  "cli.restart_invoked": new Set(["exit_code", "duration_ms"]),
+  "cli.status_checked": new Set(["daemon_running", "exit_code", "duration_ms"]),
+  "cli.doctor_ran": new Set([
+    "checks_passed",
+    "checks_failed",
+    "exit_code",
+    "duration_ms",
+  ]),
+  "cli.logs_tailed": new Set(["follow", "lines", "exit_code", "duration_ms"]),
+  "cli.feature_listed": new Set(["enabled_count", "exit_code", "duration_ms"]),
+  "cli.feature_enabled": new Set(["feature_name", "exit_code", "duration_ms"]),
+  "cli.feature_disabled": new Set(["feature_name", "exit_code", "duration_ms"]),
+  "cli.config_get": new Set(["key", "exit_code", "duration_ms"]),
+  "cli.config_set": new Set([
+    "key",
+    "coerced_value",
+    "exit_code",
+    "duration_ms",
+  ]),
+  "cli.config_unset": new Set(["key", "exit_code", "duration_ms"]),
+  "cli.upgrade_completed": new Set([
+    "from_version",
+    "install_method",
+    "exit_code",
+    "duration_ms",
+  ]),
+  "cli.upgrade_failed": new Set([
+    "from_version",
+    "install_method",
+    "stage",
+    "exit_code",
+    "duration_ms",
+  ]),
+  "cli.sync_ran": new Set(["targets", "force", "exit_code", "duration_ms"]),
+  "cli.install_rules_ran": new Set(["clients", "exit_code", "duration_ms"]),
+  "cli.install_skill_ran": new Set(["scope", "exit_code", "duration_ms"]),
+  "cli.identify_set": new Set(["via", "exit_code", "duration_ms"]),
+  "cli.identify_cleared": new Set(["exit_code", "duration_ms"]),
+  "cli.launcher_invoked": new Set([
+    "launcher_id",
+    "exit_code",
+    "duration_ms",
+  ]),
+  "cli.help_shown": new Set(["exit_code", "duration_ms"]),
+  "cli.unknown_command": new Set(["exit_code", "duration_ms"]),
 };
 
 export function installIdFilePath(): string {
