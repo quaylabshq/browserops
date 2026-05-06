@@ -4,6 +4,8 @@ import { distill } from "./distiller.js";
 import { normalize } from "./distiller-ir.js";
 import { collapseRetries } from "./stage-collapse.js";
 import { removeDeadReads } from "./stage-dead-reads.js";
+import { liftBinds } from "./stage-binds.js";
+import { tuneWaits } from "./stage-waits.js";
 
 function rec(
   i: number,
@@ -141,6 +143,111 @@ describe("removeDeadReads", () => {
     ]);
     const cleaned = removeDeadReads(ir);
     expect(cleaned).toHaveLength(2);
+  });
+});
+
+describe("liftBinds", () => {
+  it("lifts a typed email value into a procedure input named 'to' when label hints recipient", () => {
+    const ir = normalize([
+      rec(1, "browser_type", { value: "test@example.com", label: "To" }),
+    ]);
+    const lifted = liftBinds(ir);
+    expect(lifted.inputs["to"]).toBeDefined();
+    expect(lifted.inputs["to"]?.required).toBe(true);
+    expect(lifted.steps[0]?.params["value"]).toBe("{{input.to}}");
+  });
+
+  it("marks a typed value destructive when followed by a Send button click", () => {
+    const ir = normalize([
+      rec(1, "browser_type", { value: "Hi there", label: "message" }),
+      rec(2, "browser_click_by_text", { text: "Send" }),
+    ]);
+    const lifted = liftBinds(ir);
+    const inputName = Object.keys(lifted.inputs)[0]!;
+    expect(lifted.inputs[inputName]?.destructive).toBe(true);
+  });
+
+  it("does not lift a button label (browser_click_by_text text stays a literal)", () => {
+    const ir = normalize([rec(1, "browser_click_by_text", { text: "Submit" })]);
+    const lifted = liftBinds(ir);
+    expect(Object.keys(lifted.inputs)).toHaveLength(0);
+    expect(lifted.steps[0]?.params["text"]).toBe("Submit");
+  });
+
+  it("lifts navigate URLs only when the path is non-trivial", () => {
+    const ir = normalize([
+      rec(1, "browser_navigate", { url: "https://example.com/" }),
+      rec(2, "browser_navigate", { url: "https://example.com/search?q=foo" }),
+    ]);
+    const lifted = liftBinds(ir);
+    expect(lifted.steps[0]?.params["url"]).toBe("https://example.com/");
+    expect(lifted.steps[1]?.params["url"]).toMatch(/^{{input\./);
+    expect(Object.keys(lifted.inputs)).toEqual(["start_url"]);
+  });
+});
+
+describe("tuneWaits", () => {
+  it("sets wait_for_ms to observed × 1.5 with a 1000ms floor", () => {
+    const ir = normalize([
+      rec(1, "browser_click", { ref: 1 }, true, {
+        dom: { added: 5, removed: 0, attr_changes: 0, text_changes: 0 },
+        url: { changed: false },
+        focus: { changed: false },
+        network: { requests_started: 0, requests_completed: 0, in_flight_at_end: 0 },
+        console_errors: 0,
+        window_ms: 300,
+      }),
+    ]);
+    ir[0]!.duration_ms = 800;
+    const tuned = tuneWaits(ir);
+    expect(tuned[0]?.wait_for_ms).toBe(1200);
+  });
+
+  it("respects the 1000ms floor for fast steps", () => {
+    const ir = normalize([
+      rec(1, "browser_click", { ref: 1 }, true, {
+        dom: { added: 1, removed: 0, attr_changes: 0, text_changes: 0 },
+        url: { changed: false },
+        focus: { changed: false },
+        network: { requests_started: 0, requests_completed: 0, in_flight_at_end: 0 },
+        console_errors: 0,
+        window_ms: 50,
+      }),
+    ]);
+    ir[0]!.duration_ms = 50;
+    const tuned = tuneWaits(ir);
+    expect(tuned[0]?.wait_for_ms).toBe(1000);
+  });
+
+  it("does not set wait_for_ms when the page_effect has no observable effect", () => {
+    const ir = normalize([
+      rec(1, "browser_click", { ref: 1 }, true, {
+        dom: { added: 0, removed: 0, attr_changes: 0, text_changes: 0 },
+        url: { changed: false },
+        focus: { changed: false },
+        network: { requests_started: 0, requests_completed: 0, in_flight_at_end: 0 },
+        console_errors: 0,
+        window_ms: 100,
+      }),
+    ]);
+    const tuned = tuneWaits(ir);
+    expect(tuned[0]?.wait_for_ms).toBeUndefined();
+  });
+
+  it("caps wait_for_ms at 30000", () => {
+    const ir = normalize([
+      rec(1, "browser_click", { ref: 1 }, true, {
+        dom: { added: 5, removed: 0, attr_changes: 0, text_changes: 0 },
+        url: { changed: false },
+        focus: { changed: false },
+        network: { requests_started: 0, requests_completed: 0, in_flight_at_end: 0 },
+        console_errors: 0,
+        window_ms: 100,
+      }),
+    ]);
+    ir[0]!.duration_ms = 60_000;
+    const tuned = tuneWaits(ir);
+    expect(tuned[0]?.wait_for_ms).toBe(30_000);
   });
 });
 
