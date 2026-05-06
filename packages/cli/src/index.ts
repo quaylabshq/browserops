@@ -31,7 +31,6 @@ import { runInstallSkill } from "./commands/install-skill.js";
 import { runConfig } from "./commands/config.js";
 import { runFeature } from "./commands/feature.js";
 import { runSyncCommand } from "./commands/sync.js";
-import { runTelemetry } from "./commands/telemetry.js";
 import { runClaudeLauncher } from "./launchers/claude.js";
 import { runCursorLauncher } from "./launchers/cursor.js";
 import { runCodexLauncher } from "./launchers/codex.js";
@@ -54,7 +53,6 @@ const KNOWN_SUBCOMMANDS = new Set([
   "config",
   "feature",
   "sync",
-  "telemetry",
 ]);
 
 const cli = cac("browserops");
@@ -137,13 +135,6 @@ cli
     runSyncCommand(target, opts),
   );
 
-cli
-  .command(
-    "telemetry [action]",
-    "Inspect or change anonymous usage telemetry (action: status, on, off)",
-  )
-  .action((action: string | undefined) => runTelemetry(action));
-
 // Top-level launcher flags. cac surfaces these as --claude, --cursor, --codex
 // on the root command (i.e. `browserops --claude "task"`).
 cli
@@ -164,15 +155,7 @@ async function main(): Promise<void> {
   const isSubcommand = typeof rawFirst === "string" && KNOWN_SUBCOMMANDS.has(rawFirst);
 
   const startMs = Date.now();
-  const initRes = await initCliTelemetry(CLI_VERSION).catch(() => ({
-    enabled: false,
-    installCreated: false,
-  }));
-  if (initRes.installCreated && initRes.enabled) {
-    process.stderr.write(
-      `${dim("·")} browserops sends anonymous usage telemetry. Disable with: ${"browserops telemetry off"}\n`,
-    );
-  }
+  await initCliTelemetry(CLI_VERSION).catch(() => null);
   const commandLabel = isSubcommand ? rawFirst : "<launcher>";
   let exitCode = 0;
   const recordCli = (): void => {
