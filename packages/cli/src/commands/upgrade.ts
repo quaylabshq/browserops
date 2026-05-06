@@ -1,23 +1,51 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { spawn, execFile } from "node:child_process";
+import { CLI_VERSION } from "../lib/version.js";
+import { getCliTelemetry } from "../lib/telemetry.js";
 import { c, dim, info, ok, warn } from "../lib/ui.js";
 import { runRestart } from "./restart.js";
 import { runSync } from "./sync.js";
 
 export async function runUpgrade(opts: { restart?: boolean }): Promise<void> {
+  const fromVersion = CLI_VERSION;
   const installMethod = await detectInstallMethod();
+  let shellOk = true;
 
   if (installMethod === "npm") {
     info("upgrading via npm…");
-    await runShell("npm", ["install", "-g", "browserops@latest"]);
+    try {
+      await runShell("npm", ["install", "-g", "browserops@latest"]);
+    } catch (err) {
+      shellOk = false;
+      throw err;
+    } finally {
+      getCliTelemetry()?.capture("upgrade_completed", {
+        from_version: fromVersion,
+        ok: shellOk,
+      });
+    }
   } else if (installMethod === "pnpm") {
     info("upgrading via pnpm…");
-    await runShell("pnpm", ["add", "-g", "browserops@latest"]);
+    try {
+      await runShell("pnpm", ["add", "-g", "browserops@latest"]);
+    } catch (err) {
+      shellOk = false;
+      throw err;
+    } finally {
+      getCliTelemetry()?.capture("upgrade_completed", {
+        from_version: fromVersion,
+        ok: shellOk,
+      });
+    }
   } else {
     warn("could not detect npm/pnpm global install — please upgrade manually");
     warn("  npm install -g browserops@latest");
     warn("  pnpm add -g browserops@latest");
+    getCliTelemetry()?.capture("upgrade_completed", {
+      from_version: fromVersion,
+      ok: false,
+    });
   }
 
   // Refresh skills, extension files, and any installed MCP-client config in one

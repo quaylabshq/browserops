@@ -5,6 +5,7 @@ import {
   type FeatureState,
 } from "../lib/config.js";
 import { isDaemonAlive } from "../lib/daemon.js";
+import { getCliTelemetry } from "../lib/telemetry.js";
 import { c, dim, err, header, info, ok, warn } from "../lib/ui.js";
 
 const VALID_ACTIONS = ["list", "enable", "disable"] as const;
@@ -64,6 +65,7 @@ async function runEnable(name: FeatureName): Promise<void> {
     info(`${name}: already enabled`);
   } else {
     ok(`${name}: enabled`);
+    getCliTelemetry()?.capture("feature_changed", { feature_name: name, enabled: true });
   }
   await reloadHint();
 }
@@ -74,6 +76,7 @@ async function runDisable(name: FeatureName): Promise<void> {
     info(`${name}: already disabled`);
   } else {
     ok(`${name}: disabled`);
+    getCliTelemetry()?.capture("feature_changed", { feature_name: name, enabled: false });
   }
   await reloadHint();
 }
