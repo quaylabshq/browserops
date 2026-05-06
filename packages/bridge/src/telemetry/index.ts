@@ -37,7 +37,7 @@ export async function initTelemetry(
   opts: TelemetryInitOptions = {},
 ): Promise<TelemetryInitResult> {
   try {
-    const enabled = await isTelemetryEnabled();
+    const enabled = isTelemetryEnabled();
     const { id: distinctId, created: installCreated } = await loadOrCreateInstallId();
 
     const apiKey =
@@ -94,7 +94,7 @@ export function resetTelemetryForTest(): void {
 }
 
 export { PostHogHttpClient } from "./posthog-http.js";
-export { isTelemetryEnabled, TELEMETRY_ENV, DO_NOT_TRACK_ENV } from "./opt-out.js";
+export { isTelemetryEnabled, DO_NOT_TRACK_ENV } from "./opt-out.js";
 export {
   loadOrCreateInstallId,
   installIdPath,

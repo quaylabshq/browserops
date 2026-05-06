@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -6,7 +6,6 @@ import {
   CliTelemetry,
   isCliTelemetryEnabled,
   loadOrCreateCliInstallId,
-  setTelemetryEnabledInConfig,
 } from "./telemetry.js";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -14,57 +13,40 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 describe("CLI telemetry", () => {
   let dir: string;
   let savedHome: string | undefined;
-  let savedEnv: Record<string, string | undefined>;
+  let savedDnt: string | undefined;
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "bops-cli-tel-"));
     savedHome = process.env["HOME"];
     process.env["HOME"] = dir;
-    savedEnv = {
-      BROWSEROPS_TELEMETRY: process.env["BROWSEROPS_TELEMETRY"],
-      DO_NOT_TRACK: process.env["DO_NOT_TRACK"],
-    };
-    delete process.env["BROWSEROPS_TELEMETRY"];
+    savedDnt = process.env["DO_NOT_TRACK"];
     delete process.env["DO_NOT_TRACK"];
   });
   afterEach(() => {
     if (savedHome === undefined) delete process.env["HOME"];
     else process.env["HOME"] = savedHome;
-    for (const [k, v] of Object.entries(savedEnv)) {
-      if (v === undefined) delete process.env[k];
-      else process.env[k] = v;
-    }
+    if (savedDnt === undefined) delete process.env["DO_NOT_TRACK"];
+    else process.env["DO_NOT_TRACK"] = savedDnt;
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it("isCliTelemetryEnabled defaults to true", async () => {
-    expect(await isCliTelemetryEnabled()).toBe(true);
+  it("isCliTelemetryEnabled defaults to true", () => {
+    expect(isCliTelemetryEnabled()).toBe(true);
   });
 
-  it("DO_NOT_TRACK=1 disables", async () => {
+  it("DO_NOT_TRACK=1 disables", () => {
     process.env["DO_NOT_TRACK"] = "1";
-    expect(await isCliTelemetryEnabled()).toBe(false);
+    expect(isCliTelemetryEnabled()).toBe(false);
   });
 
-  it("BROWSEROPS_TELEMETRY=0 disables", async () => {
-    process.env["BROWSEROPS_TELEMETRY"] = "0";
-    expect(await isCliTelemetryEnabled()).toBe(false);
+  it("DO_NOT_TRACK=true disables", () => {
+    process.env["DO_NOT_TRACK"] = "true";
+    expect(isCliTelemetryEnabled()).toBe(false);
   });
 
-  it("config.json telemetry:false disables", async () => {
-    await setTelemetryEnabledInConfig(false);
-    expect(await isCliTelemetryEnabled()).toBe(false);
-  });
-
-  it("setTelemetryEnabledInConfig preserves other config keys", async () => {
-    const cfgPath = join(dir, ".browserops", "config.json");
-    require("node:fs").mkdirSync(join(dir, ".browserops"), { recursive: true });
-    writeFileSync(cfgPath, JSON.stringify({ default_launcher: "cursor", features: { procedures: true } }), "utf8");
-    await setTelemetryEnabledInConfig(false);
-    const updated = JSON.parse(readFileSync(cfgPath, "utf8")) as Record<string, unknown>;
-    expect(updated["default_launcher"]).toBe("cursor");
-    expect(updated["features"]).toEqual({ procedures: true });
-    expect(updated["telemetry"]).toBe(false);
+  it("DO_NOT_TRACK=0 keeps telemetry on", () => {
+    process.env["DO_NOT_TRACK"] = "0";
+    expect(isCliTelemetryEnabled()).toBe(true);
   });
 
   it("loadOrCreateCliInstallId persists across calls", async () => {
@@ -143,7 +125,7 @@ describe("CLI telemetry", () => {
     vi.unstubAllGlobals();
   });
 
-  it("install-id file is created with restricted directory", async () => {
+  it("install-id file is created", async () => {
     await loadOrCreateCliInstallId();
     expect(existsSync(join(dir, ".browserops", "install-id"))).toBe(true);
   });
