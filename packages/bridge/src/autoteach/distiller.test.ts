@@ -1,11 +1,41 @@
 import { describe, expect, it } from "vitest";
-import type { AutoTeachTraceRecord } from "@browserops/shared";
+import type { AutoTeachTraceRecord, PageEffect } from "@browserops/shared";
 import { distill } from "./distiller.js";
 import { normalize } from "./distiller-ir.js";
 import { collapseRetries } from "./stage-collapse.js";
 import { removeDeadReads } from "./stage-dead-reads.js";
 import { liftBinds } from "./stage-binds.js";
 import { tuneWaits } from "./stage-waits.js";
+import { splitLeaves } from "./stage-leaves.js";
+
+function pe(overrides: Partial<{
+  added: number;
+  url_changed: boolean;
+  url_after: string;
+  focus_changed: boolean;
+  network_started: number;
+}>): PageEffect {
+  return {
+    dom: {
+      added: overrides.added ?? 0,
+      removed: 0,
+      attr_changes: 0,
+      text_changes: 0,
+    },
+    url: {
+      changed: overrides.url_changed ?? false,
+      ...(overrides.url_after !== undefined ? { after: overrides.url_after } : {}),
+    },
+    focus: { changed: overrides.focus_changed ?? false },
+    network: {
+      requests_started: overrides.network_started ?? 0,
+      requests_completed: overrides.network_started ?? 0,
+      in_flight_at_end: 0,
+    },
+    console_errors: 0,
+    window_ms: 300,
+  };
+}
 
 function rec(
   i: number,
@@ -248,6 +278,87 @@ describe("tuneWaits", () => {
     ir[0]!.duration_ms = 60_000;
     const tuned = tuneWaits(ir);
     expect(tuned[0]?.wait_for_ms).toBe(30_000);
+  });
+});
+
+describe("splitLeaves", () => {
+  it("returns one leaf when there are no boundary signals", () => {
+    const ir = normalize([
+      rec(1, "browser_click", { ref: 1 }),
+      rec(2, "browser_click", { ref: 2 }),
+    ]);
+    expect(splitLeaves(ir)).toHaveLength(1);
+  });
+
+  it("splits on URL change", () => {
+    const ir = normalize([
+      rec(1, "browser_navigate", { url: "https://example.com" }, true, pe({ url_changed: true, url_after: "https://example.com" })),
+      rec(2, "browser_click", { ref: 1 }),
+      rec(3, "browser_navigate", { url: "https://example.com/page" }, true, pe({ url_changed: true, url_after: "https://example.com/page" })),
+    ]);
+    const leaves = splitLeaves(ir);
+    expect(leaves).toHaveLength(2);
+    expect(leaves[1]?.reason).toBe("url_change");
+  });
+
+  it("splits on focus shift accompanied by DOM additions (modal open)", () => {
+    const ir = normalize([
+      rec(1, "browser_click", { ref: 1 }),
+      rec(2, "browser_click", { ref: 2 }, true, pe({ added: 30, focus_changed: true })),
+    ]);
+    const leaves = splitLeaves(ir);
+    expect(leaves).toHaveLength(2);
+    expect(leaves[1]?.reason).toBe("focus_shift");
+  });
+
+  it("splits on a big DOM burst as modal_open (no navigation)", () => {
+    const ir = normalize([
+      rec(1, "browser_click", { ref: 1 }),
+      rec(2, "browser_click", { ref: 2 }, true, pe({ added: 250 })),
+    ]);
+    const leaves = splitLeaves(ir);
+    expect(leaves).toHaveLength(2);
+    expect(leaves[1]?.reason).toBe("modal_open");
+  });
+
+  it("splits on a network burst", () => {
+    const ir = normalize([
+      rec(1, "browser_click", { ref: 1 }),
+      rec(2, "browser_click", { ref: 2 }, true, pe({ network_started: 6 })),
+    ]);
+    const leaves = splitLeaves(ir);
+    expect(leaves).toHaveLength(2);
+    expect(leaves[1]?.reason).toBe("network_burst");
+  });
+});
+
+describe("distill — multi-leaf composite", () => {
+  it("emits a composite + 2 leaves on a URL boundary", () => {
+    const records: AutoTeachTraceRecord[] = [
+      rec(1, "browser_navigate", { url: "https://example.com" }, true, pe({ url_changed: true, url_after: "https://example.com" })),
+      rec(2, "browser_click", { ref: 1 }),
+      rec(3, "browser_navigate", { url: "https://example.com/done" }, true, pe({ url_changed: true, url_after: "https://example.com/done" })),
+    ];
+    const result = distill(records, { goal: "two-step flow" });
+    expect(result.composite_name).not.toBeNull();
+    expect(result.leaves).toHaveLength(2);
+    expect(result.yaml).toContain("kind: composite");
+    expect(result.yaml).toContain("uses:");
+    expect(result.yaml.match(/^---$/m)).not.toBeNull();
+  });
+
+  it("scopes inputs to the leaf that uses them", () => {
+    const records: AutoTeachTraceRecord[] = [
+      rec(1, "browser_navigate", { url: "https://example.com" }, true, pe({ url_changed: true, url_after: "https://example.com" })),
+      rec(2, "browser_type", { value: "alice@example.com", label: "to" }),
+      rec(3, "browser_navigate", { url: "https://example.com/sent" }, true, pe({ url_changed: true, url_after: "https://example.com/sent" })),
+    ];
+    const result = distill(records, { goal: "compose then check" });
+    // The composite collects the input, but each leaf only references
+    // inputs its steps actually use.
+    expect(result.yaml).toContain("kind: composite");
+    expect(result.yaml).toContain("inputs:");
+    expect(result.yaml).toContain("to:");
   });
 });
 

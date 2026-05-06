@@ -17,15 +17,17 @@ import type {
   ActionStepDef,
   AutoTeachLeafSummary,
   AutoTeachTraceRecord,
+  InputFieldDef,
   ProcedureDef,
   ProcedureFragility,
   SideEffectClass,
 } from "@browserops/shared";
-import { normalize, type IRStep } from "./distiller-ir.js";
+import { normalize, type IRStep, type IRLeaf } from "./distiller-ir.js";
 import { collapseRetries } from "./stage-collapse.js";
 import { removeDeadReads } from "./stage-dead-reads.js";
 import { liftBinds } from "./stage-binds.js";
 import { tuneWaits } from "./stage-waits.js";
+import { splitLeaves } from "./stage-leaves.js";
 
 export interface DistillOptions {
   goal: string;
@@ -51,61 +53,269 @@ export function distill(
   opts: DistillOptions,
 ): DistillResult {
   // Pipeline: normalize → collapse retries → drop dead reads →
-  //           lift binds → tune waits → emit.
-  // Phase 2c will add leaf splitting + selector tiering.
+  //           lift binds → tune waits → split into leaves → emit.
   const ir0 = normalize(records);
   const ir1 = collapseRetries(ir0);
   const ir2 = removeDeadReads(ir1);
   const lifted = liftBinds(ir2);
   const ir3 = tuneWaits(lifted.steps);
+  const leaves = splitLeaves(ir3);
 
   const baseName = deriveName(opts.goal, ir3);
-  const steps = emitSteps(ir3);
-
-  if (steps.length === 0) {
-    steps.push({
-      id: "placeholder",
-      action: "browser_navigate",
-      with: { tab_id: "{{tab_id}}", url: "https://example.com" },
-    });
-  }
-
-  const sideEffects = classifySideEffects(ir3);
-  const fragility = scoreFragility(ir3);
-
-  const draft: ProcedureDef = {
-    schema_version: 1,
-    name: baseName,
-    description: opts.goal.slice(0, 200),
-    kind: "leaf",
-    domain: deriveDomain(ir3),
-    ...(Object.keys(lifted.inputs).length > 0 ? { inputs: lifted.inputs } : {}),
-    steps,
-    fragility,
-    ...(sideEffects.length > 0 ? { side_effects: sideEffects } : {}),
-  };
-
-  const yaml = headerComment(opts.goal, ir0.length, ir3.length) + YAML.stringify(draft, { lineWidth: 0 });
-
-  const leafSummary: AutoTeachLeafSummary = {
-    name: baseName,
-    draft_status: "draft",
-    side_effects: sideEffects,
-    fragility,
-  };
+  const domain = deriveDomain(ir3);
+  const description = opts.goal.slice(0, 200);
 
   const validation_errors: string[] = [];
   if (ir3.length === 0) {
     validation_errors.push(
       "no browser_* calls in trace after normalization — distiller emitted a placeholder leaf",
     );
+    return {
+      yaml: headerComment(opts.goal, ir0.length, 0) + YAML.stringify(placeholderLeaf(baseName, description, domain), { lineWidth: 0 }),
+      leaves: [{ name: baseName, draft_status: "draft", side_effects: [], fragility: "low" }],
+      composite_name: null,
+      validation_errors,
+    };
   }
+
+  // Single leaf — emit just the leaf, no composite.
+  if (leaves.length === 1) {
+    const leaf = leaves[0] as IRLeaf;
+    const draft = buildLeafProc({
+      name: baseName,
+      description,
+      domain,
+      leaf,
+      allInputs: lifted.inputs,
+    });
+    return {
+      yaml: headerComment(opts.goal, ir0.length, ir3.length) + YAML.stringify(draft.proc, { lineWidth: 0 }),
+      leaves: [draft.summary],
+      composite_name: null,
+      validation_errors: draft.validation_errors,
+    };
+  }
+
+  // Multi-leaf — emit each leaf, then a composite that uses() them.
+  const leafProcs: Array<{ proc: ProcedureDef; summary: AutoTeachLeafSummary }> = [];
+  const allErrors: string[] = [...validation_errors];
+  leaves.forEach((leaf, idx) => {
+    const leafName = leafNameFor(baseName, leaf, idx);
+    const draft = buildLeafProc({
+      name: leafName,
+      description: leafDescriptionFor(leaf, description, idx, leaves.length),
+      domain,
+      leaf,
+      allInputs: lifted.inputs,
+    });
+    leafProcs.push({ proc: draft.proc, summary: draft.summary });
+    allErrors.push(...draft.validation_errors);
+  });
+
+  const compositeProc = buildCompositeProc({
+    name: baseName,
+    description,
+    domain,
+    leafProcs: leafProcs.map((lp) => lp.proc),
+    allInputs: lifted.inputs,
+  });
+
+  const docs = [
+    ...leafProcs.map((lp) => YAML.stringify(lp.proc, { lineWidth: 0 })),
+    YAML.stringify(compositeProc, { lineWidth: 0 }),
+  ];
+  const yaml =
+    headerComment(opts.goal, ir0.length, ir3.length) +
+    docs.join("---\n");
 
   return {
     yaml,
-    leaves: [leafSummary],
-    composite_name: null,
+    leaves: leafProcs.map((lp) => lp.summary),
+    composite_name: baseName,
+    validation_errors: allErrors,
+  };
+}
+
+interface BuildLeafArgs {
+  name: string;
+  description: string;
+  domain: string | undefined;
+  leaf: IRLeaf;
+  /** Session-wide input plan from liftBinds. We project to inputs this leaf actually references. */
+  allInputs: Record<string, InputFieldDef>;
+}
+
+function buildLeafProc(args: BuildLeafArgs): {
+  proc: ProcedureDef;
+  summary: AutoTeachLeafSummary;
+  validation_errors: string[];
+} {
+  const steps = emitSteps(args.leaf.steps);
+  const sideEffects = classifySideEffects(args.leaf.steps);
+  const fragility = scoreFragility(args.leaf.steps);
+  const usedInputs = projectInputsForSteps(args.leaf.steps, args.allInputs);
+  const proc: ProcedureDef = {
+    schema_version: 1,
+    name: args.name,
+    description: args.description,
+    kind: "leaf",
+    ...(args.domain !== undefined ? { domain: args.domain } : {}),
+    ...(Object.keys(usedInputs).length > 0 ? { inputs: usedInputs } : {}),
+    steps,
+    fragility,
+    ...(sideEffects.length > 0 ? { side_effects: sideEffects } : {}),
+  };
+  const validation_errors: string[] = [];
+  // Each leaf must have at least one expected_effect or success_criteria.
+  const hasEffect = steps.some(
+    (s) => (s as ActionStepDef).expected_effect !== undefined,
+  );
+  if (!hasEffect) {
+    validation_errors.push(
+      `${args.name}: no step declares expected_effect — leaf has no observable post-condition`,
+    );
+  }
+  return {
+    proc,
+    summary: {
+      name: args.name,
+      draft_status: "draft",
+      side_effects: sideEffects,
+      fragility,
+    },
     validation_errors,
+  };
+}
+
+interface BuildCompositeArgs {
+  name: string;
+  description: string;
+  domain: string | undefined;
+  leafProcs: ProcedureDef[];
+  allInputs: Record<string, InputFieldDef>;
+}
+
+function buildCompositeProc(args: BuildCompositeArgs): ProcedureDef {
+  const compositeInputs: Record<string, InputFieldDef> = {};
+  for (const lp of args.leafProcs) {
+    for (const [k, v] of Object.entries(lp.inputs ?? {})) {
+      compositeInputs[k] = v;
+    }
+  }
+  const steps: ActionStepDef[] = args.leafProcs.map((lp, idx) => {
+    const withParams: Record<string, unknown> = { tab_id: "{{tab_id}}" };
+    for (const inputName of Object.keys(lp.inputs ?? {})) {
+      withParams[inputName] = `{{input.${inputName}}}`;
+    }
+    return {
+      id: `step_${String(idx + 1).padStart(2, "0")}_${slugForId(lp.name)}`,
+      action: lp.name,
+      with: withParams,
+    };
+  });
+  const sideEffects = uniqueSideEffects(args.leafProcs);
+  const fragility = worstFragility(args.leafProcs);
+  return {
+    schema_version: 1,
+    name: args.name,
+    description: args.description,
+    kind: "composite",
+    ...(args.domain !== undefined ? { domain: args.domain } : {}),
+    ...(Object.keys(compositeInputs).length > 0 ? { inputs: compositeInputs } : {}),
+    uses: args.leafProcs.map((lp) => lp.name),
+    steps,
+    fragility,
+    ...(sideEffects.length > 0 ? { side_effects: sideEffects } : {}),
+  };
+}
+
+function uniqueSideEffects(procs: ProcedureDef[]): SideEffectClass[] {
+  const set = new Set<SideEffectClass>();
+  for (const p of procs) {
+    for (const se of p.side_effects ?? []) set.add(se);
+  }
+  return [...set];
+}
+
+function worstFragility(procs: ProcedureDef[]): ProcedureFragility {
+  const order: ProcedureFragility[] = ["low", "medium", "high"];
+  let worst = 0;
+  for (const p of procs) {
+    const f = p.fragility ?? "low";
+    const idx = order.indexOf(f);
+    if (idx > worst) worst = idx;
+  }
+  return order[worst] ?? "low";
+}
+
+function projectInputsForSteps(
+  steps: IRStep[],
+  allInputs: Record<string, InputFieldDef>,
+): Record<string, InputFieldDef> {
+  const used = new Set<string>();
+  for (const s of steps) {
+    for (const v of Object.values(s.params)) {
+      if (typeof v !== "string") continue;
+      const m = v.match(/{{input\.([a-z][a-z0-9_]*)}}/);
+      if (m && m[1]) used.add(m[1]);
+    }
+  }
+  const out: Record<string, InputFieldDef> = {};
+  for (const k of used) {
+    const def = allInputs[k];
+    if (def !== undefined) out[k] = def;
+  }
+  return out;
+}
+
+function leafNameFor(baseName: string, leaf: IRLeaf, idx: number): string {
+  const reasonSlug = leaf.reason === "first" ? "open" : leaf.reason;
+  // Use first step's verb when more discriminating than the reason alone.
+  const firstStep = leaf.steps[0];
+  const verbHint =
+    firstStep !== undefined ? slugVerb(firstStep.method).slice(0, 16) : null;
+  const slug =
+    verbHint !== null
+      ? `${reasonSlug}_${verbHint}_${idx + 1}`
+      : `${reasonSlug}_${idx + 1}`;
+  const sep = baseName.includes(".") ? "__" : "_";
+  return `${baseName}${sep}${slug}`.slice(0, 80);
+}
+
+function leafDescriptionFor(
+  leaf: IRLeaf,
+  fallback: string,
+  idx: number,
+  total: number,
+): string {
+  const firstStep = leaf.steps[0];
+  const hint =
+    firstStep?.method === "browser_navigate" &&
+    typeof firstStep.params["url"] === "string"
+      ? ` (visits ${firstStep.params["url"]})`
+      : "";
+  return `${fallback} — leaf ${idx + 1}/${total}${hint}`.slice(0, 200);
+}
+
+function placeholderLeaf(
+  baseName: string,
+  description: string,
+  domain: string | undefined,
+): ProcedureDef {
+  return {
+    schema_version: 1,
+    name: baseName,
+    description,
+    kind: "leaf",
+    ...(domain !== undefined ? { domain } : {}),
+    steps: [
+      {
+        id: "placeholder",
+        action: "browser_navigate",
+        with: { tab_id: "{{tab_id}}", url: "https://example.com" },
+      },
+    ],
+    fragility: "low",
   };
 }
 
@@ -122,22 +332,13 @@ function emitSteps(ir: IRStep[]): ActionStepDef[] {
     if (s.page_effect && hasObservableEffect(s.page_effect)) {
       step.expected_effect = { dom: { any: true } };
     }
-    if (s.wait_for_ms !== undefined) {
-      // We don't have a selector to wait for, so use the URL after-state
-      // when the step navigated. Otherwise leave wait_for absent — the
-      // expected_effect is the post-condition, and the agent / runner can
-      // re-fetch a refined wait when replaying.
-      const after = s.page_effect?.url?.after;
-      if (typeof after === "string" && s.page_effect?.url?.changed === true) {
-        // Navigations don't normally need a wait_for selector — the
-        // browser_navigate tool already waits for load.
-      }
-      // Future: derive wait_for.selector from elements observed in the
-      // page_effect once the extension surfaces that metadata.
-    }
     steps.push(step);
   }
   return steps;
+}
+
+function slugForId(s: string): string {
+  return s.replace(/[^a-z0-9]+/g, "_").slice(0, 30);
 }
 
 // ---------------------------------------------------------------------------
