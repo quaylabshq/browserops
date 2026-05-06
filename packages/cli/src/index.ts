@@ -30,12 +30,14 @@ import { runInstallRules } from "./commands/install-rules.js";
 import { runInstallSkill } from "./commands/install-skill.js";
 import { runConfig } from "./commands/config.js";
 import { runFeature } from "./commands/feature.js";
+import { runIdentify } from "./commands/identify.js";
 import { runSyncCommand } from "./commands/sync.js";
 import { runClaudeLauncher } from "./launchers/claude.js";
 import { runCursorLauncher } from "./launchers/cursor.js";
 import { runCodexLauncher } from "./launchers/codex.js";
 import { dispatchLauncher } from "./launchers/dispatch.js";
 import { getDefaultLauncher } from "./lib/config.js";
+import { initCliTelemetry, getCliTelemetry } from "./lib/telemetry.js";
 import { err, info, dim } from "./lib/ui.js";
 
 const KNOWN_SUBCOMMANDS = new Set([
@@ -52,6 +54,7 @@ const KNOWN_SUBCOMMANDS = new Set([
   "config",
   "feature",
   "sync",
+  "identify",
 ]);
 
 const cli = cac("browserops");
@@ -134,6 +137,15 @@ cli
     runSyncCommand(target, opts),
   );
 
+cli
+  .command(
+    "identify",
+    "Set or clear the email associated with this install for product updates",
+  )
+  .option("--email <addr>", "Email to associate with this install")
+  .option("--clear", "Remove the previously set email")
+  .action((opts: { email?: string; clear?: boolean }) => runIdentify(opts));
+
 // Top-level launcher flags. cac surfaces these as --claude, --cursor, --codex
 // on the root command (i.e. `browserops --claude "task"`).
 cli
@@ -153,25 +165,91 @@ async function main(): Promise<void> {
   const rawFirst = process.argv[2];
   const isSubcommand = typeof rawFirst === "string" && KNOWN_SUBCOMMANDS.has(rawFirst);
 
+  const startMs = Date.now();
+  await initCliTelemetry(CLI_VERSION).catch(() => null);
+  let exitCode = 0;
+  /**
+   * Map argv[2] (raw subcommand) → cli.* event name. Subcommands that
+   * have richer events emitted from inside their handlers (init,
+   * upgrade, feature enable/disable, identify, config set/unset) are
+   * NOT in this map — recordSubcommand skips them so we don't
+   * double-emit.
+   */
+  const SUBCOMMAND_EVENT_MAP: Record<string, string> = {
+    start: "cli.start_invoked",
+    stop: "cli.stop_invoked",
+    restart: "cli.restart_invoked",
+    status: "cli.status_checked",
+    doctor: "cli.doctor_ran",
+    logs: "cli.logs_tailed",
+    sync: "cli.sync_ran",
+    "install-rules": "cli.install_rules_ran",
+    "install-skill": "cli.install_skill_ran",
+  };
+  const HANDLER_EMITTED = new Set([
+    "init",
+    "upgrade",
+    "feature",
+    "config",
+    "identify",
+  ]);
+
+  const recordSubcommand = (): void => {
+    const t = getCliTelemetry();
+    if (!t) return;
+    const props = { exit_code: exitCode, duration_ms: Date.now() - startMs };
+    if (isSubcommand && SUBCOMMAND_EVENT_MAP[rawFirst!]) {
+      t.capture(SUBCOMMAND_EVENT_MAP[rawFirst!]!, props);
+    } else if (isSubcommand && HANDLER_EMITTED.has(rawFirst!)) {
+      // The handler emits a richer event itself; nothing to do here.
+    } else if (!isSubcommand) {
+      // Launcher / help / unknown — handled outside this helper.
+    }
+  };
+  const flushTelemetry = async (): Promise<void> => {
+    try { await getCliTelemetry()?.flush(1500); } catch { /* swallow */ }
+  };
+  const recordLauncher = (launcherId: string): void => {
+    getCliTelemetry()?.capture("cli.launcher_invoked", {
+      launcher_id: launcherId,
+      exit_code: exitCode,
+      duration_ms: Date.now() - startMs,
+    });
+  };
+  const recordHelp = (): void => {
+    getCliTelemetry()?.capture("cli.help_shown", {
+      exit_code: exitCode,
+      duration_ms: Date.now() - startMs,
+    });
+  };
+
   // --claude/--cursor/--codex force-route, regardless of whether a positional
   // is also present. They take precedence over default-launcher routing.
   if (!isSubcommand) {
     if (typeof opts["claude"] === "string") {
       await runClaudeLauncher(opts["claude"] as string);
+      recordLauncher("claude");
+      await flushTelemetry();
       return;
     }
     if (typeof opts["cursor"] === "string") {
       await runCursorLauncher(opts["cursor"] as string);
+      recordLauncher("cursor");
+      await flushTelemetry();
       return;
     }
     if (typeof opts["codex"] === "string") {
       await runCodexLauncher(opts["codex"] as string);
+      recordLauncher("codex");
+      await flushTelemetry();
       return;
     }
   }
 
   if (isSubcommand) {
     await cli.runMatchedCommand();
+    recordSubcommand();
+    await flushTelemetry();
     return;
   }
 
@@ -190,15 +268,20 @@ async function main(): Promise<void> {
       );
     }
     await dispatchLauncher(id, task);
+    recordLauncher(id);
+    await flushTelemetry();
     return;
   }
 
   // Bare invocation: show help.
   cli.outputHelp();
+  recordHelp();
+  await flushTelemetry();
 }
 
-main().catch((e: unknown) => {
+main().catch(async (e: unknown) => {
   const msg = e instanceof Error ? (e.stack ?? e.message) : String(e);
   err(`browserops: ${msg}`);
+  try { await getCliTelemetry()?.flush(1000); } catch { /* swallow */ }
   process.exit(1);
 });

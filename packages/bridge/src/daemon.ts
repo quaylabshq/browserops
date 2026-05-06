@@ -25,8 +25,15 @@ import { bootDaemonRuntime, type DaemonRuntime } from "./daemon-runtime.js";
 import { McpBridgeServer } from "./mcp-server.js";
 import { RateLimiter } from "./rate-limiter.js";
 import { SocketServerTransport } from "./socket-mcp-transport.js";
+import {
+  buildCommonProps,
+  captureEvent,
+  initTelemetry,
+  type PostHogHttpClient,
+} from "./telemetry/index.js";
 
-const VERSION = "0.0.7";
+const VERSION = "0.0.8";
+const TELEMETRY_DRAIN_MS = 1_500;
 
 interface ActiveSession {
   session: DaemonSession;
@@ -63,6 +70,19 @@ async function main(): Promise<void> {
     await releasePidfile(pidfile);
     process.exit(1);
   });
+
+  const startedAtMs = Date.now();
+  const telemetry: PostHogHttpClient | null = await initTelemetry({ bridgeVersion: VERSION })
+    .then((r) => r.client)
+    .catch(() => null);
+  const common = buildCommonProps({ bridgeVersion: VERSION });
+  let totalSessions = 0;
+
+  captureEvent(telemetry, "root.daemon_started", {
+    approval_mode: process.env[ENV.APPROVAL] === "gate" ? "gate" : "auto",
+    enabled_features: [...runtime.enabledFeatures.current],
+    extension_connected: runtime.wsBridge.isConnected(),
+  }, common);
 
   const active = new Map<string, ActiveSession>();
 
@@ -102,6 +122,11 @@ async function main(): Promise<void> {
         name: s.name,
         color: s.color,
       });
+      totalSessions += 1;
+      captureEvent(telemetry, "root.session_started", {
+        client_name: s.client_info.name || "unknown",
+        client_version: s.client_info.version || "",
+      }, common);
       broadcast("session_started", {
         session_id: s.id,
         name: s.name,
@@ -184,6 +209,10 @@ async function main(): Promise<void> {
             // resets each tab's Chrome group; the subsequent
             // session_ended cleans up the now-empty group.
             runtime.tabs.releaseAll(session.id);
+            captureEvent(telemetry, "root.session_ended", {
+              client_name: session.client_info.name || "unknown",
+              duration_ms: Date.now() - session.created_at_ms,
+            }, common);
             sessions.destroy(session.id);
             void runtime.logger.write({
               dir: "system",
@@ -206,6 +235,11 @@ async function main(): Promise<void> {
   const shutdown = (reason: string): void => {
     void (async () => {
       await runtime.logger.write({ dir: "system", event: "daemon_shutdown", reason });
+      captureEvent(telemetry, "root.daemon_shutdown", {
+        reason,
+        uptime_ms: Date.now() - startedAtMs,
+        total_sessions: totalSessions,
+      }, common);
       // Tear down active sessions first so MCP servers don't try to send
       // responses through a half-closed socket.
       for (const [, entry] of active) {
@@ -214,6 +248,7 @@ async function main(): Promise<void> {
       active.clear();
       try { await socket.stop(); } catch { /* ignore */ }
       try { await runtime.shutdown(); } catch { /* ignore */ }
+      try { await telemetry?.shutdown(TELEMETRY_DRAIN_MS); } catch { /* ignore */ }
       await releasePidfile(pidfile);
       await bootLogger.close();
       process.exit(0);
@@ -253,6 +288,7 @@ async function attachMcpSession(
     traceWriter: runtime.traceWriter,
     gatedMatcher: runtime.gatedMatcher,
     renameSession,
+    clientName: session.client_info.name,
   });
   await mcp.start(transport);
   void runtime.logger.write({
