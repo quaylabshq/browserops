@@ -288,6 +288,7 @@ async function attachMcpSession(
     traceWriter: runtime.traceWriter,
     gatedMatcher: runtime.gatedMatcher,
     renameSession,
+    clientName: session.client_info.name,
   });
   await mcp.start(transport);
   void runtime.logger.write({
