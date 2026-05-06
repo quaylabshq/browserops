@@ -66,8 +66,9 @@ describe("CLI telemetry", () => {
     const r = await t.init();
     expect(r.enabled).toBe(true);
 
-    t.capture("cli_command_invoked", {
-      command: "init",
+    t.capture("cli.doctor_ran", {
+      checks_passed: 5,
+      checks_failed: 0,
       exit_code: 0,
       duration_ms: 42,
       // adversarial — should be dropped by redact
@@ -83,8 +84,10 @@ describe("CLI telemetry", () => {
       batch: Array<{ event: string; properties: Record<string, unknown> }>;
     };
     expect(body.batch).toHaveLength(1);
+    expect(body.batch[0]!.event).toBe("cli.doctor_ran");
     const props = body.batch[0]!.properties;
-    expect(props["command"]).toBe("init");
+    expect(props["checks_passed"]).toBe(5);
+    expect(props["checks_failed"]).toBe(0);
     expect(props["exit_code"]).toBe(0);
     expect(props["duration_ms"]).toBe(42);
     expect(props["cli_version"]).toBe("0.0.0-test");
@@ -105,7 +108,7 @@ describe("CLI telemetry", () => {
 
     const t = new CliTelemetry("0.0.0-test");
     await t.init();
-    t.capture("cli_command_invoked", { command: "doctor", exit_code: 0, duration_ms: 1 });
+    t.capture("cli.doctor_ran", { checks_passed: 0, checks_failed: 0, exit_code: 0, duration_ms: 1 });
     await t.flush();
     expect(fetchMock).not.toHaveBeenCalled();
 

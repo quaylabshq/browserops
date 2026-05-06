@@ -81,7 +81,7 @@ describe("McpBridgeServer telemetry wiring", () => {
     resetTelemetryForTest();
   });
 
-  it("emits tool_called with allowlisted fields on INVALID_PARAMS", async () => {
+  it("emits mcp.<tool> with allowlisted fields on INVALID_PARAMS", async () => {
     const { fetchImpl, calls } = makeFetchSpy();
     const { client } = await initTelemetry({
       bridgeVersion: "0.0.0-test",
@@ -103,7 +103,7 @@ describe("McpBridgeServer telemetry wiring", () => {
     const body = JSON.parse(calls[calls.length - 1]!.body) as {
       batch: Array<{ event: string; properties: Record<string, unknown> }>;
     };
-    const event = body.batch.find((e) => e.event === "tool_called");
+    const event = body.batch.find((e) => e.event === "mcp.browser_navigate");
     expect(event).toBeDefined();
     const props = event!.properties;
     expect(props["tool_name"]).toBe("browser_navigate");
@@ -111,16 +111,14 @@ describe("McpBridgeServer telemetry wiring", () => {
     expect(props["error_code"]).toBe("INVALID_PARAMS");
     expect(props["client_name"]).toBe("Cursor");
     expect(props["param_keys"]).toEqual(["tab_id"]);
-    // bridge_version + os_platform should be on every event
     expect(props["bridge_version"]).toBe("0.0.0-test");
     expect(props["os_platform"]).toBe(process.platform);
 
-    // Crucially: nothing from the params or url payload leaked.
     const serialised = JSON.stringify(props);
     expect(serialised).not.toContain("https://");
   });
 
-  it("emits tool_called with tab_hostname on a successful tab-bound call", async () => {
+  it("emits mcp.browser_navigate with tab_hostname + is_external_url on success", async () => {
     const { fetchImpl, calls } = makeFetchSpy();
     const { client } = await initTelemetry({
       bridgeVersion: "0.0.0-test",
@@ -147,7 +145,7 @@ describe("McpBridgeServer telemetry wiring", () => {
       {
         params: {
           name: "browser_navigate",
-          arguments: { tab_id: minted.tab_id, url: "https://docs.google.com/document/d/secret123/edit" },
+          arguments: { tab_id: minted.tab_id, url: "https://example.com/" }, // different hostname → external
         },
       },
       { requestId: "req-2" },
@@ -157,15 +155,15 @@ describe("McpBridgeServer telemetry wiring", () => {
     const body = JSON.parse(calls[calls.length - 1]!.body) as {
       batch: Array<{ event: string; properties: Record<string, unknown> }>;
     };
-    const event = body.batch.find((e) => e.event === "tool_called");
+    const event = body.batch.find((e) => e.event === "mcp.browser_navigate");
     expect(event).toBeDefined();
     const props = event!.properties;
     expect(props["tool_name"]).toBe("browser_navigate");
     expect(props["ok"]).toBe(true);
     expect(props["tab_hostname"]).toBe("docs.google.com");
+    expect(props["is_external_url"]).toBe(true);
     expect(props["param_keys"]).toEqual(["tab_id", "url"]);
 
-    // The full URL with the secret token must not appear anywhere.
     const serialised = JSON.stringify(props);
     expect(serialised).not.toContain("secret123");
     expect(serialised).not.toContain("token=abc");
