@@ -37,6 +37,7 @@ import { MEMORY_HANDLERS } from "./memory/handlers.js";
 import { buildServerInstructions } from "./server-instructions.js";
 import { createPromptRegistry } from "./prompts.js";
 import { checkBreaker, recordResult as recordBreakerResult } from "./circuit-breaker.js";
+import { buildCommonProps, captureEvent, getTelemetry, type CommonProps } from "./telemetry/index.js";
 
 /**
  * Minimal shape McpBridgeServer needs to talk to the extension.
@@ -154,6 +155,13 @@ export interface McpBridgeDeps {
   traceWriter?: TraceWriter;
   /** Gated-domain matcher. Advisor warnings and page_effect escalation fire when the feature is on. */
   gatedMatcher: GatedDomainMatcher;
+  /**
+   * Display name of the MCP client (e.g. "Claude Code", "Cursor"). When
+   * present, included as `client_name` on tool_called telemetry events.
+   * Empty / undefined drops the property — the redact allowlist tolerates
+   * its absence.
+   */
+  clientName?: string;
 }
 
 interface ToolErrorPayload {
@@ -201,6 +209,7 @@ export class McpBridgeServer {
   private readonly validators = new Map<string, ValidateFunction>();
   private readonly procedureHandlers: Record<string, (raw: Record<string, unknown>) => Promise<unknown>>;
   private readonly memoryHandlers: Record<string, (raw: Record<string, unknown>) => Promise<unknown>>;
+  private readonly commonProps: CommonProps;
   private transport?: Transport;
   /**
    * Per-session "last successfully-acted-on tab." browser_current_tab
@@ -214,6 +223,7 @@ export class McpBridgeServer {
     this.deps = deps;
     this.procedureHandlers = buildProcedureHandlers(deps.wsBridge);
     this.memoryHandlers = MEMORY_HANDLERS;
+    this.commonProps = buildCommonProps({ bridgeVersion: deps.version });
 
     const ajv = new Ajv({ allErrors: true, strict: false, useDefaults: true });
     addFormats(ajv);
@@ -287,6 +297,10 @@ export class McpBridgeServer {
     const id = extra.requestId !== undefined ? String(extra.requestId) : randomId();
     const name = req.params.name;
     const params: Record<string, unknown> = req.params.arguments ?? {};
+    // Snapshot the user-supplied keys before AJV (useDefaults: true) mutates
+    // params with schema defaults. tool_called.param_keys reports what the
+    // caller actually passed, not the post-validation shape.
+    const originalParamKeys = Object.keys(params).sort();
 
     await this.deps.logger.write({
       dir: "mcp_in",
@@ -316,7 +330,7 @@ export class McpBridgeServer {
           details: { feature: def.feature },
         }),
       );
-      this.emitTrace(id, name, params, startMs, result);
+      this.record(id, name, params, originalParamKeys, startMs, result, undefined);
       return result;
     }
 
@@ -328,7 +342,7 @@ export class McpBridgeServer {
     if (!validate(params)) {
       const message = formatAjvErrors(validate.errors);
       const result = await this.reply(id, name, toolError({ code: "INVALID_PARAMS", message }));
-      this.emitTrace(id, name, params, startMs, result);
+      this.record(id, name, params, originalParamKeys, startMs, result, undefined);
       return result;
     }
 
@@ -342,7 +356,7 @@ export class McpBridgeServer {
           name,
           toolError({ code: "INVALID_PARAMS", message: "name must be a non-empty string" }),
         );
-        this.emitTrace(id, name, params, startMs, result);
+        this.record(id, name, params, originalParamKeys, startMs, result, undefined);
         return result;
       }
       if (this.deps.sessionId === "" || !this.deps.renameSession) {
@@ -355,7 +369,7 @@ export class McpBridgeServer {
               "browser_set_session_name is only available when running under the multi-session daemon",
           }),
         );
-        this.emitTrace(id, name, params, startMs, result);
+        this.record(id, name, params, originalParamKeys, startMs, result, undefined);
         return result;
       }
       const settled = this.deps.renameSession(newName) ?? newName;
@@ -364,7 +378,7 @@ export class McpBridgeServer {
         name,
         toolOk({ session_id: this.deps.sessionId, name: settled }),
       );
-      this.emitTrace(id, name, params, startMs, result);
+      this.record(id, name, params, originalParamKeys, startMs, result, undefined);
       return result;
     }
 
@@ -376,7 +390,7 @@ export class McpBridgeServer {
           name,
           toolError({ code: "INVALID_PARAMS", message: "tab_id is required" }),
         );
-        this.emitTrace(id, name, params, startMs, result);
+        this.record(id, name, params, originalParamKeys, startMs, result, undefined);
         return result;
       }
       if (this.deps.sessionId === "") {
@@ -389,7 +403,7 @@ export class McpBridgeServer {
               "browser_release_tab is only available when running under the multi-session daemon",
           }),
         );
-        this.emitTrace(id, name, params, startMs, result);
+        this.record(id, name, params, originalParamKeys, startMs, result, undefined);
         return result;
       }
       const released = this.deps.tabs.release(tabId, this.deps.sessionId);
@@ -399,11 +413,11 @@ export class McpBridgeServer {
           name,
           toolError({ code: "TAB_NOT_FOUND", message: `tab ${tabId} not found` }),
         );
-        this.emitTrace(id, name, params, startMs, result);
+        this.record(id, name, params, originalParamKeys, startMs, result, undefined);
         return result;
       }
       const result = await this.reply(id, name, toolOk({ released: true }));
-      this.emitTrace(id, name, params, startMs, result);
+      this.record(id, name, params, originalParamKeys, startMs, result, undefined);
       return result;
     }
 
@@ -424,7 +438,9 @@ export class McpBridgeServer {
           result = await this.reply(id, name, toolError({ code, message, details }));
         }
         // procedures_* calls are not traced — they're meta-RPC, not browser
-        // interactions useful for procedure compilation (Phase 4).
+        // interactions useful for procedure compilation (Phase 4). Telemetry
+        // still fires; record() suppresses the trace path internally.
+        this.record(id, name, params, originalParamKeys, startMs, result, undefined);
         return result;
       }
       // Unknown procedures_* tool — fall through to let MethodNotFound fire below.
@@ -446,6 +462,7 @@ export class McpBridgeServer {
             : undefined;
           result = await this.reply(id, name, toolError({ code, message, details }));
         }
+        this.record(id, name, params, originalParamKeys, startMs, result, undefined);
         return result;
       }
     }
@@ -468,7 +485,7 @@ export class McpBridgeServer {
       const resolved = this.resolveTab(name, tabId);
       if (!resolved.ok) {
         const result = await this.reply(id, name, toolError(resolved.error));
-        this.emitTrace(id, name, params, startMs, result);
+        this.record(id, name, params, originalParamKeys, startMs, result, undefined);
         return result;
       }
       tab = resolved.record ? { url: resolved.record.url } : undefined;
@@ -484,7 +501,7 @@ export class McpBridgeServer {
           message: "no active extension connection",
         }),
       );
-      this.emitTrace(id, name, params, startMs, result);
+      this.record(id, name, params, originalParamKeys, startMs, result, tab);
       return result;
     }
 
@@ -500,7 +517,7 @@ export class McpBridgeServer {
           details: { retry_after_ms: charge.retry_after_ms, scope: charge.scope },
         }),
       );
-      this.emitTrace(id, name, params, startMs, result);
+      this.record(id, name, params, originalParamKeys, startMs, result, tab);
       return result;
     }
 
@@ -522,7 +539,7 @@ export class McpBridgeServer {
           name,
           toolError({ code: "RISKY_ACTION_DENIED", message: reason }),
         );
-        this.emitTrace(id, name, params, startMs, result);
+        this.record(id, name, params, originalParamKeys, startMs, result, tab);
         return result;
       }
     }
@@ -545,7 +562,7 @@ export class McpBridgeServer {
           },
         }),
       );
-      this.emitTrace(id, name, params, startMs, result);
+      this.record(id, name, params, originalParamKeys, startMs, result, tab);
       return result;
     }
 
@@ -567,7 +584,7 @@ export class McpBridgeServer {
       if (advisedResult.isError) {
         const result = await this.reply(id, name, advisedResult);
         recordBreakerResult(breakerCall, { ok: false, error_code: "DISPATCH_FAILED_ON_GATED_DOMAIN" });
-        this.emitTrace(id, name, params, startMs, result);
+        this.record(id, name, params, originalParamKeys, startMs, result, tab);
         return result;
       }
       this.maybeClaimNewTab(name, extResult);
@@ -582,12 +599,12 @@ export class McpBridgeServer {
       if (finalResult.isError) {
         const result = await this.reply(id, name, finalResult);
         recordBreakerResult(breakerCall, { ok: false, error_code: "TAB_NOT_FOUND" });
-        this.emitTrace(id, name, params, startMs, result);
+        this.record(id, name, params, originalParamKeys, startMs, result, tab);
         return result;
       }
       const result = await this.reply(id, name, finalResult);
       recordBreakerResult(breakerCall, { ok: true });
-      this.emitTrace(id, name, params, startMs, result);
+      this.record(id, name, params, originalParamKeys, startMs, result, tab);
       // Track per-session "last touched tab" so browser_current_tab
       // can fall back to it when the OS-level foreground belongs to
       // someone else.
@@ -598,7 +615,7 @@ export class McpBridgeServer {
       const message = err instanceof Error ? err.message : String(err);
       const result = await this.reply(id, name, toolError({ code, message }));
       recordBreakerResult(breakerCall, { ok: false, error_code: code });
-      this.emitTrace(id, name, params, startMs, result);
+      this.record(id, name, params, originalParamKeys, startMs, result, tab);
       return result;
     }
   }
@@ -749,6 +766,110 @@ export class McpBridgeServer {
     });
   }
 
+
+  /**
+   * Joint hook for trace + telemetry. emitTrace preserves its existing
+   * skip behaviour for the procedures_ and memory_ tool families (those
+   * branches return early; we suppress trace emission for them inline
+   * here too). captureToolCalled is unconditional because telemetry
+   * treats every tools/call as a usage signal.
+   */
+  private record(
+    id: string,
+    toolName: string,
+    input: Record<string, unknown>,
+    originalParamKeys: readonly string[],
+    startMs: number,
+    result: ToolCallResult,
+    tab: TabInfo | undefined,
+  ): void {
+    if (!toolName.startsWith("procedures_") && !toolName.startsWith("memory_")) {
+      this.emitTrace(id, toolName, input, startMs, result);
+    }
+    this.captureToolCalled(toolName, input, originalParamKeys, startMs, result, tab);
+  }
+
+  /**
+   * Emit a tool_called PostHog event. All property names go through the
+   * redact allowlist in captureEvent — anything not on the allowlist is
+   * silently dropped, so adding fields here without also updating
+   * redact.ts is a no-op (and the redact tests will catch missing keys).
+   */
+  private captureToolCalled(
+    toolName: string,
+    input: Record<string, unknown>,
+    originalParamKeys: readonly string[],
+    startMs: number,
+    result: ToolCallResult,
+    tab: TabInfo | undefined,
+  ): void {
+    const t = getTelemetry();
+    if (!t?.enabled) return;
+
+    const props: Record<string, unknown> = {
+      tool_name: toolName,
+      ok: !result.isError,
+      duration_ms: Date.now() - startMs,
+      param_keys: [...originalParamKeys],
+    };
+    if (this.deps.clientName) props["client_name"] = this.deps.clientName;
+
+    if (tab?.url) {
+      try {
+        const h = new URL(tab.url).hostname;
+        if (h) props["tab_hostname"] = h;
+        props["is_gated_domain"] = this.deps.gatedMatcher.matches(tab.url);
+      } catch {
+        /* not a URL — skip */
+      }
+    }
+
+    let parsedResult: Record<string, unknown> | undefined;
+    const text = result.content[0]?.text ?? "";
+    if (text) {
+      try {
+        const v = JSON.parse(text);
+        if (v && typeof v === "object") parsedResult = v as Record<string, unknown>;
+      } catch {
+        /* leave undefined */
+      }
+    }
+
+    if (result.isError && parsedResult && typeof parsedResult["code"] === "string") {
+      props["error_code"] = parsedResult["code"];
+      if (parsedResult["code"] === "FEATURE_DISABLED") props["feature_gate_hit"] = true;
+    }
+
+    if (toolName === "procedures_execute") {
+      if (typeof input["name"] === "string") props["procedure_name"] = input["name"];
+      if (parsedResult && typeof parsedResult["steps_executed"] === "number") {
+        props["procedure_steps_executed"] = parsedResult["steps_executed"];
+      }
+    }
+
+    if (toolName.startsWith("memory_")) {
+      props["memory_op"] = toolName.slice("memory_".length);
+      if (typeof input["name"] === "string") props["memory_name"] = input["name"];
+    }
+
+    if (toolName === "browser_screenshot" && !result.isError && parsedResult) {
+      if (typeof parsedResult["width"] === "number") props["screenshot_width_px"] = parsedResult["width"];
+      if (typeof parsedResult["height"] === "number") props["screenshot_height_px"] = parsedResult["height"];
+      if (typeof parsedResult["format"] === "string") props["screenshot_format"] = parsedResult["format"];
+    }
+
+    if (toolName === "browser_navigate" && tab?.url && typeof input["url"] === "string") {
+      try {
+        const target = new URL(input["url"] as string);
+        const current = new URL(tab.url);
+        props["is_external_url"] = target.hostname !== current.hostname;
+      } catch {
+        /* not URLs — skip */
+      }
+    }
+
+    captureEvent(t, `mcp.${toolName}`, props, this.commonProps);
+  }
 
   /**
    * Emit a TraceEvent for a completed tools/call. No-op when traceWriter is
