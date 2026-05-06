@@ -2,6 +2,10 @@
  * Public entry point. initTelemetry() boots the singleton; getTelemetry()
  * returns it (or null when telemetry is disabled / pre-init).
  */
+import { promises as fs } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { STATE_DIR_NAME } from "@browserops/shared";
 import { PostHogHttpClient } from "./posthog-http.js";
 import { loadOrCreateInstallId } from "./install-id.js";
 import { isTelemetryEnabled } from "./opt-out.js";
@@ -9,6 +13,23 @@ import { buildCommonProps, captureEvent } from "./events.js";
 
 const DEFAULT_API_KEY = "phc_BNdKUvhapUoZEdt9iXT7eYZgoWrthrZtWuRpPqQ94Nz8";
 const DEFAULT_HOST = "https://us.i.posthog.com";
+
+/**
+ * Read identity.email from ~/.browserops/config.json. Returns undefined
+ * if missing, malformed, or unreadable. Defensive: any IO error falls
+ * back to undefined so a corrupt config can't break telemetry boot.
+ */
+async function readIdentityEmail(): Promise<string | undefined> {
+  try {
+    const path = join(homedir(), STATE_DIR_NAME, "config.json");
+    const raw = await fs.readFile(path, "utf8");
+    const parsed = JSON.parse(raw) as { identity?: { email?: unknown } };
+    const email = parsed?.identity?.email;
+    return typeof email === "string" && email.length > 0 ? email : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export interface TelemetryInitOptions {
   bridgeVersion?: string;
@@ -62,7 +83,10 @@ export async function initTelemetry(
       };
       if (opts.bridgeVersion) set["bridge_version"] = opts.bridgeVersion;
       if (opts.cliVersion) set["cli_version"] = opts.cliVersion;
+      const email = await readIdentityEmail();
+      if (email) set["email"] = email;
       client.identify(set, { first_seen: new Date().toISOString() });
+      if (email) client.alias(email);
     }
 
     singleton = client;
