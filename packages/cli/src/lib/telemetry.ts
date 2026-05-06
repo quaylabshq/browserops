@@ -1,0 +1,205 @@
+/**
+ * CLI-side telemetry. The CLI is a short-lived process so it gets a
+ * minimal client (single in-memory queue, single fire-and-forget HTTP
+ * POST on flush). The persistent state — install-id and the opt-out
+ * config — is shared with the daemon so distinct_id and on/off match
+ * across both processes.
+ *
+ * Kept deliberately small (no class hierarchy, no batching loop) so it
+ * doesn't drift far from packages/bridge/src/telemetry/. Keys and
+ * allowed event names mirror the bridge allowlist exactly.
+ */
+import { promises as fs } from "node:fs";
+import { homedir } from "node:os";
+import { join, dirname } from "node:path";
+import { randomUUID } from "node:crypto";
+import { STATE_DIR_NAME } from "@browserops/shared";
+
+const POSTHOG_KEY = "phc_BNdKUvhapUoZEdt9iXT7eYZgoWrthrZtWuRpPqQ94Nz8";
+const POSTHOG_HOST = "https://us.i.posthog.com";
+const FLUSH_TIMEOUT_MS = 1_500;
+
+const TRUTHY = new Set(["1", "true", "yes", "on"]);
+const FALSY = new Set(["0", "false", "no", "off"]);
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const COMMON_PROPS = new Set([
+  "bridge_version",
+  "cli_version",
+  "os_platform",
+  "os_arch",
+  "node_major",
+]);
+
+const ALLOWED: Record<string, ReadonlySet<string>> = {
+  cli_command_invoked: new Set(["command", "exit_code", "duration_ms"]),
+  feature_changed: new Set(["feature_name", "enabled"]),
+  init_completed: new Set(["clients_installed", "features_enabled", "interactive"]),
+  upgrade_completed: new Set(["from_version", "to_version", "ok"]),
+  telemetry_changed: new Set(["enabled"]),
+};
+
+function configFilePath(): string {
+  return join(homedir(), STATE_DIR_NAME, "config.json");
+}
+export function installIdFilePath(): string {
+  return join(homedir(), STATE_DIR_NAME, "install-id");
+}
+
+export async function isCliTelemetryEnabled(): Promise<boolean> {
+  const env = process.env;
+  if (TRUTHY.has((env["DO_NOT_TRACK"] ?? "").trim().toLowerCase())) return false;
+  const own = env["BROWSEROPS_TELEMETRY"];
+  if (own !== undefined) {
+    const lower = own.trim().toLowerCase();
+    if (FALSY.has(lower)) return false;
+    if (TRUTHY.has(lower)) return true;
+  }
+  try {
+    const raw = await fs.readFile(configFilePath(), "utf8");
+    const parsed = JSON.parse(raw) as { telemetry?: unknown };
+    if (typeof parsed?.telemetry === "boolean") return parsed.telemetry;
+  } catch {
+    /* defaults apply */
+  }
+  return true;
+}
+
+export async function loadOrCreateCliInstallId(): Promise<{ id: string; created: boolean }> {
+  const path = installIdFilePath();
+  try {
+    const raw = (await fs.readFile(path, "utf8")).trim();
+    if (UUID_RE.test(raw)) return { id: raw, created: false };
+  } catch {
+    /* fall through to create */
+  }
+  const id = randomUUID();
+  try {
+    await fs.mkdir(dirname(path), { recursive: true, mode: 0o700 });
+    await fs.writeFile(path, id + "\n", { mode: 0o600 });
+    return { id, created: true };
+  } catch {
+    return { id, created: true };
+  }
+}
+
+export async function setTelemetryEnabledInConfig(enabled: boolean): Promise<void> {
+  const path = configFilePath();
+  let current: Record<string, unknown> = {};
+  try {
+    const raw = await fs.readFile(path, "utf8");
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (parsed && typeof parsed === "object") current = parsed;
+  } catch {
+    /* missing or unparsable — start fresh */
+  }
+  current["telemetry"] = enabled;
+  await fs.mkdir(dirname(path), { recursive: true });
+  const tmp = `${path}.${process.pid}.tmp`;
+  await fs.writeFile(tmp, JSON.stringify(current, null, 2) + "\n", "utf8");
+  await fs.rename(tmp, path);
+}
+
+function redact(event: string, props: Record<string, unknown>): Record<string, unknown> {
+  const allowed = ALLOWED[event];
+  if (!allowed) return {};
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(props)) {
+    if (allowed.has(k) || COMMON_PROPS.has(k)) out[k] = v;
+  }
+  return out;
+}
+
+interface QueuedEvent {
+  event: string;
+  properties: Record<string, unknown>;
+  timestamp: string;
+}
+
+export class CliTelemetry {
+  private queue: QueuedEvent[] = [];
+  private distinctId = "";
+  private enabled = false;
+  private cliVersion: string;
+
+  constructor(cliVersion: string) {
+    this.cliVersion = cliVersion;
+  }
+
+  async init(): Promise<{ enabled: boolean; installCreated: boolean }> {
+    try {
+      this.enabled = await isCliTelemetryEnabled();
+      if (!this.enabled) return { enabled: false, installCreated: false };
+      const r = await loadOrCreateCliInstallId();
+      this.distinctId = r.id;
+      return { enabled: true, installCreated: r.created };
+    } catch {
+      this.enabled = false;
+      return { enabled: false, installCreated: false };
+    }
+  }
+
+  capture(event: string, props: Record<string, unknown> = {}): void {
+    if (!this.enabled || !this.distinctId) return;
+    const allowed = ALLOWED[event];
+    if (!allowed) return;
+    const merged: Record<string, unknown> = {
+      cli_version: this.cliVersion,
+      os_platform: process.platform,
+      os_arch: process.arch,
+      node_major: Number(process.versions.node.split(".")[0] ?? 0),
+      ...props,
+    };
+    this.queue.push({
+      event,
+      properties: redact(event, merged),
+      timestamp: new Date().toISOString(),
+    });
+  }
+
+  async flush(timeoutMs = FLUSH_TIMEOUT_MS): Promise<void> {
+    if (!this.enabled || this.queue.length === 0) return;
+    const batch = this.queue.splice(0);
+    const body = JSON.stringify({
+      api_key: process.env["BROWSEROPS_POSTHOG_KEY"] || POSTHOG_KEY,
+      batch: batch.map((e) => ({
+        event: e.event,
+        distinct_id: this.distinctId,
+        properties: e.properties,
+        timestamp: e.timestamp,
+      })),
+    });
+    try {
+      const host = (process.env["BROWSEROPS_POSTHOG_HOST"] || POSTHOG_HOST).replace(/\/+$/, "");
+      await fetch(`${host}/batch/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body,
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch {
+      /* swallow */
+    }
+  }
+}
+
+let singleton: CliTelemetry | null = null;
+
+export async function initCliTelemetry(cliVersion: string): Promise<{
+  client: CliTelemetry;
+  enabled: boolean;
+  installCreated: boolean;
+}> {
+  const client = new CliTelemetry(cliVersion);
+  const r = await client.init();
+  singleton = client;
+  return { client, ...r };
+}
+
+export function getCliTelemetry(): CliTelemetry | null {
+  return singleton;
+}
+
+export function resetCliTelemetryForTest(): void {
+  singleton = null;
+}
