@@ -118,6 +118,27 @@ describe("PostHogHttpClient", () => {
     expect(c.queueSize).toBe(3);
   });
 
+  it("alias enqueues a $create_alias event", async () => {
+    const f = makeFetch();
+    const c = new PostHogHttpClient({
+      apiKey: "k",
+      host: "https://x",
+      distinctId: "did",
+      enabled: true,
+      fetchImpl: f.fetchImpl,
+    });
+    c.alias("saket@example.com");
+    await c.shutdown(1000);
+    const body = JSON.parse(String(f.calls[0]?.init.body)) as {
+      batch: Array<{ event: string; properties: Record<string, unknown> }>;
+    };
+    expect(body.batch[0]?.event).toBe("$create_alias");
+    expect(body.batch[0]?.properties).toMatchObject({
+      alias: "saket@example.com",
+      distinct_id: "did",
+    });
+  });
+
   it("identify includes $set and $set_once", async () => {
     const f = makeFetch();
     const c = new PostHogHttpClient({

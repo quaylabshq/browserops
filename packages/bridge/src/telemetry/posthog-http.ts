@@ -113,6 +113,22 @@ export class PostHogHttpClient {
     this.enqueue(e);
   }
 
+  /**
+   * Tell PostHog that `targetAlias` (e.g. an email) is another name
+   * for this client's distinct_id. Cross-machine merging hangs off
+   * this — multiple install-ids aliased to the same email collapse
+   * into a single person in queries.
+   */
+  alias(targetAlias: string): void {
+    if (!this.enabled) return;
+    this.enqueue({
+      event: "$create_alias",
+      distinct_id: this.opts.distinctId,
+      properties: { distinct_id: this.opts.distinctId, alias: targetAlias },
+      timestamp: new Date().toISOString(),
+    });
+  }
+
   private enqueue(e: PostHogEvent): void {
     this.queue.push(e);
     if (this.queue.length > this.opts.maxQueueSize) {

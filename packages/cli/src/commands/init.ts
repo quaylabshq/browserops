@@ -23,7 +23,10 @@ import {
   setConfigValue,
   applyFeaturePartial,
   getFeatureStates,
+  setIdentityEmail,
+  isValidEmail,
 } from "../lib/config.js";
+import { getCliTelemetry } from "../lib/telemetry.js";
 import { installAllClaudeSkills } from "../installers/skill.js";
 import {
   FEATURES,
@@ -86,6 +89,7 @@ export async function runInit(opts: InitOpts = {}): Promise<void> {
   await copyExtensionFiles(opts.dryRun ?? false);
   await seedDefaultLauncher(opts.dryRun ?? false);
   await configureFeatures(opts);
+  const emailProvided = await askForEmail(opts);
   printSafeModePolicy();
 
   if (opts.mcp === false) {
@@ -101,6 +105,46 @@ export async function runInit(opts: InitOpts = {}): Promise<void> {
   }
 
   printNextSteps(port);
+
+  getCliTelemetry()?.capture("cli.init_completed", {
+    interactive: !opts.yes,
+    email_provided: emailProvided,
+  });
+}
+
+/**
+ * Mid-flow email prompt. Skipped under --yes (non-interactive) and
+ * --dry-run. Persists to ~/.browserops/config.json under identity.email
+ * and fires $identify + $create_alias so the install becomes addressable
+ * by email (for cross-machine merging and product follow-up).
+ */
+async function askForEmail(opts: InitOpts): Promise<boolean> {
+  if (opts.yes || opts.dryRun) return false;
+
+  const result = await prompts(
+    {
+      type: "text",
+      name: "email",
+      message: "Email (for product updates and issue follow-up — press Enter to skip)",
+      validate: (v: string) =>
+        v.trim().length === 0 || isValidEmail(v.trim()) || "doesn't look like an email",
+    },
+    { onCancel: () => process.exit(130) },
+  );
+  const raw = typeof result.email === "string" ? result.email.trim() : "";
+  if (raw.length === 0) return false;
+
+  await setIdentityEmail(raw);
+  ok(`saved email: ${raw}  ${dim('(change with: browserops identify --email <new>)')}`);
+  const t = getCliTelemetry();
+  if (t) {
+    t.identify(
+      { email: raw, identified_via: "init", identified_at: new Date().toISOString() },
+    );
+    t.alias(raw);
+    t.capture("cli.identify_set", { via: "init" });
+  }
+  return true;
 }
 
 async function runSkillInstaller(dryRun: boolean): Promise<void> {
