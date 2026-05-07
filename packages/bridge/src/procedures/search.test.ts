@@ -420,6 +420,66 @@ describe("include_drafts filter", () => {
     expect(names).toContain("trusted_one");
     expect(names).toContain("draft_one");
   });
+
+  it("does not populate drafts fallback when trusted matches exist", async () => {
+    const result = await search(PHANTOM_ROOT, manifest, "send email", {
+      min_score: 0,
+    });
+    expect(result.matches.map((m) => m.name)).toContain("trusted_one");
+    expect(result.drafts).toBeUndefined();
+  });
+
+  it("does not populate drafts when include_drafts is true (drafts go in matches)", async () => {
+    const result = await search(PHANTOM_ROOT, manifest, "send email", {
+      min_score: 0,
+      include_drafts: true,
+    });
+    expect(result.drafts).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Draft fallback when trusted result set is empty
+// ---------------------------------------------------------------------------
+
+describe("draft fallback surfaces drafts when trusted matches are empty", () => {
+  it("populates `drafts` when no trusted entry matches but a draft does", async () => {
+    const manifest = makeManifest({
+      "draft_only": makeEntry("draft_only", {
+        description: "send email message",
+        status: "draft",
+        success_count: 0,
+      }),
+      "unrelated_trusted": makeEntry("unrelated_trusted", {
+        description: "weather forecast widget",
+        status: "trusted",
+        success_count: 1,
+      }),
+    });
+
+    // Use the default min_score (0.2) so the unrelated trusted entry — which
+    // would otherwise sneak in at score 0 — is filtered out properly.
+    const result = await search(PHANTOM_ROOT, manifest, "send email");
+    expect(result.matches).toHaveLength(0);
+    expect(result.drafts).toBeDefined();
+    expect(result.drafts!.map((m) => m.name)).toEqual(["draft_only"]);
+  });
+
+  it("does not populate `drafts` when no draft entry scores either", async () => {
+    const manifest = makeManifest({
+      "unrelated_draft": makeEntry("unrelated_draft", {
+        description: "totally unrelated draft",
+        status: "draft",
+        success_count: 0,
+      }),
+    });
+
+    const result = await search(PHANTOM_ROOT, manifest, "send email", {
+      min_score: 0.2,
+    });
+    expect(result.matches).toHaveLength(0);
+    expect(result.drafts).toBeUndefined();
+  });
 });
 
 // ---------------------------------------------------------------------------

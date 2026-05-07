@@ -56,6 +56,14 @@ export interface SearchResult {
   total: number;
   /** True when total > matches.length. */
   truncated: boolean;
+  /**
+   * Draft procedures surfaced as a fallback when the trusted-only result set
+   * was empty. Present only when `include_drafts` was false AND `matches` came
+   * back empty AND there exists at least one draft entry that scores. Limited
+   * to the same `limit` as `matches`. Use to recover untested procedures the
+   * agent would otherwise miss; treat them as suggestions, not trusted hits.
+   */
+  drafts?: SearchMatch[];
 }
 
 // ---------------------------------------------------------------------------
@@ -295,7 +303,68 @@ export async function search(
   // Normalisation denominator
   const normDenom = queryTokens.length * 10;
 
-  // Collect scored candidates
+  const primary = await rankAndCollect(
+    root,
+    manifest,
+    queryTokens,
+    {
+      domain,
+      scope,
+      deep,
+      limit,
+      minScore,
+      normDenom,
+      acceptEntry: (entry) => includeDrafts || entry.status !== "draft",
+    },
+  );
+
+  // Draft fallback: when the caller did not opt into drafts AND the trusted
+  // result set is empty, surface drafts under a separate `drafts` key so the
+  // agent can use them as a recovery hint instead of silently missing them.
+  if (!includeDrafts && primary.matches.length === 0) {
+    const draftRun = await rankAndCollect(
+      root,
+      manifest,
+      queryTokens,
+      {
+        domain,
+        scope,
+        deep,
+        limit,
+        minScore,
+        normDenom,
+        acceptEntry: (entry) => entry.status === "draft",
+      },
+    );
+    if (draftRun.matches.length > 0) {
+      return { ...primary, drafts: draftRun.matches };
+    }
+  }
+
+  return primary;
+}
+
+interface RankOptions {
+  domain: string | undefined;
+  scope: "all" | "shared" | `composite:${string}`;
+  deep: boolean;
+  limit: number;
+  minScore: number;
+  normDenom: number;
+  acceptEntry: (entry: ManifestEntry) => boolean;
+}
+
+/**
+ * Score every manifest entry that passes the supplied filters, sort by score,
+ * and produce a SearchResult-shaped slice (matches/total/truncated). Pulled
+ * out of `search` so the trusted-only and drafts-only passes can share scoring.
+ */
+async function rankAndCollect(
+  root: string,
+  manifest: Manifest,
+  queryTokens: string[],
+  opts: RankOptions,
+): Promise<{ matches: SearchMatch[]; total: number; truncated: boolean }> {
   interface Candidate {
     name: string;
     entry: ManifestEntry;
@@ -308,59 +377,46 @@ export async function search(
   const candidates: Candidate[] = [];
 
   for (const [name, entry] of Object.entries(manifest.procedures)) {
-    // Domain filter
-    if (domain !== undefined && entry.domain !== domain) continue;
+    if (opts.domain !== undefined && entry.domain !== opts.domain) continue;
+    if (!passesScopeFilter(name, entry, opts.scope)) continue;
+    if (!opts.acceptEntry(entry)) continue;
 
-    // Scope filter
-    if (!passesScopeFilter(name, entry, scope)) continue;
-
-    // Status filter — drafts are excluded unless explicitly requested.
-    if (!includeDrafts && entry.status === "draft") continue;
-
-    // Shallow score
     const { raw, fromName, fromTriggers, fromDescription } = shallowScore(
       entry,
       name,
       queryTokens,
     );
 
-    let score = Math.min(1, raw / normDenom);
+    let score = Math.min(1, raw / opts.normDenom);
 
-    // Deep mode: load step bodies for entries that survived the shallow pass
-    if (deep && raw > 0) {
+    if (opts.deep && raw > 0) {
       try {
-        const yamlText = await readProcedureYaml(
-          path.join(root, entry.path),
-        );
+        const yamlText = await readProcedureYaml(path.join(root, entry.path));
         const parsed = YAML.parse(yamlText) as unknown;
         const stepTokens = extractStepTokens(parsed);
         const stepOverlap = overlapCount(queryTokens, stepTokens);
-        // Add 0.5 × overlap / normDenom (
-        score = Math.min(1, score + (0.5 * stepOverlap) / normDenom);
+        score = Math.min(1, score + (0.5 * stepOverlap) / opts.normDenom);
       } catch {
         // If loading fails (e.g. file deleted between index and search),
         // proceed with shallow score only.
       }
     }
 
-    if (score >= minScore) {
+    if (score >= opts.minScore) {
       candidates.push({ name, entry, score, fromName, fromTriggers, fromDescription });
     }
   }
 
-  // Sort descending by score; stable tie-break by name
   candidates.sort((a, b) => {
     if (b.score !== a.score) return b.score - a.score;
     return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
   });
 
   const total = candidates.length;
-  const truncated = total > limit;
-  const topCandidates = candidates.slice(0, limit);
+  const truncated = total > opts.limit;
+  const topCandidates = candidates.slice(0, opts.limit);
 
   const matches: SearchMatch[] = topCandidates.map((c) => {
-    // Decide whether to include snippet:
-    // Set snippet when trigger + description contribution > name contribution.
     const nonNameScore = c.fromTriggers * 8 + c.fromDescription * 3;
     const nameScore = c.fromName * 10;
     const includeSnippet = nonNameScore > nameScore;
