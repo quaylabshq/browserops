@@ -600,6 +600,205 @@ describe("snippet is set when match is trigger-driven; not set for pure name mat
 });
 
 // ---------------------------------------------------------------------------
+// Coverage-recall regression: "slack channel last message"
+// ---------------------------------------------------------------------------
+
+describe("coverage recall: slack.open_channel surfaces alongside slack.dm_person", () => {
+  // Mirror of the real on-disk procedures. Under the prior weighted-sum ranker
+  // a "slack channel last message" query returned only slack.dm_person because
+  // 'message' appeared in dm_person's triggers/inputs and pulled its raw score
+  // above the 0.2 cutoff while open_channel — which has no overlap on 'last'
+  // or 'message' — fell below it. Coverage gives both a 2/4 = 0.5 score and
+  // legacyRaw orders open_channel first because it picks up 'channel' across
+  // name + triggers + description + inputs.
+  const manifest = makeManifest({
+    "slack.dm_person": makeEntry("slack.dm_person", {
+      domain: "slack",
+      description:
+        "Send a Slack direct message to a workspace member by name. Uses the Slack web API.",
+      inputs: ["recipient", "message"],
+      triggers: [
+        "dm someone on slack",
+        "send a slack direct message",
+        "message a slack user by name",
+        "slack dm",
+        "send slack message to person",
+      ],
+    }),
+    "slack.open_channel": makeEntry("slack.open_channel", {
+      domain: "slack",
+      description:
+        "Open a Slack channel by name in the current Slack tab. Sidebar lookup first, conversations.list API fallback.",
+      inputs: ["channel_name"],
+      triggers: [
+        "open slack channel",
+        "go to slack channel",
+        "switch to slack channel",
+        "navigate to a slack channel",
+        "find slack channel by name",
+      ],
+    }),
+  });
+
+  it("both procedures appear at default min_score for 'slack channel last message'", async () => {
+    const result = await search(
+      PHANTOM_ROOT,
+      manifest,
+      "slack channel last message",
+    );
+    const names = result.matches.map((m) => m.name);
+    expect(names).toContain("slack.dm_person");
+    expect(names).toContain("slack.open_channel");
+  });
+
+  it("slack.open_channel ranks first via legacyRaw tie-break", async () => {
+    const result = await search(
+      PHANTOM_ROOT,
+      manifest,
+      "slack channel last message",
+    );
+    expect(result.matches[0]!.name).toBe("slack.open_channel");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tie-break: identical coverage → higher legacyRaw wins
+// ---------------------------------------------------------------------------
+
+describe("legacyRaw tie-breaks identical-coverage candidates", () => {
+  // Both procs cover the single query token "deploy" — coverage 1/1 = 1.0 for
+  // both. Difference: name_match has "deploy" in its name (10 weight) while
+  // descr_match only has it in description (3 weight). legacyRaw orders
+  // name_match first.
+  const manifest = makeManifest({
+    "deploy_runner": makeEntry("deploy_runner", {
+      description: "Run the staging pipeline",
+    }),
+    "pipeline_x": makeEntry("pipeline_x", {
+      description: "Trigger a deploy of the staging pipeline",
+    }),
+  });
+
+  it("name match ranks above description-only match at equal coverage", async () => {
+    const result = await search(PHANTOM_ROOT, manifest, "deploy");
+    expect(result.matches.length).toBeGreaterThanOrEqual(2);
+    expect(result.matches[0]!.score).toBe(result.matches[1]!.score);
+    expect(result.matches[0]!.name).toBe("deploy_runner");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Coverage ordering: more covered tokens beats fewer at the same legacyRaw
+// per-field rate
+// ---------------------------------------------------------------------------
+
+describe("higher coverage outranks lower coverage", () => {
+  const manifest = makeManifest({
+    "covers_one": makeEntry("covers_one", {
+      description: "alpha procedure",
+    }),
+    "covers_two": makeEntry("covers_two", {
+      description: "alpha beta procedure",
+    }),
+  });
+
+  it("2/2 coverage beats 1/2 coverage even when legacyRaw would prefer the other", async () => {
+    const result = await search(PHANTOM_ROOT, manifest, "alpha beta", {
+      min_score: 0,
+    });
+    expect(result.matches[0]!.name).toBe("covers_two");
+    expect(result.matches[0]!.score).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Query token dedupe — coverageRatio stays in [0,1]
+// ---------------------------------------------------------------------------
+
+describe("repeated query tokens are deduped before coverage", () => {
+  const manifest = makeManifest({
+    "click_button": makeEntry("click_button", {
+      description: "Click a button on the page",
+    }),
+  });
+
+  it("'click click button' dedupes to {click, button} → 2/2 coverage", async () => {
+    const result = await search(PHANTOM_ROOT, manifest, "click click button");
+    expect(result.matches[0]!.score).toBe(1);
+    expect(result.matches[0]!.score).toBeLessThanOrEqual(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Deep widens the union: shallow + step-body tokens combine to lift coverage
+// ---------------------------------------------------------------------------
+
+describe("deep:true widens the token haystack for coverage", () => {
+  let tmpDir: string;
+  let root: string;
+
+  const PROC_NAME = "widener";
+
+  // "alpha" is in the description, "beta" is ONLY in the step body.
+  const WIDENER_YAML = `\
+schema_version: 1
+name: widener
+description: alpha procedure
+kind: leaf
+steps:
+  - id: step1
+    action: browser_execute_js
+    with:
+      script: "document.beta()"
+`;
+
+  beforeAll(async () => {
+    tmpDir = await fs.mkdtemp(
+      path.join(import.meta.dirname ?? __dirname, ".search-deep-widen-"),
+    );
+    root = tmpDir;
+
+    const procDir = path.join(root, "shared", PROC_NAME);
+    await fs.mkdir(procDir, { recursive: true });
+    await fs.writeFile(
+      path.join(procDir, "procedure.yaml"),
+      WIDENER_YAML,
+      "utf8",
+    );
+  });
+
+  afterAll(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  function makeWidenerManifest(): Manifest {
+    return makeManifest({
+      [PROC_NAME]: makeEntry(PROC_NAME, {
+        path: `shared/${PROC_NAME}/procedure.yaml`,
+        description: "alpha procedure",
+        triggers: [],
+        tags: [],
+        inputs: [],
+      }),
+    });
+  }
+
+  it("shallow coverage for 'alpha beta' is 1/2 = 0.5", async () => {
+    const manifest = makeWidenerManifest();
+    const result = await search(root, manifest, "alpha beta", { deep: false });
+    expect(result.matches).toHaveLength(1);
+    expect(result.matches[0]!.score).toBe(0.5);
+  });
+
+  it("deep coverage for 'alpha beta' lifts to 2/2 = 1.0", async () => {
+    const manifest = makeWidenerManifest();
+    const result = await search(root, manifest, "alpha beta", { deep: true });
+    expect(result.matches).toHaveLength(1);
+    expect(result.matches[0]!.score).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // SearchResult shape
 // ---------------------------------------------------------------------------
 
