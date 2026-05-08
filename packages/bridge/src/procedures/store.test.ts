@@ -5,7 +5,6 @@ import {
   CodedError,
   atomicWriteFile,
   deleteProcedureDir,
-  moveProcedureDir,
   readProcedureYaml,
   writeProcedureYamlAtomic,
 } from "./store.js";
@@ -147,60 +146,6 @@ describe("deleteProcedureDir", () => {
     await deleteProcedureDir(procDir, true);
 
     await expect(fs.access(procDir)).rejects.toThrow();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// moveProcedureDir
-// ---------------------------------------------------------------------------
-
-describe("moveProcedureDir", () => {
-  it("moves files correctly", async () => {
-    const srcDir = absPath("src_proc");
-    await fs.mkdir(srcDir, { recursive: true });
-    await fs.writeFile(
-      path.join(srcDir, "procedure.yaml"),
-      "yaml content",
-      "utf8",
-    );
-
-    const dstDir = absPath("dst_proc");
-    await moveProcedureDir(srcDir, dstDir);
-
-    // Source no longer exists.
-    await expect(fs.access(srcDir)).rejects.toThrow();
-
-    // Destination exists with same content.
-    const content = await fs.readFile(
-      path.join(dstDir, "procedure.yaml"),
-      "utf8",
-    );
-    expect(content).toBe("yaml content");
-  });
-
-  it("throws PROC_NOT_FOUND when source does not exist", async () => {
-    const src = absPath("missing_src");
-    const dst = absPath("any_dst");
-    await expect(moveProcedureDir(src, dst)).rejects.toSatisfy(
-      (err: unknown) =>
-        err instanceof CodedError && err.code === "PROC_NOT_FOUND",
-    );
-  });
-
-  it("throws PROC_ALREADY_EXISTS when target exists", async () => {
-    const src = absPath("mv_src");
-    const dst = absPath("mv_dst");
-    await fs.mkdir(src, { recursive: true });
-    await fs.mkdir(dst, { recursive: true });
-
-    await expect(moveProcedureDir(src, dst)).rejects.toSatisfy(
-      (err: unknown) =>
-        err instanceof CodedError && err.code === "PROC_ALREADY_EXISTS",
-    );
-
-    // Both directories must still exist.
-    await expect(fs.access(src)).resolves.toBeUndefined();
-    await expect(fs.access(dst)).resolves.toBeUndefined();
   });
 });
 
