@@ -14,7 +14,6 @@
  */
 
 export const FEATURES = [
-  "teach",
   "procedures",
   "gated-domains",
 ] as const;
@@ -31,24 +30,18 @@ export interface FeatureMetadata {
 }
 
 /**
- * Default state per feature is set explicitly below. `teach` and
- * `procedures` ship off so the agent's tools/list catalogue stays minimal
- * for users who only want basic browser automation. `gated-domains` ships
- * on because the in-band advisor and auto-CDP only deliver value when the
- * agent actually sees them — users who want to avoid Chrome's
- * "controlled by automation" banner on Gmail/Slack/etc. can disable it
- * with `browserops feature disable gated-domains`.
+ * Default state per feature is set explicitly below. `procedures` ships
+ * off so the agent's tools/list catalogue stays minimal for users who
+ * only want basic browser automation. `gated-domains` ships on because
+ * the in-band advisor and auto-CDP only deliver value when the agent
+ * actually sees them — users who want to avoid Chrome's "controlled by
+ * automation" banner on Gmail/Slack/etc. can disable it with
+ * `browserops feature disable gated-domains`.
  */
 export const FEATURE_METADATA: Record<FeatureName, FeatureMetadata> = {
-  teach: {
-    description:
-      "Teach mode — record a user demonstration in real Chrome and distill it into a procedure.",
-    stability: "experimental",
-    default: false,
-  },
   procedures: {
     description:
-      "Procedure runtime — list/search/save/run named, parameterised action graphs from ~/browserops/procedures/.",
+      "Procedure runtime — search/save/run named, parameterised action graphs from ~/browserops/procedures/. Also gates the browserops-teach skill, which authors new procedures autonomously.",
     stability: "experimental",
     default: false,
   },

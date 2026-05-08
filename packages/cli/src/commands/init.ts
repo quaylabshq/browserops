@@ -290,9 +290,9 @@ function describe(cl: ClientInfo): string {
 }
 
 // ---------------------------------------------------------------------------
-// Feature configuration — both teach and procedures default OFF and are
-// surfaced as opt-in prompts. --features=teach,procedures forces non-
-// interactive enable; --yes accepts the default (no features enabled).
+// Feature configuration — `procedures` defaults OFF and is surfaced as an
+// opt-in prompt. --features=procedures forces non-interactive enable;
+// --yes accepts the default (no features enabled).
 // ---------------------------------------------------------------------------
 
 async function configureFeatures(opts: InitOpts): Promise<void> {

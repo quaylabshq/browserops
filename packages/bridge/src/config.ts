@@ -3,7 +3,7 @@
  *
  * Source of truth for feature flags is ~/.browserops/config.json:
  *   {
- *     "features": { "teach": true, "procedures": false }
+ *     "features": { "procedures": true, "gated-domains": true }
  *   }
  *
  * The BROWSEROPS_FEATURES env var (comma-separated names) overrides the

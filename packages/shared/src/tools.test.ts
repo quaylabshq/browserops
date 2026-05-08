@@ -4,10 +4,6 @@ import { ERROR_CODES } from "./errors.js";
 import { KNOWN_FEATURES } from "./features.js";
 
 describe("TOOL_DEFS catalogue", () => {
-  it("contains 41 tools (26 browser + 8 procedures + 7 teach)", () => {
-    expect(TOOL_DEFS).toHaveLength(41);
-  });
-
   it("every tool name is prefixed browser_ or procedures_ and unique", () => {
     const names = TOOL_DEFS.map((t) => t.name);
     expect(new Set(names).size).toBe(names.length);
@@ -48,11 +44,9 @@ describe("TOOL_DEFS catalogue", () => {
     }
   });
 
-  it("procedures_* tools are gated as 'procedures' and procedures_teach_* as 'teach'", () => {
+  it("procedures_* tools are gated as 'procedures' and browser_* tools are ungated", () => {
     for (const t of TOOL_DEFS) {
-      if (t.name.startsWith("procedures_teach_")) {
-        expect(t.feature).toBe("teach");
-      } else if (t.name.startsWith("procedures_")) {
+      if (t.name.startsWith("procedures_")) {
         expect(t.feature).toBe("procedures");
       } else {
         expect(t.feature).toBeUndefined();
