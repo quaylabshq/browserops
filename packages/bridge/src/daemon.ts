@@ -250,8 +250,6 @@ async function attachMcpSession(
     version: runtime.version,
     sessionId: session.id,
     teachStore: runtime.teachStore,
-    autoteachStore: runtime.autoteachStore,
-    autoteachBindings: runtime.autoteachBindings,
     enabledFeatures: runtime.enabledFeatures.current,
     traceWriter: runtime.traceWriter,
     gatedMatcher: runtime.gatedMatcher,
