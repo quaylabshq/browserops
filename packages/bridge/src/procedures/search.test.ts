@@ -31,7 +31,7 @@ function makeEntry(
     usedBy: [],
     tokens: [],
     status: "trusted",
-    success_count: 1,
+    
     ...partial,
   };
 }
@@ -393,12 +393,12 @@ describe("include_drafts filter", () => {
     "trusted_one": makeEntry("trusted_one", {
       description: "verified procedure for sending an email",
       status: "trusted",
-      success_count: 3,
+      
     }),
     "draft_one": makeEntry("draft_one", {
       description: "untested procedure for sending an email",
       status: "draft",
-      success_count: 0,
+      
     }),
   });
 
@@ -448,12 +448,12 @@ describe("draft fallback surfaces drafts when trusted matches are empty", () => 
       "draft_only": makeEntry("draft_only", {
         description: "send email message",
         status: "draft",
-        success_count: 0,
+        
       }),
       "unrelated_trusted": makeEntry("unrelated_trusted", {
         description: "weather forecast widget",
         status: "trusted",
-        success_count: 1,
+        
       }),
     });
 
@@ -470,7 +470,7 @@ describe("draft fallback surfaces drafts when trusted matches are empty", () => 
       "unrelated_draft": makeEntry("unrelated_draft", {
         description: "totally unrelated draft",
         status: "draft",
-        success_count: 0,
+        
       }),
     });
 

@@ -49,8 +49,8 @@ const EXAMPLE_LEAF = {
     version: 3,
     created: "2026-04-01T10:00:00Z",
     last_verified: "2026-04-20T14:22:00Z",
-    success_count: 12,
-    failure_count: 1,
+    
+    
   },
 };
 

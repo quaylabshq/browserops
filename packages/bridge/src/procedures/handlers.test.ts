@@ -150,8 +150,6 @@ meta:
   version: 1
   created: 2026-01-01T00:00:00.000Z
   last_verified: 2026-01-01T00:00:00.000Z
-  success_count: 1
-  failure_count: 0
   status: trusted
 `;
 
@@ -312,19 +310,16 @@ describe("handleGet", () => {
     expect(typeof result.path).toBe("string");
     expect(result.path).toContain("gmail.send_email");
 
-    // All five meta fields must be present
+    // Meta fields must be present
     expect(typeof result.meta.version).toBe("number");
     expect(typeof result.meta.created).toBe("string");
     expect(typeof result.meta.last_verified).toBe("string");
-    expect(typeof result.meta.success_count).toBe("number");
-    expect(typeof result.meta.failure_count).toBe("number");
+    expect(["draft", "trusted"]).toContain(result.meta.status);
   });
 
   it("meta defaults are valid even when no meta block in YAML (fixture has none)", async () => {
     const result = await handleGet({ name: "gmail.send_email" });
     expect(result.meta.version).toBeGreaterThanOrEqual(1);
-    expect(result.meta.success_count).toBeGreaterThanOrEqual(0);
-    expect(result.meta.failure_count).toBeGreaterThanOrEqual(0);
     // created and last_verified must be valid ISO strings
     expect(new Date(result.meta.created).toISOString()).toBe(result.meta.created);
     expect(new Date(result.meta.last_verified).toISOString()).toBe(result.meta.last_verified);
@@ -602,8 +597,7 @@ steps:
 
     const getResult = await handleGet({ name: "roundtrip.test" });
     expect(getResult.meta.version).toBe(1);
-    expect(getResult.meta.success_count).toBe(0);
-    expect(getResult.meta.failure_count).toBe(0);
+    expect(getResult.meta.status).toBe("draft");
     expect(typeof getResult.meta.created).toBe("string");
   });
 

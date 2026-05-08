@@ -19,9 +19,8 @@ export interface InputFieldDef {
   description?: string;
   /**
    * Marks the input as feeding a destructive surface (sends, payments,
-   * posts, deletes). Set by the auto-teach distiller when the value
-   * flows into a step classified as side-effecting. The auto-teach loop
-   * uses this to require a dummy substitute during training runs.
+   * posts, deletes). Author-supplied; the browserops-teach skill uses
+   * this to choose safe dummies during verification.
    */
   destructive?: boolean;
 }
@@ -62,20 +61,6 @@ export interface ExpectedEffect {
   console_errors_max?: number;
 }
 
-/**
- * Selector stability tier — most stable first. Written by the auto-teach
- * distiller from the resolved-element metadata in page_effect; used by
- * future search re-ranking and by the auto-teach next-optimization picker
- * to decide whether a step is a candidate for cache_selector.
- */
-export type SelectorTier =
-  | "id"
-  | "testid"
-  | "role_name"
-  | "text"
-  | "css"
-  | "xpath";
-
 /** A concrete single-action step (non-for-each). */
 export interface ActionStepDef {
   id: string;
@@ -88,8 +73,6 @@ export interface ActionStepDef {
   bind?: string;
   on_fail?: Array<{ action: string; with?: Record<string, unknown> }>;
   expected_effect?: ExpectedEffect;
-  /** Selector stability tier — set by the auto-teach distiller. */
-  selector_tier?: SelectorTier;
 }
 
 /** A for-each iteration step. */
@@ -115,22 +98,19 @@ export interface ProcedureMetaDef {
   version: number;
   created: string;
   last_verified?: string;
-  success_count?: number;
-  failure_count?: number;
   /**
-   * draft  = saved but never verified against the live UI; excluded from
-   *          procedures_search by default.
-   * trusted = verified at least once (success_count >= 1) via procedures_save
-   *           with bump_success: true.
+   * draft   = saved but never verified against the live UI; excluded from
+   *           procedures_search by default.
+   * trusted = verified at least once via procedures_save with
+   *           bump_success: true.
    */
   status?: "draft" | "trusted";
 }
 
 /**
- * Side-effect classes a procedure performs. Written by the auto-teach
- * distiller from button-text + endpoint heuristics; surfaced to the
- * auto-teach loop so it can require dummy substitutes during training
- * runs and to the agent so it can choose to gate replays for the user.
+ * Side-effect classes a procedure performs. Author-supplied — surfaced to
+ * the agent so callers can choose to gate execution for the user before
+ * running a destructive procedure.
  */
 export type SideEffectClass =
   | "send_message"
@@ -138,9 +118,6 @@ export type SideEffectClass =
   | "post_public"
   | "modify_account"
   | "delete";
-
-/** Aggregate selector-tier rollup written by the auto-teach distiller. */
-export type ProcedureFragility = "low" | "medium" | "high";
 
 /**
  * Full definition of a procedure YAML document (schema_version 1).
@@ -163,17 +140,8 @@ export interface ProcedureDef {
   success_criteria?: AssertionDef[];
   meta?: ProcedureMetaDef;
   /**
-   * Aggregate selector fragility — set by the auto-teach distiller from
-   * the worst per-step selector_tier. `high` if any step uses xpath /
-   * nth-child css; `medium` if any step uses text-only matching;
-   * `low` otherwise.
-   */
-  fragility?: ProcedureFragility;
-  /**
    * Destructive surfaces this procedure exercises. Empty / missing means
-   * the procedure is read-only as far as the distiller could tell. The
-   * auto-teach loop refuses to replay a procedure with non-empty
-   * side_effects unless dummy inputs cover every destructive input.
+   * the procedure is read-only.
    */
   side_effects?: SideEffectClass[];
 }
@@ -223,8 +191,6 @@ const metaSchema: JSONSchemaObject = {
     version: { type: "number", minimum: 1 },
     created: { type: "string" },
     last_verified: { type: "string" },
-    success_count: { type: "number", minimum: 0 },
-    failure_count: { type: "number", minimum: 0 },
     status: { enum: ["draft", "trusted"] as const },
   },
 };
@@ -288,8 +254,6 @@ const expectedEffectSchema: JSONSchemaObject = {
   },
 };
 
-const SELECTOR_TIERS = ["id", "testid", "role_name", "text", "css", "xpath"] as const;
-
 /** Inline schema for a single step (action or for-each). */
 const stepSchema: JSONSchemaObject = {
   type: "object",
@@ -326,13 +290,6 @@ const stepSchema: JSONSchemaObject = {
       description:
         "Loose assertions about the page-level effect of this step. " +
         "Author-supplied; verified by procedures_execute during replay.",
-    },
-    selector_tier: {
-      enum: SELECTOR_TIERS,
-      description:
-        "Selector stability tier (most stable first). Written by the " +
-        "auto-teach distiller from page_effect element metadata; used by " +
-        "future search re-ranking and the auto-teach optimization picker.",
     },
   },
 };
@@ -417,9 +374,9 @@ export const PROCEDURE_SCHEMA: JSONSchemaObject = {
             type: "boolean",
             description:
               "True when this input feeds a destructive surface (sends, " +
-              "payments, posts, deletes). Set by the auto-teach " +
-              "distiller; the auto-teach loop requires a dummy " +
-              "substitute for every destructive input during training.",
+              "payments, posts, deletes). Author-supplied; the " +
+              "browserops-teach skill substitutes a safe dummy here " +
+              "during verification.",
           },
         },
       },
@@ -459,13 +416,6 @@ export const PROCEDURE_SCHEMA: JSONSchemaObject = {
       description:
         "Bridge-managed metadata. Submitted values are ignored on save.",
     },
-    fragility: {
-      enum: ["low", "medium", "high"] as const,
-      description:
-        "Aggregate selector fragility, derived from the worst per-step " +
-        "selector_tier across the procedure. Written by the auto-teach " +
-        "distiller.",
-    },
     side_effects: {
       type: "array",
       items: {
@@ -481,9 +431,8 @@ export const PROCEDURE_SCHEMA: JSONSchemaObject = {
       maxItems: 5,
       description:
         "Destructive surfaces this procedure exercises. Empty / missing " +
-        "means read-only. The auto-teach loop refuses to replay any " +
-        "procedure with non-empty side_effects unless every destructive " +
-        "input has a dummy substitute supplied for the run.",
+        "means read-only. Surfaced to the agent so callers can gate " +
+        "execution before running a destructive procedure.",
     },
   },
   if: {

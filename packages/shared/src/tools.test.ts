@@ -81,7 +81,6 @@ describe("TOOL_DEFS catalogue", () => {
   it("observation tools cost 0", () => {
     expect(TOOL_DEF_MAP["browser_list_tabs"]?.action_weight).toBe(0);
     expect(TOOL_DEF_MAP["browser_current_tab"]?.action_weight).toBe(0);
-    expect(TOOL_DEF_MAP["browser_wait_for"]?.action_weight).toBe(0);
   });
 });
 
@@ -208,14 +207,8 @@ describe("browser_screenshot schema", () => {
     | Record<string, Record<string, unknown>>
     | undefined;
 
-  it("defaults to jpeg at quality 40 with max_dimension 1024", () => {
+  it("format defaults to jpeg", () => {
     expect(props?.format?.default).toBe("jpeg");
-    expect(props?.quality?.default).toBe(40);
-    expect(props?.max_dimension?.default).toBe(1024);
-  });
-
-  it("full_quality defaults to false", () => {
-    expect(props?.full_quality?.default).toBe(false);
   });
 
   it("only tab_id is required", () => {
@@ -225,6 +218,15 @@ describe("browser_screenshot schema", () => {
   it("max_dimension is bounded to [1, 8192]", () => {
     expect(props?.max_dimension?.minimum).toBe(1);
     expect(props?.max_dimension?.maximum).toBe(8192);
+  });
+
+  it("intent enum covers the four presets", () => {
+    expect(props?.intent?.enum).toEqual([
+      "glance",
+      "verify",
+      "read_text",
+      "user_requested",
+    ]);
   });
 });
 
