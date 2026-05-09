@@ -3,4 +3,4 @@
  * code matching the package.json version here — the `prepublishOnly` step
  * keeps them in sync.
  */
-export const CLI_VERSION = "0.0.8";
+export const CLI_VERSION = "0.0.9";
