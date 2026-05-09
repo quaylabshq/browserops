@@ -13,12 +13,6 @@ async function writeFixtureSkill(name: string, body: string): Promise<void> {
   await fs.writeFile(path.join(dir, "SKILL.md"), body, "utf8");
 }
 
-async function writeFixtureExtension(): Promise<void> {
-  const dir = path.join(assetsDir, "extension");
-  await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(path.join(dir, "manifest.json"), '{"name":"test"}', "utf8");
-}
-
 beforeEach(async () => {
   assetsDir = await fs.mkdtemp(
     path.join(import.meta.dirname ?? __dirname, ".sync-test-assets-"),
@@ -40,30 +34,24 @@ afterEach(async () => {
 });
 
 describe("runSync default targets", () => {
-  it("runs skills + extension + mcp when no target is supplied", async () => {
+  it("runs skills + mcp when no target is supplied", async () => {
     await writeFixtureSkill("browserops", "# main");
-    await writeFixtureExtension();
     const report = await runSync();
     expect(report.skills).toBeDefined();
-    expect(report.extension).toBeDefined();
     expect(report.mcp).toBeDefined();
   });
 
   it("runs only the targets explicitly listed", async () => {
     await writeFixtureSkill("browserops", "# main");
-    await writeFixtureExtension();
     const report = await runSync({ targets: ["skills"] });
     expect(report.skills).toBeDefined();
-    expect(report.extension).toBeUndefined();
     expect(report.mcp).toBeUndefined();
   });
 
-  it("expands `all` to skills + extension + mcp", async () => {
+  it("expands `all` to skills + mcp", async () => {
     await writeFixtureSkill("browserops", "# main");
-    await writeFixtureExtension();
     const report = await runSync({ targets: ["all"] });
     expect(report.skills).toBeDefined();
-    expect(report.extension).toBeDefined();
     expect(report.mcp).toBeDefined();
   });
 });
@@ -107,33 +95,6 @@ describe("runSync skills target", () => {
     for (const r of forced.skills?.results ?? []) {
       expect(r.changed).toBe(true);
     }
-  });
-});
-
-describe("runSync extension target", () => {
-  it("copies bundled extension into <HOME>/.browserops/extension", async () => {
-    await writeFixtureExtension();
-    const report = await runSync({ targets: ["extension"] });
-    expect(report.extension?.changed).toBe(true);
-    const dest = report.extension?.dest ?? "";
-    expect(
-      await fs
-        .readFile(path.join(dest, "manifest.json"), "utf8")
-        .catch(() => null),
-    ).toBe('{"name":"test"}');
-  });
-
-  it("warns when no bundled extension dir exists", async () => {
-    const report = await runSync({ targets: ["extension"] });
-    expect(report.extension?.changed).toBe(false);
-    expect(report.extension?.message).toMatch(/bundled extension dir not found/);
-  });
-
-  it("dry-run reports a 'would refresh' message", async () => {
-    await writeFixtureExtension();
-    const report = await runSync({ targets: ["extension"], dryRun: true });
-    expect(report.extension?.changed).toBe(true);
-    expect(report.extension?.message).toMatch(/^would refresh /);
   });
 });
 
