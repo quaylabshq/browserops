@@ -16,6 +16,7 @@
 export const FEATURES = [
   "procedures",
   "gated-domains",
+  "lore",
 ] as const;
 
 export type FeatureName = (typeof FEATURES)[number];
@@ -50,6 +51,12 @@ export const FEATURE_METADATA: Record<FeatureName, FeatureMetadata> = {
       "Auto-attach CDP and bias the agent toward browser_execute_js on a curated list of rich-editor / SPA domains (Gmail, Slack, Notion, Linear, Discord, …). Extend the list via ~/.browserops/gated-domains.json.",
     stability: "experimental",
     default: true,
+  },
+  lore: {
+    description:
+      "Cross-agent lore store at ~/browserops/lore/. Save/search/get/delete named markdown entries via MCP — visible to every MCP client (Cursor, Zed, Claude Code, custom SDK). Lets agents teach each other lessons that outlive a single session.",
+    stability: "experimental",
+    default: false,
   },
 };
 
