@@ -3,24 +3,13 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "tsup";
 
-// Copy examples/procedures/** into dist/seed/ so the published npm package
-// can seed first-start users without a separate post-install step. seed.ts
-// resolves dist/seed/ as its highest-priority bundled-dir candidate.
+// Copy skills/browserops.md into dist/assets/skill.md so the published npm
+// package can serve the skill prompt without a separate post-install step.
+// prompts.ts resolves dist/assets/skill.md as its highest-priority candidate.
 const here = path.dirname(fileURLToPath(import.meta.url));
-const examplesDir = path.resolve(here, "..", "..", "examples", "procedures");
-const seedDir = path.resolve(here, "dist", "seed");
+const assetsDir = path.resolve(here, "dist", "assets");
 const skillSrc = path.resolve(here, "..", "..", "skills", "browserops.md");
-const skillDest = path.resolve(seedDir, "skill.md");
-
-async function copyExamplesIntoDist(): Promise<void> {
-  try {
-    await fs.access(examplesDir);
-  } catch {
-    return; // examples dir absent — nothing to seed
-  }
-  await fs.rm(seedDir, { recursive: true, force: true });
-  await fs.cp(examplesDir, seedDir, { recursive: true });
-}
+const skillDest = path.resolve(assetsDir, "skill.md");
 
 async function copySkillIntoDist(): Promise<void> {
   try {
@@ -31,6 +20,7 @@ async function copySkillIntoDist(): Promise<void> {
     );
     return;
   }
+  await fs.mkdir(assetsDir, { recursive: true });
   await fs.copyFile(skillSrc, skillDest);
 }
 
@@ -45,7 +35,6 @@ export default defineConfig({
   dts: false,
   noExternal: ["@browserops/shared"],
   onSuccess: async () => {
-    await copyExamplesIntoDist();
     await copySkillIntoDist();
   },
 });

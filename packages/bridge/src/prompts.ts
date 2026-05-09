@@ -34,8 +34,8 @@ function skillCandidates(): string[] {
   const here = path.dirname(fileURLToPath(import.meta.url));
   return [
     userOverride,
-    // Published layout: dist/seed/skill.md  (this file is at dist/index.js after bundling)
-    path.resolve(here, "seed", "skill.md"),
+    // Published layout: dist/assets/skill.md  (this file is at dist/daemon.js after bundling)
+    path.resolve(here, "assets", "skill.md"),
     // Dev layout: packages/bridge/src/ → repoRoot/skills/browserops.md
     path.resolve(here, "..", "..", "..", "..", "skills", "browserops.md"),
     // Dist dev layout: packages/bridge/dist/ → repoRoot/skills/browserops.md
