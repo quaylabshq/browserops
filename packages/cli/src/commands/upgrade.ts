@@ -41,9 +41,9 @@ export async function runUpgrade(opts: { restart?: boolean }): Promise<void> {
     });
   }
 
-  // Refresh skills, extension files, and any installed MCP-client config in one
-  // pass. Project rules (.cursor/rules/, .windsurfrules, …) deliberately stay
-  // opt-in via `browserops install-rules` — upgrade may run from any cwd.
+  // Refresh skills and any installed MCP-client config in one pass. Project
+  // rules (.cursor/rules/, .windsurfrules, …) deliberately stay opt-in via
+  // `browserops install-rules` — upgrade may run from any cwd.
   await runUpgradeSync();
 
   if (opts.restart !== false) {
@@ -52,7 +52,7 @@ export async function runUpgrade(opts: { restart?: boolean }): Promise<void> {
 }
 
 async function runUpgradeSync(): Promise<void> {
-  const report = await runSync({ targets: ["skills", "extension", "mcp"] });
+  const report = await runSync({ targets: ["skills", "mcp"] });
 
   for (const r of report.skills?.results ?? []) {
     if (r.changed) {
@@ -64,11 +64,6 @@ async function runUpgradeSync(): Promise<void> {
   }
   for (const f of report.skills?.failed ?? []) {
     warn(`skill ${f.skillName}: ${f.error.message}`);
-  }
-
-  if (report.extension) {
-    if (report.extension.changed) ok(`extension: ${report.extension.message}`);
-    else info(`extension: ${report.extension.message}`);
   }
 
   for (const { id, result } of report.mcp ?? []) {
