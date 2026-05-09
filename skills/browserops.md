@@ -241,26 +241,19 @@ Common chord recipes:
 - Always before planning a flow. A composite procedure covers the whole flow in one `procedures_get`; don't re-plan its steps, just call the primitives it lists.
 - If you find yourself writing a 15-step plan from scratch for a common flow, stop and search again — you probably missed an existing procedure.
 
-### `procedures_save` / `procedures_promote` / `procedures_delete`
+### `procedures_save` / `procedures_delete`
 
 - **Never save an untested procedure.** Run it end-to-end in the session, fix what breaks, then save.
-- A procedure is trusted only once `success_count ≥ 1` *and* the live UI still matches.
-- `procedures_promote` moves a session-scoped procedure to the user's library — only promote after you've observed it succeed on the actual target site.
-
-### `procedures_compile` (recording → procedure)
-
-- Best tool for codifying a flow you just did by hand. With `BROWSEROPS_TRACE=1` set on the bridge, every successful run produces a JSONL trace at `~/browserops/traces/`. Pass the trace id to `procedures_compile` and it emits a candidate YAML — review, tune, `procedures_save`.
-- The compiler derives loose `expected_effect` assertions from observed effects. Tighten or relax these by hand before saving if the defaults are too strict/loose.
+- A procedure is trusted only once it has been saved with `bump_success: true` (which flips status:draft → status:trusted) *and* the live UI still matches what you verified.
 
 ### `procedures_execute`
 
-- Replays a saved procedure step-by-step, checking expected effects at each step. Halts on divergence. Use when reproducing a flaky flow for debugging, or when the user wants a dry-run before committing.
+- Replays a saved procedure step-by-step, checking expected effects at each step. Halts on divergence. Use when reproducing a flaky flow for debugging, when the user wants a dry-run before committing, or as the verification step after authoring a draft.
 
-### Auto-teach (`procedures_autoteach_*`)
+### Authoring new procedures (`browserops-teach` skill)
 
-- For "learn to do X then remember it" requests, switch to the **auto-teach skill** — it owns the consent flow, the per-run replay loop, the side-effect policies, and the failure-mode map for the optimization loop. Don't drive the loop from this file.
-- Available only when `procedures_autoteach_start` is in your tool catalogue (the `autoteach` feature is opt-in: `browserops feature enable autoteach`). If the tool family is missing, fall through to teach mode + manual save instead.
-- Always run `procedures_search` first. Auto-teach is for new flows; an existing trusted procedure scoring ≥0.5 wins by default.
+- For "learn to do X then remember it" requests, switch to the **`browserops-teach` skill** at `~/.claude/skills/browserops-teach/SKILL.md` — it owns the autonomous flow end-to-end (pre-flight reuse check, the three hard safety gates, the per-app safe-dummy registry, the in-context YAML authoring, the goal-grounded verification predicate). Don't drive the flow from this file.
+- Always run `procedures_search` first. The skill is for new flows; an existing trusted procedure scoring ≥0.5 wins by default.
 
 ---
 

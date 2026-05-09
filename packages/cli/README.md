@@ -93,7 +93,7 @@ Once registered as an MCP server, prompt-aware clients (Claude Code, Cursor, Con
 
 **Media:** `browser_screenshot`
 
-**Procedure runtime:** `procedures_list` · `procedures_search` · `procedures_get` · `procedures_save` · `procedures_promote` · `procedures_delete` · `procedures_compile` · `procedures_execute`
+**Procedure runtime:** `procedures_search` · `procedures_get` · `procedures_save` · `procedures_delete` · `procedures_execute`
 
 ## Approval mode
 
