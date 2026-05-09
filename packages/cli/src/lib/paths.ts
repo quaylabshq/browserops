@@ -21,7 +21,6 @@ export const daemonLogPath = (): string => join(STATE_DIR, "daemon.log");
 export const daemonPidPath = (): string => join(STATE_DIR, DAEMON_PIDFILE_FILENAME);
 export const daemonSocketPath = (): string => join(STATE_DIR, DAEMON_SOCKET_FILENAME);
 export const configPath = (): string => join(STATE_DIR, "config.json");
-export const extensionInstallDir = (): string => join(STATE_DIR, "extension");
 
 /**
  * Resolve the bundled-asset directory inside the published CLI package
