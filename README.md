@@ -66,11 +66,11 @@ browserops doctor            # diagnose Node / port / token / extension / client
 browserops upgrade           # bump the global install + refresh extension files
 
 browserops feature list                # show experimental features and their state
-browserops feature enable <name>       # opt into procedures, teach, or autoteach
+browserops feature enable <name>       # opt into procedures or gated-domains
 browserops feature disable <name>      # opt out
 ```
 
-`procedures`, `teach`, and `autoteach` all ship as **experimental** features — off by default. With everything off, your agent gets the 26 always-on `browser_*` tools and nothing else: minimum token overhead for users who only want basic browser automation. Opt in with `browserops feature enable procedures` (or `teach`, or `autoteach`) and run `browserops restart` so the daemon broadcasts the new feature set to the extension. Auto-teach requires `procedures` (it saves into the procedure store); demo-mode auto-teach also requires `teach`.
+`procedures` ships as an **experimental** feature — off by default. With it off, your agent gets the always-on `browser_*` tools and nothing else: minimum token overhead for users who only want basic browser automation. Opt in with `browserops feature enable procedures` and run `browserops restart` so the daemon broadcasts the new feature set to the extension. Once on, the agent gets the procedure-store tools (`procedures_search`, `_get`, `_save`, `_delete`, `_execute`) and the `browserops-teach` skill that authors new procedures autonomously.
 
 ### Per-project rules (optional)
 
@@ -247,55 +247,41 @@ Full JSON schemas for each tool are declared in `packages/shared/src/tools.ts`.
 - Click / type fire synthetic DOM events (`isTrusted: false`). Sites that hard-check trusted events (reCAPTCHA, some banks) will refuse them. A CDP-based trusted-events path is planned for v2.
 - `browser_screenshot` with `full_page: true` returns `INTERNAL` — viewport-only in v1.
 
-## Procedure runtime
+## Procedures
 
-> **Experimental — off by default.** Enable with `browserops feature enable procedures` (then `browserops restart`), or pick it during `browserops init`. With this feature off, the eight `procedures_*` tools are hidden from your agent's catalogue, the on-disk `~/browserops/procedures/` directory isn't seeded, and the in-process index isn't built — minimal token overhead for users who only want browser automation.
+> **Experimental — off by default.** Enable with `browserops feature enable procedures` (then `browserops restart`), or pick it during `browserops init`. With this feature off, the five `procedures_*` tools are hidden from your agent's catalogue, the on-disk `~/browserops/procedures/` directory isn't seeded, and the in-process index isn't built — minimal token overhead for users who only want browser automation.
 
-Procedures are named, parameterised, reusable action graphs that the agent can discover and replay without re-planning from a screenshot every time. They live in `~/browserops/procedures/` (user-visible, not hidden) and are surfaced through six MCP tools: `procedures_list`, `procedures_search`, `procedures_get`, `procedures_save`, `procedures_promote`, `procedures_delete`.
+Procedures are named, parameterised, reusable action graphs the agent can discover and replay without re-planning from a screenshot every time. They live in `~/browserops/procedures/` (user-visible, not hidden) and are surfaced through five MCP tools: `procedures_search`, `procedures_get`, `procedures_save`, `procedures_delete`, `procedures_execute`.
 
 The bridge auto-seeds `examples/procedures/` into `~/browserops/procedures/shared/` on first start (and on every `pnpm setup` / `node packages/bridge/dist/index.js init` run). Local copies are never overwritten — if a bundled example ships an update, the bridge logs a notice on stderr and you copy it manually if you want the new version.
 
-Procedures default to `status: draft` until you record a successful run. `procedures_search` excludes drafts unless called with `include_drafts: true`. To mark one trusted, call `procedures_save` again with `bump_success: true` after a verified run; success_count increments and status flips to `trusted` once it reaches 1.
+Procedures default to `status: draft` until verified. `procedures_search` excludes drafts by default and falls back to including them when no trusted match exists. To mark a procedure trusted, call `procedures_save` with `bump_success: true` after a verified run; status flips to `trusted` and the entry surfaces in default search.
 
 Bindings of the form `{{step.field}}` are validated at save time against the referenced tool's `outputSchema`. References to fields that don't exist on the tool's output are rejected with `PROC_SCHEMA_INVALID` before the procedure ever runs.
 
 The procedure schema and search ranking live in `packages/shared/src/procedures.ts`.
 
-Authoring checklist:
-- Search first. If an existing procedure already covers the flow, reuse it and update it instead of writing a parallel version.
-- Write leaves around real UI states. Each leaf should represent one stable transition and should not assume hidden onboarding, modal, or branching screens.
-- Test every leaf on the live site before composing it. Do not save unverified procedures.
-- Use only schema-supported fields from `packages/shared/src/procedures.ts`; do not invent `wait_for` or step-result shapes.
+### Authoring new procedures: the `browserops-teach` skill
+
+When the agent decides nothing trusted covers a flow, it invokes the **`browserops-teach`** skill (at `~/.claude/skills/browserops-teach/SKILL.md`, mirrored to `skills/browserops-teach.md`). The skill is autonomous-by-default: one user prompt in, one message out. It pre-flight checks for an existing procedure, reads lore for app priors, probes the live page directly with `browser_*` tools, drafts the YAML in-context, verifies via `procedures_execute` against a goal-grounded predicate, then saves with `bump_success: true` on a clean run.
+
+The agent asks at most one clarifying question, only when a hard safety gate fires:
+1. **Cross-user side effects with no safe self-test path** (real recipients, real visibility).
+2. **Money or account-level irreversibility** (payments, transfers, deletions, plan changes).
+3. **Goal genuinely unparseable AND no app context in tabs/lore.**
+
+For typical messaging goals like *"DM Pratham on Slack"* none of these gates fire — the agent goes silent immediately and reports once when done.
+
+This replaces the older two-stage `teach` (manual demo recorder) + `autoteach` (iterative replay-and-optimize loop) machinery, which has been removed. With autonomous-by-default, the agent watches its own `browser_*` calls and authors the YAML in its own context — no separate keystroke recorder, no bridge-side replay loop, no transient session storage.
+
+Authoring checklist (still applies when authoring procedures by hand):
+- Search first. If an existing procedure already covers the flow, reuse it instead of writing a parallel version.
+- Write leaves around real UI states. Each leaf should represent one stable transition.
+- Test every leaf on the live site before composing it. Do not save unverified procedures (or save them as drafts and only `bump_success` after verification).
+- Use only schema-supported fields from `packages/shared/src/procedures.ts`.
 - Bind outputs only when the leaf returns those exact fields, and verify the bindings against the real result.
 - Prefer explicit waits and success criteria over implicit assumptions.
-- Split setup, onboarding, and final extraction into separate procedures when they are distinct screens or branches.
 - If the UI changes, fix the leaf first, then update the composite.
-
-## Teach mode
-
-> **Experimental — off by default.** Enable with `browserops feature enable teach` (then `browserops restart`), or pick it during `browserops init`. Teach mode also requires `procedures` enabled (since its output is a procedure draft). Both ship off by default to keep the agent's tool catalogue minimal for users who don't need them.
-
-Teach mode lets you demonstrate a flow once in your real browser while your agent watches live, then turns the recording into a reusable procedure. The whole workflow is agent-driven — there is no "record" button in the popup.
-
-**How to use it.** Just tell your agent something like *"I don't think you have a procedure for this — watch what I do."* The agent calls the bridge's teach tools, you demonstrate the flow normally (clicking through pages, typing into fields, navigating between tabs — capture is **all-tabs** by default, not just the one in front of you), and the agent observes the timeline live as you work. When you're done, say *"that's the flow"* and the agent stops the session, replays it to confirm it works, and saves it as a procedure.
-
-**Privacy: redaction is at capture, not afterthought.** The content script blanks any password, OTP, or secret-pattern field at capture time before the value ever leaves the page. Redacted fields surface as inputs the agent will ask you for at run time, not constants baked into the saved procedure. Default secret patterns: `sk-*`, `AKIA*`, `ghp_*`, `xox*-*`, JWTs.
-
-**The recording indicator.** While a session is active the toolbar badge shows red `REC` text and the popup gains a one-row red bar with an emergency Stop button. The badge is on regardless of whether the bridge is connected — capture is local to the extension; you'll always see when it's on.
-
-**Storage.** Each session is two files in `~/browserops/teach-sessions/`: `<session_id>.jsonl` (one event per line) and `<session_id>.meta.json` (sidecar with start/stop times and event count). Override the location with `BROWSEROPS_TEACH_DIR`.
-
-## Auto-teach
-
-> **Experimental — off by default.** Enable with `browserops feature enable autoteach` (then `browserops restart`). Auto-teach also requires `procedures` enabled; demo mode (the default) additionally requires `teach`. Available tools: nine `procedures_autoteach_*` operations behind the `autoteach` flag.
-
-Auto-teach turns one user demonstration (or one cold-start exploration) into a procedure that the agent then iteratively replays-and-optimizes until the metrics stop improving. Optimization is a discrete gradient descent over the draft: each replay tries one change (cache a fragile selector, swap a click to a faster path, tighten a wait_for, split a leaf), keeps it if the run improved, reverts if it regressed.
-
-**How to use it.** Tell your agent *"learn to do X"* — for example *"learn to send a Slack DM to dummy_user"*. The agent invokes the auto-teach skill, asks four pre-flight questions in one message (goal, demo-vs-explore mode, side-effect policy, run budget), kicks off a teach recording (in demo mode) or starts driving the browser itself (in explore mode), distills the run, and then replays it 5–10 times under one optimization at a time. When two consecutive runs are noop, the loop converges and promotes the leaves + composite into the procedures store as trusted.
-
-**Side-effect handling.** The distiller flags any leaf that exercises a destructive surface (button text matching `Send|Pay|Post|Delete|Transfer`, navigation to `/confirm`/`/success` URLs after a network burst). Three policies the user picks during consent: `use_dummies` (replay with safe substitutes — e.g. dummy email recipient), `pause_at_destructive` (optimize the leading non-destructive leaves only; the destructive leaf runs once at finalize), `read_only_only` (refuse the session if any leaf is destructive). Inputs feeding destructive surfaces get marked `destructive: true` on the saved procedure so future callers can require dummies.
-
-**Storage.** Each session is a directory under `~/browserops/autoteach-sessions/<session_id>/`: `session.json` (metadata + consent), `trace.jsonl` (per-run browser_* records), `runs.jsonl` (per-run metrics + optimization tried), `drafts/v<N>.yaml` (distiller output at iteration N). Override the root with `BROWSEROPS_AUTOTEACH_DIR`.
 
 ## Gated domains
 
@@ -361,9 +347,7 @@ Currently ~220 unit tests total across shared (envelope guards, tool catalogue i
 | `BROWSEROPS_LOG_LEVEL` | `normal` | `normal` truncates strings > 200 chars; `audit` logs full payloads |
 | `BROWSEROPS_APPROVAL` | `auto` | `auto` (default) or `gate`; controls approval mode for risky actions |
 | `BROWSEROPS_TRACE` | unset | `=1` writes trace events including auto-approvals to `~/.browserops/trace.jsonl` |
-| `BROWSEROPS_TEACH_DIR` | `~/browserops/teach-sessions` | Override the directory where teach-mode sessions are recorded |
-| `BROWSEROPS_AUTOTEACH_DIR` | `~/browserops/autoteach-sessions` | Override the directory where auto-teach sessions are persisted |
-| `BROWSEROPS_FEATURES` | unset | Comma-separated experimental feature names to force-enable (e.g. `teach,procedures`). Overrides `~/.browserops/config.json` when explicitly set; an empty string disables everything. Persistent toggles use `browserops feature enable/disable <name>` instead. |
+| `BROWSEROPS_FEATURES` | unset | Comma-separated experimental feature names to force-enable (e.g. `procedures,gated-domains`). Overrides `~/.browserops/config.json` when explicitly set; an empty string disables everything. Persistent toggles use `browserops feature enable/disable <name>` instead. |
 
 ## Troubleshooting
 
