@@ -24,7 +24,7 @@ You can also use `pnpm add -g browserops` or run ad-hoc with `npx browserops`.
 browserops init
 ```
 
-This is a one-shot wizard. It mints `~/.browserops/token`, creates an empty `~/browserops/procedures/shared/` directory, starts the bridge daemon on `127.0.0.1:57321`, copies the unpacked Chrome extension to `~/.browserops/extension/`, then detects your installed MCP clients (Claude Code, Cursor, Zed, Continue, Windsurf, Codex) and offers to register `browserops` in each of their configs. Re-running it is safe and idempotent.
+This is a one-shot wizard. It mints `~/.browserops/token`, creates an empty `~/browserops/procedures/shared/` directory, starts the bridge daemon on `127.0.0.1:57321`, then detects your installed MCP clients (Claude Code, Cursor, Zed, Continue, Windsurf, Codex) and offers to register `browserops` in each of their configs. Re-running it is safe and idempotent.
 
 Flags:
 - `--yes` — non-interactive (accept all detected clients)
@@ -32,11 +32,13 @@ Flags:
 - `--client claude-code,cursor` — explicit subset
 - `--dry-run` — print diffs, don't write
 
-### 3. Pair the Chrome extension
+### 3. Install the Chrome extension
 
-1. Open `chrome://extensions`, toggle **Developer mode** on (top right).
-2. Click **Load unpacked** and select `~/.browserops/extension/` (the path was copied to your clipboard by `init`).
-3. An onboarding tab opens automatically — click **Confirm & connect**. Chrome's toolbar icon turns green within a second.
+Install the published extension from the Chrome Web Store:
+
+[**browserops on the Chrome Web Store**](https://chromewebstore.google.com/detail/browserops/fcjcldlmaoincljnghkbhhalnjfmbhnp)
+
+An onboarding tab opens automatically after install — click **Confirm & connect**. Chrome's toolbar icon turns green within a second.
 
 ### 4. Use it
 
@@ -62,9 +64,9 @@ browserops start             # bring the daemon up (no-op if already running)
 browserops stop
 browserops restart
 browserops logs -f           # tail ~/.browserops/log.jsonl
-browserops doctor            # diagnose Node / port / token / extension / clients / features
+browserops doctor            # diagnose Node / port / token / clients / features
 browserops upgrade           # bump the global install + run `browserops sync` + restart
-browserops sync              # refresh skills + extension + MCP-client config to match the installed package
+browserops sync              # refresh skills + MCP-client config to match the installed package
 browserops sync skills       # only refresh ~/.claude/skills/<name>/SKILL.md
 browserops sync --dry-run    # preview without writing
 
@@ -359,6 +361,8 @@ pnpm setup
 - `packages/bridge/dist/index.js`     — the `browserops-shim` MCP server binary
 - `packages/extension/dist/`          — the unpacked Chrome extension
 
+For local development, load the unpacked extension from `packages/extension/dist/` via `chrome://extensions` → **Load unpacked**, instead of installing from the Chrome Web Store. That way you're testing your local changes.
+
 ## Dev loop
 
 ```bash
@@ -398,7 +402,7 @@ Currently ~220 unit tests total across shared (envelope guards, tool catalogue i
 
 ## Troubleshooting
 
-`browserops doctor` checks Node version, port availability, token presence, control-socket reachability, bundled-extension state, and which client binaries are on PATH. Start there.
+`browserops doctor` checks Node version, port availability, token presence, control-socket reachability, and which client binaries are on PATH. Start there.
 
 **Extension shows "disconnected" after the client is running.**
 Check `~/.browserops/log.jsonl` — look for `{"dir":"system","event":"boot"}`. If absent, the bridge didn't launch. Try `browserops status` (is the daemon up?) and `browserops doctor`. If the bridge is up but the extension can't reach it, confirm port and host in the extension's options page match the bridge.
