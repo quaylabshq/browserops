@@ -255,6 +255,29 @@ Common chord recipes:
 - For "learn to do X then remember it" requests, switch to the **`browserops-teach` skill** at `~/.claude/skills/browserops-teach/SKILL.md` — it owns the autonomous flow end-to-end (pre-flight reuse check, the three hard safety gates, the per-app safe-dummy registry, the in-context YAML authoring, the goal-grounded verification predicate). Don't drive the flow from this file.
 - Always run `procedures_search` first. The skill is for new flows; an existing trusted procedure scoring ≥0.5 wins by default.
 
+### `lore_save` / `lore_search` / `lore_get` / `lore_delete`
+
+> **Experimental — opt-in.** Gated behind the `lore` feature; off by default. Tools only appear in the catalogue once the user has run `browserops feature enable lore`. With the feature off, surface "the user hasn't enabled cross-agent lore" and continue without it.
+
+A small store at `~/browserops/lore/<name>.md` that any MCP client can read or write. The point is **cross-agent persistence**: a lesson saved here from a Claude Code session is visible to a Cursor or Zed session opening the same browserops bridge later. Treat it as the deliberate, shared layer above Claude Code's own auto-memory at `~/.claude/projects/.../memory/` (which stays Claude-only by definition).
+
+**When to reach for it.** Save a lore entry through `lore_save` when the lesson is:
+
+- About browserops behavior, browser-flow gotchas, or selectors that survive across sessions.
+- Useful to a different agent (Cursor, Zed, custom SDK) that might pick up the same browserops bridge.
+- Stable enough to outlive the current conversation.
+
+**When *not* to.** If the lesson is genuinely Claude-private — keybinding preferences, response-style quirks, anything a Cursor session would never use — leave it in the auto-lore store. Don't pollute the shared store.
+
+**Per-tool quick reference:**
+
+- `lore_save({name, description, type, body, replace?})` — `name` matches `^[a-z][a-z0-9._-]{0,79}$`; `type` is one of `user | feedback | project | reference`. Duplicate names reject with `LORE_ALREADY_EXISTS` unless `replace:true`. Returns `{saved, path, created}`.
+- `lore_search({query, type?, limit?, min_score?})` — coverage-based ranker over name/description/type/body. Returns metadata-only matches (`name`, `description`, `type`, `score`, `snippet`). `min_score` defaults to 0.2 — drop to 0.1 when looking for soft matches, leave alone for high-confidence hits.
+- `lore_get({name})` — returns `{meta, body, path}`. Call after `lore_search` once you've decided which entry to use.
+- `lore_delete({name})` — removes the file. `LORE_NOT_FOUND` if it doesn't exist.
+
+**Search before saving.** Before writing a new lore entry, run `lore_search` on the same tokens — if a similar entry already exists, prefer `replace:true` over creating a near-duplicate.
+
 ---
 
 ## 5. Failure mode → fix-it map
