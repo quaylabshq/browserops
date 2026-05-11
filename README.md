@@ -63,12 +63,17 @@ browserops stop
 browserops restart
 browserops logs -f           # tail ~/.browserops/log.jsonl
 browserops doctor            # diagnose Node / port / token / extension / clients / features
-browserops upgrade           # bump the global install + refresh extension files
+browserops upgrade           # bump the global install + run `browserops sync` + restart
+browserops sync              # refresh skills + extension + MCP-client config to match the installed package
+browserops sync skills       # only refresh ~/.claude/skills/<name>/SKILL.md
+browserops sync --dry-run    # preview without writing
 
 browserops feature list                # show experimental features and their state
-browserops feature enable <name>       # opt into procedures or gated-domains
+browserops feature enable <name>       # opt into procedures, gated-domains, or memory
 browserops feature disable <name>      # opt out
 ```
+
+**Heads-up on first sync after upgrading:** the next `browserops sync` (or `browserops upgrade`) installs the `browserops-teach` skill at `~/.claude/skills/browserops-teach/SKILL.md` for the first time on machines that were on an earlier package version — earlier releases shipped the skill in the repo but not in the published CLI bundle, so it was never installable. Existing `~/.claude/skills/browserops/SKILL.md` is refreshed in place, with a timestamped `.bak` if any local edits were detected.
 
 `procedures` ships as an **experimental** feature — off by default. With it off, your agent gets the always-on `browser_*` tools and nothing else: minimum token overhead for users who only want basic browser automation. Opt in with `browserops feature enable procedures` and run `browserops restart` so the daemon broadcasts the new feature set to the extension. Once on, the agent gets the procedure-store tools (`procedures_search`, `_get`, `_save`, `_delete`, `_execute`) and the `browserops-teach` skill that authors new procedures autonomously.
 
