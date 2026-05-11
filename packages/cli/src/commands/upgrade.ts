@@ -1,10 +1,9 @@
-import * as fs from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { spawn, execFile } from "node:child_process";
-import { bundledAssetsDir, extensionInstallDir, STATE_DIR } from "../lib/paths.js";
-import { ok, info, err, warn } from "../lib/ui.js";
+import { c, dim, info, ok, warn } from "../lib/ui.js";
 import { runRestart } from "./restart.js";
+import { runSync } from "./sync.js";
 
 export async function runUpgrade(opts: { restart?: boolean }): Promise<void> {
   const installMethod = await detectInstallMethod();
@@ -21,11 +20,48 @@ export async function runUpgrade(opts: { restart?: boolean }): Promise<void> {
     warn("  pnpm add -g browserops@latest");
   }
 
-  await refreshExtensionFiles();
+  // Refresh skills, extension files, and any installed MCP-client config in one
+  // pass. Project rules (.cursor/rules/, .windsurfrules, …) deliberately stay
+  // opt-in via `browserops install-rules` — upgrade may run from any cwd.
+  await runUpgradeSync();
 
   if (opts.restart !== false) {
     await runRestart();
   }
+}
+
+async function runUpgradeSync(): Promise<void> {
+  const report = await runSync({ targets: ["skills", "extension", "mcp"] });
+
+  for (const r of report.skills?.results ?? []) {
+    if (r.changed) {
+      const tail = r.backupPath ? ` ${dim(`(backup: ${r.backupPath})`)}` : "";
+      ok(`skill ${r.skillName}: ${r.message}${tail}`);
+    } else {
+      info(`skill ${r.skillName}: ${r.message}`);
+    }
+  }
+  for (const f of report.skills?.failed ?? []) {
+    warn(`skill ${f.skillName}: ${f.error.message}`);
+  }
+
+  if (report.extension) {
+    if (report.extension.changed) ok(`extension: ${report.extension.message}`);
+    else info(`extension: ${report.extension.message}`);
+  }
+
+  for (const { id, result } of report.mcp ?? []) {
+    if (result.changed) {
+      const tail = result.backupPath ? ` ${dim(`(backup: ${result.backupPath})`)}` : "";
+      ok(`mcp ${id}: ${result.message}${tail}`);
+    } else {
+      info(`mcp ${id}: ${result.message}`);
+    }
+  }
+
+  process.stdout.write(
+    `\n${dim(`Per-project rules don't auto-sync — run ${c.cyan("browserops install-rules")} from inside a project to refresh those.`)}\n`,
+  );
 }
 
 async function detectInstallMethod(): Promise<"npm" | "pnpm" | null> {
@@ -68,32 +104,3 @@ function runShell(cmd: string, args: string[]): Promise<void> {
   });
 }
 
-async function refreshExtensionFiles(): Promise<void> {
-  const src = join(bundledAssetsDir(), "extension");
-  const dest = extensionInstallDir();
-
-  try {
-    await fs.access(src);
-  } catch {
-    warn("bundled extension directory not found — skipping file refresh");
-    return;
-  }
-
-  await fs.mkdir(dest, { recursive: true });
-  await copyDir(src, dest);
-  ok(`extension files refreshed at ${dest} — reload it in chrome://extensions`);
-}
-
-async function copyDir(src: string, dest: string): Promise<void> {
-  const entries = await fs.readdir(src, { withFileTypes: true });
-  for (const entry of entries) {
-    const srcPath = join(src, entry.name);
-    const destPath = join(dest, entry.name);
-    if (entry.isDirectory()) {
-      await fs.mkdir(destPath, { recursive: true });
-      await copyDir(srcPath, destPath);
-    } else {
-      await fs.copyFile(srcPath, destPath);
-    }
-  }
-}
