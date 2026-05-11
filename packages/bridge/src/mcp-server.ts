@@ -35,7 +35,7 @@ import type { GatedDomainMatcher } from "./gated-domains.js";
 import { buildProcedureHandlers } from "./procedures/handlers.js";
 import { LORE_HANDLERS } from "./lore/handlers.js";
 import { buildServerInstructions } from "./server-instructions.js";
-import { listPrompts, getPrompt } from "./prompts.js";
+import { createPromptRegistry } from "./prompts.js";
 import { checkBreaker, recordResult as recordBreakerResult } from "./circuit-breaker.js";
 
 /**
@@ -250,11 +250,15 @@ export class McpBridgeServer {
       return result as unknown as { content: Array<{ type: "text"; text: string }> };
     });
 
-    this.server.setRequestHandler(ListPromptsRequestSchema, async () => listPrompts());
+    const promptRegistry = createPromptRegistry(this.deps.enabledFeatures);
+
+    this.server.setRequestHandler(ListPromptsRequestSchema, async () =>
+      promptRegistry.listPrompts(),
+    );
 
     this.server.setRequestHandler(GetPromptRequestSchema, async (req) => {
       const args = (req.params.arguments ?? {}) as Record<string, string>;
-      return getPrompt(req.params.name, args);
+      return promptRegistry.getPrompt(req.params.name, args);
     });
   }
 
