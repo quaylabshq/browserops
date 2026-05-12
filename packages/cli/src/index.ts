@@ -31,11 +31,13 @@ import { runInstallSkill } from "./commands/install-skill.js";
 import { runConfig } from "./commands/config.js";
 import { runFeature } from "./commands/feature.js";
 import { runSyncCommand } from "./commands/sync.js";
+import { runTelemetry } from "./commands/telemetry.js";
 import { runClaudeLauncher } from "./launchers/claude.js";
 import { runCursorLauncher } from "./launchers/cursor.js";
 import { runCodexLauncher } from "./launchers/codex.js";
 import { dispatchLauncher } from "./launchers/dispatch.js";
 import { getDefaultLauncher } from "./lib/config.js";
+import { initCliTelemetry, getCliTelemetry } from "./lib/telemetry.js";
 import { err, info, dim } from "./lib/ui.js";
 
 const KNOWN_SUBCOMMANDS = new Set([
@@ -52,6 +54,7 @@ const KNOWN_SUBCOMMANDS = new Set([
   "config",
   "feature",
   "sync",
+  "telemetry",
 ]);
 
 const cli = cac("browserops");
@@ -134,6 +137,13 @@ cli
     runSyncCommand(target, opts),
   );
 
+cli
+  .command(
+    "telemetry [action]",
+    "Inspect or change anonymous usage telemetry (action: status, on, off)",
+  )
+  .action((action: string | undefined) => runTelemetry(action));
+
 // Top-level launcher flags. cac surfaces these as --claude, --cursor, --codex
 // on the root command (i.e. `browserops --claude "task"`).
 cli
@@ -153,25 +163,56 @@ async function main(): Promise<void> {
   const rawFirst = process.argv[2];
   const isSubcommand = typeof rawFirst === "string" && KNOWN_SUBCOMMANDS.has(rawFirst);
 
+  const startMs = Date.now();
+  const initRes = await initCliTelemetry(CLI_VERSION).catch(() => ({
+    enabled: false,
+    installCreated: false,
+  }));
+  if (initRes.installCreated && initRes.enabled) {
+    process.stderr.write(
+      `${dim("·")} browserops sends anonymous usage telemetry. Disable with: ${"browserops telemetry off"}\n`,
+    );
+  }
+  const commandLabel = isSubcommand ? rawFirst : "<launcher>";
+  let exitCode = 0;
+  const recordCli = (): void => {
+    getCliTelemetry()?.capture("cli_command_invoked", {
+      command: commandLabel,
+      exit_code: exitCode,
+      duration_ms: Date.now() - startMs,
+    });
+  };
+  const flushTelemetry = async (): Promise<void> => {
+    try { await getCliTelemetry()?.flush(1500); } catch { /* swallow */ }
+  };
+
   // --claude/--cursor/--codex force-route, regardless of whether a positional
   // is also present. They take precedence over default-launcher routing.
   if (!isSubcommand) {
     if (typeof opts["claude"] === "string") {
       await runClaudeLauncher(opts["claude"] as string);
+      recordCli();
+      await flushTelemetry();
       return;
     }
     if (typeof opts["cursor"] === "string") {
       await runCursorLauncher(opts["cursor"] as string);
+      recordCli();
+      await flushTelemetry();
       return;
     }
     if (typeof opts["codex"] === "string") {
       await runCodexLauncher(opts["codex"] as string);
+      recordCli();
+      await flushTelemetry();
       return;
     }
   }
 
   if (isSubcommand) {
     await cli.runMatchedCommand();
+    recordCli();
+    await flushTelemetry();
     return;
   }
 
@@ -190,15 +231,20 @@ async function main(): Promise<void> {
       );
     }
     await dispatchLauncher(id, task);
+    recordCli();
+    await flushTelemetry();
     return;
   }
 
   // Bare invocation: show help.
   cli.outputHelp();
+  recordCli();
+  await flushTelemetry();
 }
 
-main().catch((e: unknown) => {
+main().catch(async (e: unknown) => {
   const msg = e instanceof Error ? (e.stack ?? e.message) : String(e);
   err(`browserops: ${msg}`);
+  try { await getCliTelemetry()?.flush(1000); } catch { /* swallow */ }
   process.exit(1);
 });
