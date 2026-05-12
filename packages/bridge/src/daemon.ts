@@ -26,7 +26,7 @@ import { McpBridgeServer } from "./mcp-server.js";
 import { RateLimiter } from "./rate-limiter.js";
 import { SocketServerTransport } from "./socket-mcp-transport.js";
 
-const VERSION = "0.0.6";
+const VERSION = "0.0.7";
 
 interface ActiveSession {
   session: DaemonSession;
