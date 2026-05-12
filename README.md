@@ -328,6 +328,8 @@ Keep responses under three sentences whenever possible.
 
 There is no index manifest by design — the bridge globs the directory and parses frontmatter on every `lore_search`. Override the root with `BROWSEROPS_LORE_DIR`.
 
+When the `lore` feature is on, the MCP `initialize` instructions surfaced to your agent grow a short paragraph about `lore_save` / `_search` / `_get` / `_delete` — agents pick it up automatically on the next session. With the feature off, those tools and their documentation are stripped from both `tools/list` and the server instructions, keeping the prompt minimal.
+
 ## Gated domains
 
 > **Experimental — on by default.** Disable with `browserops feature disable gated-domains` (then `browserops restart`) if you'd rather avoid Chrome's "controlled by automation" banner on the listed domains.
