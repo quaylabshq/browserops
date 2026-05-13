@@ -1,16 +1,9 @@
 import * as fs from "node:fs/promises";
 import { closeSync, existsSync, fstatSync, openSync, readSync } from "node:fs";
-import { join } from "node:path";
-import { spawn } from "node:child_process";
 import prompts from "prompts";
 import { DEFAULT_WS_PORT, ENV } from "@browserops/shared";
 import { ensureDaemonRunning, isDaemonAlive, resolveShimBin } from "../lib/daemon.js";
-import {
-  STATE_DIR,
-  bundledAssetsDir,
-  daemonLogPath,
-  extensionInstallDir,
-} from "../lib/paths.js";
+import { STATE_DIR, daemonLogPath } from "../lib/paths.js";
 import { ok, info, warn, err, header, c, dim } from "../lib/ui.js";
 import {
   detectClients,
@@ -86,7 +79,6 @@ export async function runInit(opts: InitOpts = {}): Promise<void> {
     info("(dry-run) skipping bridge start");
   }
 
-  await copyExtensionFiles(opts.dryRun ?? false);
   await seedDefaultLauncher(opts.dryRun ?? false);
   await configureFeatures(opts);
   const emailProvided = await askForEmail(opts);
@@ -211,26 +203,6 @@ function printSafeModePolicy(): void {
     `  Turn it on:  ${c.cyan("browserops config set safe_mode true")}\n` +
     `  ${dim("Cursor has no CLI flag for this — set Settings → Agent → Auto-Run to \"Allow\".")}\n\n`,
   );
-}
-
-// ---------------------------------------------------------------------------
-
-async function copyExtensionFiles(dryRun: boolean): Promise<void> {
-  const source = join(bundledAssetsDir(), "extension");
-  const target = extensionInstallDir();
-  if (!existsSync(source)) {
-    warn(
-      "extension files not bundled in this build — load packages/extension/dist/ from the repo, or rebuild",
-    );
-    return;
-  }
-  if (dryRun) {
-    info(`would copy extension files to ${target}`);
-    return;
-  }
-  await fs.rm(target, { recursive: true, force: true });
-  await fs.cp(source, target, { recursive: true });
-  ok(`extension files at ${target}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -426,25 +398,24 @@ function parseFeatureList(raw: string): Set<FeatureName> {
 
 // ---------------------------------------------------------------------------
 
+const CHROME_WEB_STORE_URL =
+  "https://chromewebstore.google.com/detail/browserops/fcjcldlmaoincljnghkbhhalnjfmbhnp";
+
 function printNextSteps(port: number): void {
-  const ext = extensionInstallDir();
   const pair = readPairCodeFromLog();
 
   process.stdout.write("\n");
   header("Next steps");
   process.stdout.write(
-    `  1. Open ${c.cyan("chrome://extensions")} and enable Developer mode (top-right).\n`,
-  );
-  process.stdout.write(
-    `  2. Click "Load unpacked" and select:\n     ${c.bold(ext)}\n`,
+    `  1. Install the browserops Chrome extension from the Chrome Web Store:\n     ${c.cyan(CHROME_WEB_STORE_URL)}\n`,
   );
   if (pair) {
     process.stdout.write(
-      `  3. The onboarding tab opens automatically. Confirm pair code ${c.bold(pair)}.\n`,
+      `  2. The onboarding tab opens automatically. Confirm pair code ${c.bold(pair)}.\n`,
     );
   } else {
     process.stdout.write(
-      `  3. The onboarding tab opens automatically — click "Confirm & connect".\n`,
+      `  2. The onboarding tab opens automatically — click "Confirm & connect".\n`,
     );
   }
   process.stdout.write("\n");
@@ -457,8 +428,6 @@ function printNextSteps(port: number): void {
   process.stdout.write(
     `\nBridge listening on ws://127.0.0.1:${port}. Logs: ${dim("~/.browserops/log.jsonl")}\n\n`,
   );
-
-  copyToClipboardBestEffort(ext);
 }
 
 function readPairCodeFromLog(): string | undefined {
@@ -484,27 +453,3 @@ function readPairCodeFromLog(): string | undefined {
   }
 }
 
-function copyToClipboardBestEffort(text: string): void {
-  const platform = process.platform;
-  const tools: Array<[string, string[]]> =
-    platform === "darwin"
-      ? [["pbcopy", []]]
-      : platform === "win32"
-        ? [["clip", []]]
-        : [
-            ["wl-copy", []],
-            ["xclip", ["-selection", "clipboard"]],
-          ];
-  for (const [bin, args] of tools) {
-    try {
-      const child = spawn(bin, args, { stdio: ["pipe", "ignore", "ignore"] });
-      child.on("error", () => { /* ignore */ });
-      child.stdin.write(text);
-      child.stdin.end();
-      info(`(extension path copied to clipboard via ${bin})`);
-      return;
-    } catch {
-      // try next tool
-    }
-  }
-}
