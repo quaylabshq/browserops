@@ -1,23 +1,44 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { spawn, execFile } from "node:child_process";
+import { CLI_VERSION } from "../lib/version.js";
+import { getCliTelemetry } from "../lib/telemetry.js";
 import { c, dim, info, ok, warn } from "../lib/ui.js";
 import { runRestart } from "./restart.js";
 import { runSync } from "./sync.js";
 
 export async function runUpgrade(opts: { restart?: boolean }): Promise<void> {
+  const fromVersion = CLI_VERSION;
   const installMethod = await detectInstallMethod();
 
-  if (installMethod === "npm") {
-    info("upgrading via npm…");
-    await runShell("npm", ["install", "-g", "browserops@latest"]);
-  } else if (installMethod === "pnpm") {
-    info("upgrading via pnpm…");
-    await runShell("pnpm", ["add", "-g", "browserops@latest"]);
+  if (installMethod === "npm" || installMethod === "pnpm") {
+    info(`upgrading via ${installMethod}…`);
+    try {
+      const args = installMethod === "npm"
+        ? ["install", "-g", "browserops@latest"]
+        : ["add", "-g", "browserops@latest"];
+      await runShell(installMethod, args);
+      getCliTelemetry()?.capture("cli.upgrade_completed", {
+        from_version: fromVersion,
+        install_method: installMethod,
+      });
+    } catch (err) {
+      getCliTelemetry()?.capture("cli.upgrade_failed", {
+        from_version: fromVersion,
+        install_method: installMethod,
+        stage: "shell",
+      });
+      throw err;
+    }
   } else {
     warn("could not detect npm/pnpm global install — please upgrade manually");
     warn("  npm install -g browserops@latest");
     warn("  pnpm add -g browserops@latest");
+    getCliTelemetry()?.capture("cli.upgrade_failed", {
+      from_version: fromVersion,
+      install_method: "unknown",
+      stage: "shell",
+    });
   }
 
   // Refresh skills, extension files, and any installed MCP-client config in one

@@ -5,6 +5,7 @@ import {
   type FeatureState,
 } from "../lib/config.js";
 import { isDaemonAlive } from "../lib/daemon.js";
+import { getCliTelemetry } from "../lib/telemetry.js";
 import { c, dim, err, header, info, ok, warn } from "../lib/ui.js";
 
 const VALID_ACTIONS = ["list", "enable", "disable"] as const;
@@ -56,6 +57,9 @@ async function runList(): Promise<void> {
   info(
     `enable with: ${c.cyan("browserops feature enable <name>")} — restart with ${c.cyan("browserops restart")} for changes to take effect.`,
   );
+  getCliTelemetry()?.capture("cli.feature_listed", {
+    enabled_count: states.filter((s) => s.enabled).length,
+  });
 }
 
 async function runEnable(name: FeatureName): Promise<void> {
@@ -64,6 +68,7 @@ async function runEnable(name: FeatureName): Promise<void> {
     info(`${name}: already enabled`);
   } else {
     ok(`${name}: enabled`);
+    getCliTelemetry()?.capture("cli.feature_enabled", { feature_name: name });
   }
   await reloadHint();
 }
@@ -74,6 +79,7 @@ async function runDisable(name: FeatureName): Promise<void> {
     info(`${name}: already disabled`);
   } else {
     ok(`${name}: disabled`);
+    getCliTelemetry()?.capture("cli.feature_disabled", { feature_name: name });
   }
   await reloadHint();
 }
