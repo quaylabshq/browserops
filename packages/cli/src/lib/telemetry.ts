@@ -20,7 +20,6 @@ const POSTHOG_HOST = "https://us.i.posthog.com";
 const FLUSH_TIMEOUT_MS = 1_500;
 
 const TRUTHY = new Set(["1", "true", "yes", "on"]);
-const FALSY = new Set(["0", "false", "no", "off"]);
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const COMMON_PROPS = new Set([
@@ -39,29 +38,14 @@ const ALLOWED: Record<string, ReadonlySet<string>> = {
   telemetry_changed: new Set(["enabled"]),
 };
 
-function configFilePath(): string {
-  return join(homedir(), STATE_DIR_NAME, "config.json");
-}
 export function installIdFilePath(): string {
   return join(homedir(), STATE_DIR_NAME, "install-id");
 }
 
-export async function isCliTelemetryEnabled(): Promise<boolean> {
-  const env = process.env;
-  if (TRUTHY.has((env["DO_NOT_TRACK"] ?? "").trim().toLowerCase())) return false;
-  const own = env["BROWSEROPS_TELEMETRY"];
-  if (own !== undefined) {
-    const lower = own.trim().toLowerCase();
-    if (FALSY.has(lower)) return false;
-    if (TRUTHY.has(lower)) return true;
-  }
-  try {
-    const raw = await fs.readFile(configFilePath(), "utf8");
-    const parsed = JSON.parse(raw) as { telemetry?: unknown };
-    if (typeof parsed?.telemetry === "boolean") return parsed.telemetry;
-  } catch {
-    /* defaults apply */
-  }
+/** DO_NOT_TRACK env truthy → off. Anything else → on. */
+export function isCliTelemetryEnabled(): boolean {
+  const dnt = (process.env["DO_NOT_TRACK"] ?? "").trim().toLowerCase();
+  if (TRUTHY.has(dnt)) return false;
   return true;
 }
 
@@ -81,23 +65,6 @@ export async function loadOrCreateCliInstallId(): Promise<{ id: string; created:
   } catch {
     return { id, created: true };
   }
-}
-
-export async function setTelemetryEnabledInConfig(enabled: boolean): Promise<void> {
-  const path = configFilePath();
-  let current: Record<string, unknown> = {};
-  try {
-    const raw = await fs.readFile(path, "utf8");
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    if (parsed && typeof parsed === "object") current = parsed;
-  } catch {
-    /* missing or unparsable — start fresh */
-  }
-  current["telemetry"] = enabled;
-  await fs.mkdir(dirname(path), { recursive: true });
-  const tmp = `${path}.${process.pid}.tmp`;
-  await fs.writeFile(tmp, JSON.stringify(current, null, 2) + "\n", "utf8");
-  await fs.rename(tmp, path);
 }
 
 function redact(event: string, props: Record<string, unknown>): Record<string, unknown> {
@@ -128,7 +95,7 @@ export class CliTelemetry {
 
   async init(): Promise<{ enabled: boolean; installCreated: boolean }> {
     try {
-      this.enabled = await isCliTelemetryEnabled();
+      this.enabled = isCliTelemetryEnabled();
       if (!this.enabled) return { enabled: false, installCreated: false };
       const r = await loadOrCreateCliInstallId();
       this.distinctId = r.id;
