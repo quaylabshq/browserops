@@ -30,6 +30,7 @@ import { runInstallRules } from "./commands/install-rules.js";
 import { runInstallSkill } from "./commands/install-skill.js";
 import { runConfig } from "./commands/config.js";
 import { runFeature } from "./commands/feature.js";
+import { runIdentify } from "./commands/identify.js";
 import { runSyncCommand } from "./commands/sync.js";
 import { runClaudeLauncher } from "./launchers/claude.js";
 import { runCursorLauncher } from "./launchers/cursor.js";
@@ -53,6 +54,7 @@ const KNOWN_SUBCOMMANDS = new Set([
   "config",
   "feature",
   "sync",
+  "identify",
 ]);
 
 const cli = cac("browserops");
@@ -134,6 +136,15 @@ cli
   .action((target: string | undefined, opts: { force?: boolean; dryRun?: boolean }) =>
     runSyncCommand(target, opts),
   );
+
+cli
+  .command(
+    "identify",
+    "Set or clear the email associated with this install for product updates",
+  )
+  .option("--email <addr>", "Email to associate with this install")
+  .option("--clear", "Remove the previously set email")
+  .action((opts: { email?: string; clear?: boolean }) => runIdentify(opts));
 
 // Top-level launcher flags. cac surfaces these as --claude, --cursor, --codex
 // on the root command (i.e. `browserops --claude "task"`).

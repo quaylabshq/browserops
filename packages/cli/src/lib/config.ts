@@ -29,14 +29,56 @@ export interface BrowserOpsConfig {
    * Managed via `browserops feature enable/disable`, not `config set`.
    */
   features?: Partial<Record<FeatureName, boolean>>;
+  /**
+   * Optional identity. Set via `browserops identify --email X` or the
+   * email mid-nudge during `browserops init`. Read by both the CLI and
+   * the bridge daemon — the bridge sends it as a person property on
+   * every $identify it emits at boot.
+   */
+  identity?: {
+    email?: string;
+  };
+}
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+export function isValidEmail(value: string): boolean {
+  return EMAIL_RE.test(value);
+}
+
+/** Persist identity.email. Pass undefined to remove the field entirely. */
+export async function setIdentityEmail(email: string | undefined): Promise<void> {
+  const cfg = await readConfig();
+  if (email === undefined) {
+    if (!cfg.identity) return;
+    const next = { ...cfg };
+    if (next.identity) {
+      const ident = { ...next.identity };
+      delete ident.email;
+      if (Object.keys(ident).length === 0) delete next.identity;
+      else next.identity = ident;
+    }
+    await writeConfig(next);
+    return;
+  }
+  const next: BrowserOpsConfig = {
+    ...cfg,
+    identity: { ...(cfg.identity ?? {}), email },
+  };
+  await writeConfig(next);
+}
+
+export async function getIdentityEmail(): Promise<string | undefined> {
+  const cfg = await readConfig();
+  return cfg.identity?.email;
 }
 
 /**
  * Subset of BrowserOpsConfig keys managed by `browserops config set/get`.
- * `features` is excluded — it has its own dedicated `feature` subcommand
- * because the value is a sub-object, not a single primitive.
+ * `features` is excluded — it has its own dedicated `feature` subcommand.
+ * `identity` is excluded — it's managed via `browserops identify`.
  */
-export type ConfigKey = Exclude<keyof BrowserOpsConfig, "features">;
+export type ConfigKey = Exclude<keyof BrowserOpsConfig, "features" | "identity">;
 
 const VALID_LAUNCHERS: readonly LauncherId[] = ["claude", "codex", "cursor"];
 

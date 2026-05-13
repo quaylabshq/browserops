@@ -131,6 +131,9 @@ interface QueuedEvent {
   event: string;
   properties: Record<string, unknown>;
   timestamp: string;
+  $set?: Record<string, unknown>;
+  $set_once?: Record<string, unknown>;
+  $unset?: string[];
 }
 
 export class CliTelemetry {
@@ -174,17 +177,61 @@ export class CliTelemetry {
     });
   }
 
+  /**
+   * Attach person properties to the current install-id. Use $set to
+   * overwrite (e.g. last_seen) and $set_once for first-observation
+   * fields. The properties go to PostHog as-is — caller is responsible
+   * for ensuring the values are non-sensitive person attributes.
+   */
+  identify(
+    set: Record<string, unknown>,
+    setOnce: Record<string, unknown> = {},
+    unset: string[] = [],
+  ): void {
+    if (!this.enabled || !this.distinctId) return;
+    const evt: QueuedEvent = {
+      event: "$identify",
+      properties: {},
+      timestamp: new Date().toISOString(),
+    };
+    if (Object.keys(set).length > 0) evt.$set = set;
+    if (Object.keys(setOnce).length > 0) evt.$set_once = setOnce;
+    if (unset.length > 0) evt.$unset = unset;
+    this.queue.push(evt);
+  }
+
+  /**
+   * Tell PostHog that `targetAlias` (e.g. an email) is another name
+   * for the current install-id. Cross-machine merging happens via this:
+   * different install-ids that all alias to the same email become a
+   * single person in queries.
+   */
+  alias(targetAlias: string): void {
+    if (!this.enabled || !this.distinctId) return;
+    this.queue.push({
+      event: "$create_alias",
+      properties: { distinct_id: this.distinctId, alias: targetAlias },
+      timestamp: new Date().toISOString(),
+    });
+  }
+
   async flush(timeoutMs = FLUSH_TIMEOUT_MS): Promise<void> {
     if (!this.enabled || this.queue.length === 0) return;
     const batch = this.queue.splice(0);
     const body = JSON.stringify({
       api_key: process.env["BROWSEROPS_POSTHOG_KEY"] || POSTHOG_KEY,
-      batch: batch.map((e) => ({
-        event: e.event,
-        distinct_id: this.distinctId,
-        properties: e.properties,
-        timestamp: e.timestamp,
-      })),
+      batch: batch.map((e) => {
+        const out: Record<string, unknown> = {
+          event: e.event,
+          distinct_id: this.distinctId,
+          properties: e.properties,
+          timestamp: e.timestamp,
+        };
+        if (e.$set) out["$set"] = e.$set;
+        if (e.$set_once) out["$set_once"] = e.$set_once;
+        if (e.$unset) out["$unset"] = e.$unset;
+        return out;
+      }),
     });
     try {
       const host = (process.env["BROWSEROPS_POSTHOG_HOST"] || POSTHOG_HOST).replace(/\/+$/, "");
