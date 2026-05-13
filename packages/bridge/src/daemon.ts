@@ -78,7 +78,7 @@ async function main(): Promise<void> {
   const common = buildCommonProps({ bridgeVersion: VERSION });
   let totalSessions = 0;
 
-  captureEvent(telemetry, "daemon_started", {
+  captureEvent(telemetry, "root.daemon_started", {
     approval_mode: process.env[ENV.APPROVAL] === "gate" ? "gate" : "auto",
     enabled_features: [...runtime.enabledFeatures.current],
     extension_connected: runtime.wsBridge.isConnected(),
@@ -123,7 +123,7 @@ async function main(): Promise<void> {
         color: s.color,
       });
       totalSessions += 1;
-      captureEvent(telemetry, "session_created", {
+      captureEvent(telemetry, "root.session_started", {
         client_name: s.client_info.name || "unknown",
         client_version: s.client_info.version || "",
       }, common);
@@ -209,7 +209,7 @@ async function main(): Promise<void> {
             // resets each tab's Chrome group; the subsequent
             // session_ended cleans up the now-empty group.
             runtime.tabs.releaseAll(session.id);
-            captureEvent(telemetry, "session_destroyed", {
+            captureEvent(telemetry, "root.session_ended", {
               client_name: session.client_info.name || "unknown",
               duration_ms: Date.now() - session.created_at_ms,
             }, common);
@@ -235,7 +235,7 @@ async function main(): Promise<void> {
   const shutdown = (reason: string): void => {
     void (async () => {
       await runtime.logger.write({ dir: "system", event: "daemon_shutdown", reason });
-      captureEvent(telemetry, "daemon_shutdown", {
+      captureEvent(telemetry, "root.daemon_shutdown", {
         reason,
         uptime_ms: Date.now() - startedAtMs,
         total_sessions: totalSessions,

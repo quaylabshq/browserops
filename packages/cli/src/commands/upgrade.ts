@@ -10,41 +10,34 @@ import { runSync } from "./sync.js";
 export async function runUpgrade(opts: { restart?: boolean }): Promise<void> {
   const fromVersion = CLI_VERSION;
   const installMethod = await detectInstallMethod();
-  let shellOk = true;
 
-  if (installMethod === "npm") {
-    info("upgrading via npm…");
+  if (installMethod === "npm" || installMethod === "pnpm") {
+    info(`upgrading via ${installMethod}…`);
     try {
-      await runShell("npm", ["install", "-g", "browserops@latest"]);
-    } catch (err) {
-      shellOk = false;
-      throw err;
-    } finally {
-      getCliTelemetry()?.capture("upgrade_completed", {
+      const args = installMethod === "npm"
+        ? ["install", "-g", "browserops@latest"]
+        : ["add", "-g", "browserops@latest"];
+      await runShell(installMethod, args);
+      getCliTelemetry()?.capture("cli.upgrade_completed", {
         from_version: fromVersion,
-        ok: shellOk,
+        install_method: installMethod,
       });
-    }
-  } else if (installMethod === "pnpm") {
-    info("upgrading via pnpm…");
-    try {
-      await runShell("pnpm", ["add", "-g", "browserops@latest"]);
     } catch (err) {
-      shellOk = false;
-      throw err;
-    } finally {
-      getCliTelemetry()?.capture("upgrade_completed", {
+      getCliTelemetry()?.capture("cli.upgrade_failed", {
         from_version: fromVersion,
-        ok: shellOk,
+        install_method: installMethod,
+        stage: "shell",
       });
+      throw err;
     }
   } else {
     warn("could not detect npm/pnpm global install — please upgrade manually");
     warn("  npm install -g browserops@latest");
     warn("  pnpm add -g browserops@latest");
-    getCliTelemetry()?.capture("upgrade_completed", {
+    getCliTelemetry()?.capture("cli.upgrade_failed", {
       from_version: fromVersion,
-      ok: false,
+      install_method: "unknown",
+      stage: "shell",
     });
   }
 
