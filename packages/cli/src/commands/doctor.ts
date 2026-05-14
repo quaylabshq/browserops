@@ -2,10 +2,9 @@ import * as fs from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { createConnection } from "node:net";
 import { execFile } from "node:child_process";
-import { join } from "node:path";
 import { isDaemonAlive } from "../lib/daemon.js";
 import { getSafeMode, getFeatureStates } from "../lib/config.js";
-import { STATE_DIR, tokenPath, bundledAssetsDir } from "../lib/paths.js";
+import { STATE_DIR, tokenPath } from "../lib/paths.js";
 import { DEFAULT_WS_PORT, ENV } from "@browserops/shared";
 import { ok, err, info, warn } from "../lib/ui.js";
 
@@ -42,7 +41,6 @@ async function runAllChecks(): Promise<Check[]> {
     tokenCheck,
     portCheck,
     socketCheck,
-    extensionCheck,
     postureCheck,
     featuresCheck,
     ...clientChecks
@@ -52,7 +50,6 @@ async function runAllChecks(): Promise<Check[]> {
     checkToken(),
     checkPort(port),
     checkSocket(),
-    checkExtension(),
     checkPermissionPosture(),
     checkFeatures(),
     ...checkClients(),
@@ -64,7 +61,6 @@ async function runAllChecks(): Promise<Check[]> {
     tokenCheck,
     portCheck,
     socketCheck,
-    extensionCheck,
     postureCheck,
     featuresCheck,
     ...clientChecks,
@@ -163,16 +159,6 @@ async function checkSocket(): Promise<Check> {
     informational: true,
     label: alive ? "Control socket reachable" : "Control socket not reachable (bridge not running)",
   };
-}
-
-async function checkExtension(): Promise<Check> {
-  const manifestPath = join(bundledAssetsDir(), "extension", "manifest.json");
-  try {
-    await fs.access(manifestPath);
-    return { ok: true, label: "Bundled extension present" };
-  } catch {
-    return { ok: false, label: "Bundled extension missing", detail: manifestPath };
-  }
 }
 
 function checkClients(): Promise<Check>[] {

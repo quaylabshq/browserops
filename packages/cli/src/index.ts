@@ -6,7 +6,7 @@
  *   init           first-run wizard (token, procedures, daemon, MCP-client install)
  *   start/stop/restart/status/logs      daemon lifecycle
  *   doctor         diagnose install
- *   upgrade        bump CLI + bridge + extension files, prompt to reload extension
+ *   upgrade        bump CLI + bridge globally and refresh installed assets
  *   install-rules  per-project rules-slot installer (Cursor/Windsurf/Copilot)
  *   config         get/set persisted preferences (e.g. default_launcher)
  *
@@ -92,11 +92,11 @@ cli
   .action((opts) => runLogs(opts));
 
 cli
-  .command("doctor", "Diagnose install (Node, port, token, extension, client binaries)")
+  .command("doctor", "Diagnose install (Node, port, token, client binaries)")
   .action(() => runDoctor());
 
 cli
-  .command("upgrade", "Upgrade browserops globally and refresh extension files")
+  .command("upgrade", "Upgrade browserops globally and refresh skills + MCP-client config")
   .option("--no-restart", "Skip restarting the daemon after upgrade")
   .action((opts) => runUpgrade(opts));
 
@@ -129,7 +129,7 @@ cli
 cli
   .command(
     "sync [target]",
-    "Refresh installed assets to match the bundled package (target: all, skills, extension, mcp)",
+    "Refresh installed assets to match the bundled package (target: all, skills, mcp)",
   )
   .option("--force", "Skip drift detection on skills; overwrite unconditionally")
   .option("--dry-run", "Print what would change without writing")

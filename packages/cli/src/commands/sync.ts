@@ -1,27 +1,25 @@
 /**
  * `browserops sync [target]` — refresh installed assets in line with the
  * currently installed package version. Used after `npm i -g browserops@latest`
- * (and called from runUpgrade) so skills, extension files, and MCP-client
- * config snippets don't drift away from what the CLI now ships.
+ * (and called from runUpgrade) so skills and MCP-client config snippets don't
+ * drift away from what the CLI now ships.
  *
  * Targets:
- *   all        — skills + extension + mcp (default)
+ *   all        — skills + mcp (default)
  *   skills     — refresh ~/.claude/skills/<name>/SKILL.md for every bundled skill
- *   extension  — copy bundled extension into ~/.browserops/extension/
  *   mcp        — re-run the per-client MCP installer; idempotent — installers
  *                report changed:false when the existing config already points at
  *                the resolved shim invocation.
+ *
+ * The Chrome extension is no longer bundled with the CLI — users install it
+ * from the Chrome Web Store, so there's nothing for `sync` to refresh on disk.
  *
  * Per-project rules (.cursor/rules/browserops.mdc, .windsurfrules, etc.) are
  * intentionally NOT auto-synced. `runSync` may execute from any cwd; silently
  * editing rule files in a random project is surprising. The trailing hint
  * surfaces `browserops install-rules` as the explicit path.
  */
-import * as fs from "node:fs/promises";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
 import { resolveShimBin } from "../lib/daemon.js";
-import { bundledAssetsDir, extensionInstallDir } from "../lib/paths.js";
 import { c, dim, err, info, ok, warn } from "../lib/ui.js";
 import {
   detectClients,
@@ -34,7 +32,7 @@ import {
   type SkillInstallResult,
 } from "../installers/skill.js";
 
-export const SYNC_TARGETS = ["all", "skills", "extension", "mcp"] as const;
+export const SYNC_TARGETS = ["all", "skills", "mcp"] as const;
 export type SyncTarget = (typeof SYNC_TARGETS)[number];
 
 export interface SyncOpts {
@@ -48,7 +46,6 @@ export interface SyncOpts {
 
 export interface SyncReport {
   skills?: { results: SkillInstallResult[]; failed: Array<{ skillName: string; error: Error }> };
-  extension?: { changed: boolean; dest: string; message: string };
   mcp?: Array<{ id: ClientId; result: InstallResult }>;
 }
 
@@ -65,9 +62,6 @@ export async function runSync(opts: SyncOpts = {}): Promise<SyncReport> {
 
   if (targets.has("skills")) {
     report.skills = await syncSkills({ force, dryRun });
-  }
-  if (targets.has("extension")) {
-    report.extension = await syncExtension({ dryRun });
   }
   if (targets.has("mcp")) {
     report.mcp = await syncMcpClients({ dryRun });
@@ -99,7 +93,6 @@ export async function runSyncCommand(
   });
 
   printSkillReport(report.skills);
-  printExtensionReport(report.extension);
   printMcpReport(report.mcp);
 
   process.stdout.write(
@@ -124,52 +117,6 @@ async function syncSkills(opts: {
     force: opts.force,
     dryRun: opts.dryRun,
   });
-}
-
-// ---------------------------------------------------------------------------
-// syncExtension
-// ---------------------------------------------------------------------------
-
-async function syncExtension(opts: {
-  dryRun?: boolean;
-}): Promise<NonNullable<SyncReport["extension"]>> {
-  const src = join(bundledAssetsDir(), "extension");
-  const dest = extensionInstallDir();
-
-  if (!existsSync(src)) {
-    return {
-      changed: false,
-      dest,
-      message:
-        "bundled extension dir not found — rebuild with `pnpm -F @browserops/extension build && pnpm -F browserops build`",
-    };
-  }
-
-  if (opts.dryRun) {
-    return { changed: true, dest, message: `would refresh ${dest}` };
-  }
-
-  await fs.mkdir(dest, { recursive: true });
-  await copyDir(src, dest);
-  return {
-    changed: true,
-    dest,
-    message: `refreshed ${dest} (reload it in chrome://extensions)`,
-  };
-}
-
-async function copyDir(src: string, dest: string): Promise<void> {
-  const entries = await fs.readdir(src, { withFileTypes: true });
-  for (const entry of entries) {
-    const srcPath = join(src, entry.name);
-    const destPath = join(dest, entry.name);
-    if (entry.isDirectory()) {
-      await fs.mkdir(destPath, { recursive: true });
-      await copyDir(srcPath, destPath);
-    } else {
-      await fs.copyFile(srcPath, destPath);
-    }
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -233,12 +180,6 @@ function printSkillReport(report: SyncReport["skills"]): void {
   }
 }
 
-function printExtensionReport(report: SyncReport["extension"]): void {
-  if (!report) return;
-  if (report.changed) ok(`extension: ${report.message}`);
-  else info(`extension: ${report.message}`);
-}
-
 function printMcpReport(report: SyncReport["mcp"]): void {
   if (!report) return;
   if (report.length === 0) {
@@ -265,7 +206,6 @@ function resolveTargets(targets: SyncTarget[] | undefined): Set<SyncTarget> {
   for (const t of list) {
     if (t === "all") {
       out.add("skills");
-      out.add("extension");
       out.add("mcp");
     } else {
       out.add(t);
