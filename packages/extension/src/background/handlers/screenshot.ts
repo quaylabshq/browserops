@@ -162,6 +162,39 @@ async function downscaleAndEncode(
   return { base64: arrayBufferToBase64(buf), width: w, height: h };
 }
 
+/** Maximum base64-encoded image bytes returned in a tool result. Agents
+ *  consistently overflow their context envelope past ~30KB of base64 image
+ *  payload, so we re-encode at successively smaller dimensions / qualities
+ *  until we clear this budget. Picked from the post-trusted-input eval —
+ *  default-intent screenshots on 1376+ wide pages routinely came back at
+ *  60-90KB before this. */
+const SCREENSHOT_BYTE_BUDGET = 28 * 1024;
+const SCREENSHOT_FLOOR_DIM = 256;
+
+async function downscaleToBudget(
+  sourceBase64: string,
+  sourceFormat: "png" | "jpeg",
+  startMaxDimension: number,
+  startQuality: number,
+): Promise<{ base64: string; width: number; height: number }> {
+  let dim = startMaxDimension;
+  let q = startQuality;
+  let r = await downscaleAndEncode(sourceBase64, sourceFormat, dim, q);
+  // Up to 3 retries. Each backs off the longest dimension 50% (floor
+  // SCREENSHOT_FLOOR_DIM) and drops quality 20 points (floor 15). Content-rich
+  // pages typically clear the budget by attempt 2; the loop bounds the
+  // total work to ~4 encode passes worst case.
+  for (let i = 0; i < 3 && r.base64.length > SCREENSHOT_BYTE_BUDGET; i += 1) {
+    if (dim <= SCREENSHOT_FLOOR_DIM && q <= 15) break;
+    if (dim > SCREENSHOT_FLOOR_DIM) {
+      dim = Math.max(SCREENSHOT_FLOOR_DIM, Math.floor(dim / 2));
+    }
+    q = Math.max(15, q - 20);
+    r = await downscaleAndEncode(sourceBase64, sourceFormat, dim, q);
+  }
+  return r;
+}
+
 export function registerScreenshotHandler(
   router: Router,
   opts: { tabIdMap: Map<string, number> },
@@ -204,9 +237,11 @@ export function registerScreenshotHandler(
 
     // Downscale path always emits JPEG regardless of requested format (that is
     // the point of the new defaults). Callers who need true PNG should pass
-    // full_quality:true.
+    // full_quality:true. The budget-aware downscale enforces a hard ceiling
+    // on the returned base64 size so default-intent screenshots stop blowing
+    // the agent's context envelope on wide / content-rich pages.
     const captured = await captureVisible(tab.windowId, "png", 100);
-    const encoded = await downscaleAndEncode(captured, "png", maxDimension, quality);
+    const encoded = await downscaleToBudget(captured, "png", maxDimension, quality);
     const result: ScreenshotResult = {
       image_base64: encoded.base64,
       width: encoded.width,
