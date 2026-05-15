@@ -5,6 +5,7 @@ import type { RefCache } from "../ref-cache.js";
 import type { CdpManager } from "../cdp.js";
 import type { NetworkTracker } from "../network-tracker.js";
 import { withEffectObservation, checkEffectExpectation } from "./effects.js";
+import { resolveKey } from "./key-resolver.js";
 
 type ExpectEffect = "any" | "dom" | "navigation" | "none";
 
@@ -258,16 +259,36 @@ async function cdpType(cdp: CdpManager, chromeId: number, text: string): Promise
 
 async function cdpPress(
   cdp: CdpManager, chromeId: number,
-  key: string,
+  token: string,
   mods: { ctrl: boolean; alt: boolean; shift: boolean; meta: boolean },
 ): Promise<void> {
+  const k = resolveKey(token);
   const m = cdpModBits(mods);
+  // Always send key + code + windowsVirtualKeyCode + nativeVirtualKeyCode.
+  // CDP does not auto-fill the VK codes from `key` alone — legacy editors
+  // (Quill / Sheets formula bar / ProseMirror) that gate on
+  // `event.keyCode === 13` would see 0 and bail. text is emitted on
+  // keyDown only for printables, and only when no chord modifier is set
+  // so Cmd+A doesn't accidentally also insert the character "a".
+  const downParams: Record<string, unknown> = {
+    type: "keyDown",
+    key: k.key,
+    code: k.code,
+    windowsVirtualKeyCode: k.vkCode,
+    nativeVirtualKeyCode: k.vkCode,
+    modifiers: m,
+  };
+  if (k.text !== undefined && !mods.ctrl && !mods.meta) {
+    downParams["text"] = k.text;
+  }
+  await cdp.send(chromeId, "Input.dispatchKeyEvent", downParams);
   await cdp.send(chromeId, "Input.dispatchKeyEvent", {
-    type: "keyDown", key, modifiers: m,
-    ...(key.length === 1 ? { text: key } : {}),
-  });
-  await cdp.send(chromeId, "Input.dispatchKeyEvent", {
-    type: "keyUp", key, modifiers: m,
+    type: "keyUp",
+    key: k.key,
+    code: k.code,
+    windowsVirtualKeyCode: k.vkCode,
+    nativeVirtualKeyCode: k.vkCode,
+    modifiers: m,
   });
 }
 
@@ -793,6 +814,9 @@ function dispatchEnterAndSubmit(
 
 function injectedPress(
   key: string,
+  code: string,
+  vkCode: number,
+  text: string | null,
   modifiers: { ctrl: boolean; alt: boolean; shift: boolean; meta: boolean },
 ): void {
   const active: HTMLElement =
@@ -800,21 +824,32 @@ function injectedPress(
     document.body;
   const init: KeyboardEventInit = {
     key,
-    code: key.length === 1 ? `Key${key.toUpperCase()}` : key,
+    code,
     bubbles: true,
     cancelable: true,
+    composed: true,
     ctrlKey: modifiers.ctrl,
     altKey: modifiers.alt,
     shiftKey: modifiers.shift,
     metaKey: modifiers.meta,
   };
-  active.dispatchEvent(new KeyboardEvent("keydown", init));
-  // keypress is only meaningful for printable characters; firing it
-  // unconditionally is harmless — listeners that don't want it filter on key.
-  if (key.length === 1) {
-    active.dispatchEvent(new KeyboardEvent("keypress", init));
+  const fire = (type: "keydown" | "keypress" | "keyup"): void => {
+    const ev = new KeyboardEvent(type, init);
+    // keyCode / which are deprecated on the spec but legacy editors still
+    // gate on them. KeyboardEventInit does not officially carry these, so
+    // patch the event after construction.
+    if (vkCode !== 0) {
+      try { Object.defineProperty(ev, "keyCode", { value: vkCode, configurable: true }); } catch { /* ignore */ }
+      try { Object.defineProperty(ev, "which",   { value: vkCode, configurable: true }); } catch { /* ignore */ }
+    }
+    active.dispatchEvent(ev);
+  };
+  fire("keydown");
+  // keypress is only meaningful for true printables and chord-free presses.
+  if (text !== null && !modifiers.ctrl && !modifiers.meta) {
+    fire("keypress");
   }
-  active.dispatchEvent(new KeyboardEvent("keyup", init));
+  fire("keyup");
 }
 
 function injectedScrollRef(selector: string): { found: boolean } {
@@ -2430,12 +2465,20 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       return dispatch();
     }
 
-    // Synthetic path.
+    // Synthetic path. Pre-resolve the key tuple here so the injected fn
+    // ships only the data it needs and stays free of imports.
     const dispatchPress = async (): Promise<{ pressed: true }> => {
+      const kTuple = resolveKey(terminal);
       await execInTab(
         chromeId,
         injectedPress,
-        [terminal, modifierFlags(mods)] as const,
+        [
+          kTuple.key,
+          kTuple.code,
+          kTuple.vkCode,
+          kTuple.text ?? null,
+          modifierFlags(mods),
+        ] as const,
       );
       return { pressed: true };
     };
