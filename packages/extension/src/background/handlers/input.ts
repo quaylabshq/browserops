@@ -296,6 +296,18 @@ async function cdpHover(
   cdp: CdpManager, chromeId: number,
   x: number, y: number,
 ): Promise<void> {
+  // Two-stage move. Chrome's input pipeline tracks the last mouse position;
+  // when a prior click landed at the same (x, y) the compositor sees the
+  // follow-up mouseMoved as a zero-delta no-op and does not dispatch new
+  // mouseover/mouseenter DOM events. React derives onMouseEnter from
+  // native mouseenter, which only fires on an outside-to-inside transition
+  // — so hover-gated UIs (Slack message-action toolbar, GitHub tooltip
+  // stacks, Linear sidebar peek) silently fail. Moving to (0, 0) first
+  // forces a position transition; the second move into (x, y) then
+  // generates the trusted mouseover/mouseenter pair.
+  await cdp.send(chromeId, "Input.dispatchMouseEvent", {
+    type: "mouseMoved", x: 0, y: 0, button: "none", modifiers: 0,
+  });
   await cdp.send(chromeId, "Input.dispatchMouseEvent", {
     type: "mouseMoved", x, y, button: "none", modifiers: 0,
   });
