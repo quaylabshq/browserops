@@ -136,9 +136,13 @@ export function registerNavigationHandlers(router: Router, opts: NavigationOpts)
       }
       const finalUrl = await readTabUrl(chromeId);
 
-      // Auto-enable/disable persistent CDP for canvas and gated domains.
-      void cdp.autoAttachIfCanvas(chromeId, finalUrl);
-      void cdp.autoAttachIfGated(chromeId, finalUrl, getGatedDomainPatterns());
+      // CDP-trusted input is the default: every http(s) navigation gets
+      // persistent CDP attach so click/type/press/hover dispatch through
+      // Input.dispatchMouseEvent / Input.insertText (trusted events that
+      // traverse iframes, shadow DOM, and survive isTrusted-gated handlers).
+      // The "controlled by automation" banner appears as a result; callers
+      // can opt a tab out with browser_set_cdp(tab_id, false).
+      void cdp.autoAttachAlways(chromeId, finalUrl);
 
       const gatedFields = buildGatedFields(finalUrl);
 

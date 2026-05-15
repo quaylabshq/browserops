@@ -82,6 +82,7 @@ async function persistTabMap(): Promise<void> {
 registerTabHandlers(router, {
   tabIdMap: tabIdToChromeId,
   chromeIdToTabId,
+  cdp,
 });
 registerNavigationHandlers(router, { tabIdMap: tabIdToChromeId, refCache, network, cdp });
 registerScreenshotHandler(router, { tabIdMap: tabIdToChromeId });
