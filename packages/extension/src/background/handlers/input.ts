@@ -856,6 +856,10 @@ interface ClickByTextSpec {
   caseSensitive: boolean;
   button: number;
   modifiers: { ctrl: boolean; alt: boolean; shift: boolean; meta: boolean };
+  /** When true, locate the target and return its center coords without
+   *  dispatching the synthetic click sequence. Used by the CDP path so the
+   *  trusted Input.dispatchMouseEvent can fire at the resolved coordinates. */
+  dryRun: boolean;
 }
 
 /**
@@ -878,6 +882,8 @@ interface ClickByTextSpec {
 function injectedClickByText(spec: ClickByTextSpec): {
   found: boolean;
   matched?: { role: string; name: string; tag: string };
+  x?: number;
+  y?: number;
   occluded?: boolean;
   occluder?: { tag: string; text: string; role: string | null } | null;
 } {
@@ -1041,6 +1047,14 @@ function injectedClickByText(spec: ClickByTextSpec): {
       tag: hit.tagName.toLowerCase(),
       text: (hit.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 80),
       role: hit.getAttribute("role"),
+    };
+  }
+
+  if (spec.dryRun) {
+    return {
+      found: true,
+      matched: { role: winner.role, name: winner.name, tag: winner.tag },
+      x, y, occluded, occluder,
     };
   }
 
@@ -2035,13 +2049,19 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       }
       const mods = parseModifiers(raw["modifiers"]);
       const chromeId = resolveChromeId(tabIdMap, tab_id);
+      const buttonName = (button as ClickParams["button"]) ?? "left";
+      const useCdp = cdp.isPersistent(chromeId);
       const spec: ClickByTextSpec = {
         text,
         matchMode: (match as ClickByTextSpec["matchMode"]) ?? "substring",
         roleFilter: typeof roleRaw === "string" && roleRaw.length > 0 ? roleRaw.toLowerCase() : null,
         caseSensitive,
-        button: BUTTON_INDEX[(button as ClickParams["button"]) ?? "left"],
+        button: BUTTON_INDEX[buttonName],
         modifiers: modifierFlags(mods),
+        // Locate-only when CDP is attached so the trusted Input.dispatchMouseEvent
+        // is what actually fires — synthetic dispatch is silently ignored by
+        // Slack/Discord/Linear handlers that gate on event.isTrusted.
+        dryRun: useCdp,
       };
       const res = await execInTab(chromeId, injectedClickByText, [spec] as const);
       if (res.found === false) {
@@ -2049,6 +2069,12 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
           "TEXT_NOT_FOUND",
           `no visible element matched text "${text}" (${spec.matchMode}${spec.roleFilter ? `, role=${spec.roleFilter}` : ""})`,
         );
+      }
+      if (useCdp) {
+        if (typeof res.x !== "number" || typeof res.y !== "number") {
+          throw codedError("INTERNAL", "click_by_text dry run did not return coordinates");
+        }
+        await cdpClick(cdp, chromeId, res.x, res.y, buttonName, modifierFlags(mods));
       }
       const result: {
         clicked: true;
