@@ -151,6 +151,28 @@ export class CdpManager {
     }
   }
 
+  /** Auto-enable persistent CDP for any http(s) navigation. This is the
+   *  trusted-input default — every regular web page the agent drives
+   *  gets CDP so click/type/press/hover go through Input.dispatchMouseEvent
+   *  rather than synthetic DOM events. The "Chrome is being controlled by
+   *  automated test software" banner appears as a result; callers wanting
+   *  to opt a specific tab out can issue browser_set_cdp(tab_id, false).
+   *
+   *  No-op for chrome://, about:, file://, devtools:// — attaching to
+   *  those either fails or has no useful effect. Skips when already
+   *  persistent (idempotent). Detaches when the tab leaves http(s)
+   *  (e.g. navigates to chrome://settings), keeping bookkeeping accurate. */
+  async autoAttachAlways(chromeTabId: number, url: string): Promise<void> {
+    let protocol: string;
+    try { protocol = new URL(url).protocol; } catch { return; }
+    const eligible = protocol === "http:" || protocol === "https:";
+    if (eligible && !this.persistent.has(chromeTabId)) {
+      await this.setPersistent(chromeTabId, true).catch(() => { /* ignore attach failures */ });
+    } else if (!eligible && this.persistent.has(chromeTabId)) {
+      await this.setPersistent(chromeTabId, false);
+    }
+  }
+
   private async ensureAttached(chromeTabId: number): Promise<AttachState> {
     const existing = this.attached.get(chromeTabId);
     if (existing !== undefined) return existing;
