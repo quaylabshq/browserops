@@ -135,6 +135,21 @@ const tabSelection: Lines = [
   "- For cross-tab work, call browser_list_tabs and pick explicitly.",
 ];
 
+const dispatch: Lines = [
+  "Dispatch model (CDP-trusted by default):",
+  "- Every http(s) tab gets persistent chrome.debugger attached on navigation.",
+  "  browser_click / click_at / click_by_text / type / press / hover all",
+  "  dispatch through CDP Input.* — trusted compositor events that traverse",
+  "  iframes, shadow DOM, and isTrusted-gated handlers (Slack, Discord,",
+  "  Linear, Notion, Gmail rich editors). The \"Chrome is being controlled",
+  "  by automated test software\" banner appears as a result — that is",
+  "  expected and not a sign of failure.",
+  "- Opt a specific tab out with browser_set_cdp(tab_id, false) when the",
+  "  banner is unacceptable for the current task; the tab falls back to",
+  "  synthetic DOM dispatch (which is faster but silently fails on",
+  "  isTrusted-gated UIs).",
+];
+
 const clicking: Lines = [
   "Clicking (escalation ladder — stop when page_effect shows intended effect):",
   "  1. browser_click with a ref (cheapest, most addressable).",
@@ -146,11 +161,11 @@ const clicking: Lines = [
   "     useful on complex SPAs (Instagram, TikTok, some retail checkouts)",
   "     where the clickable surface is a gesture handler on a parent div",
   "     or canvas.",
-  "- Coordinate clicks are underused but unreliable: clicked:true only means",
-  "  a mouse event was dispatched at that point — it could have landed on a",
-  "  parent, a sibling overlay, or dead space. ALWAYS verify page_effect",
-  "  immediately after browser_click_at. Zero effect = failure, retry with",
-  "  adjusted coords or fall back to click_by_text.",
+  "- Coordinate clicks are trusted (CDP) but still unaddressable: clicked:true",
+  "  only means a mouse event fired at that point — it could have landed on a",
+  "  sibling overlay or dead space. ALWAYS verify page_effect immediately",
+  "  after browser_click_at. Zero effect = retry with adjusted coords or fall",
+  "  back to click_by_text.",
 ];
 
 const risky: Lines = [
@@ -222,6 +237,7 @@ export function buildServerInstructions(
     toolInvocation(enabledFeatures),
     orchestration(enabledFeatures),
     tabSelection,
+    dispatch,
     clicking,
     risky,
     proceduresSection(enabledFeatures),
