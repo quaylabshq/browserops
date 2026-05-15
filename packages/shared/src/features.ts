@@ -33,11 +33,12 @@ export interface FeatureMetadata {
 /**
  * Default state per feature is set explicitly below. `procedures` ships
  * off so the agent's tools/list catalogue stays minimal for users who
- * only want basic browser automation. `gated-domains` ships on because
- * the in-band advisor and auto-CDP only deliver value when the agent
- * actually sees them — users who want to avoid Chrome's "controlled by
- * automation" banner on Gmail/Slack/etc. can disable it with
- * `browserops feature disable gated-domains`.
+ * only want basic browser automation. `gated-domains` ships on so the
+ * in-band advisor surfaces on the curated list of rich-editor / SPA
+ * domains — the auto-CDP-attach piece is now universal (every http(s)
+ * navigation attaches CDP by default), so this flag only controls the
+ * `gated_domain: true` hint surfaced in browser_navigate /
+ * browser_current_tab responses.
  */
 export const FEATURE_METADATA: Record<FeatureName, FeatureMetadata> = {
   procedures: {
@@ -48,7 +49,7 @@ export const FEATURE_METADATA: Record<FeatureName, FeatureMetadata> = {
   },
   "gated-domains": {
     description:
-      "Auto-attach CDP and bias the agent toward browser_execute_js on a curated list of rich-editor / SPA domains (Gmail, Slack, Notion, Linear, Discord, …). Extend the list via ~/.browserops/gated-domains.json.",
+      "Surface a `gated_domain: true` advisor hint on a curated list of rich-editor / SPA domains (Gmail, Slack, Notion, Linear, Discord, …). CDP-trusted input is universal regardless of this flag — see browser_set_cdp for per-tab opt-out. Extend the advisor list via ~/.browserops/gated-domains.json.",
     stability: "experimental",
     default: true,
   },

@@ -17,14 +17,26 @@ function parseExpectEffect(raw: unknown): ExpectEffect | undefined {
 }
 
 /**
- * browser_click / type / press / scroll / hover / execute_js handlers.
+ * browser_click / type / press / scroll / hover / click_by_text /
+ * execute_js handlers.
  *
- * All input dispatch is synthetic (DOM events via chrome.scripting.executeScript).
- * CDP is only used by browser_execute_js (Runtime.evaluate to bypass Trusted Types CSP).
+ * Dispatch model: CDP-trusted is the default. Every http(s) tab gets
+ * persistent chrome.debugger attached (see CdpManager.autoAttachAlways
+ * + the call site in handlers/navigation.ts). When cdp.isPersistent
+ * returns true for a tab, click/type/press/hover/click_by_text dispatch
+ * via Input.dispatchMouseEvent / Input.insertText / Input.dispatchKeyEvent
+ * — trusted compositor events that traverse iframes, shadow DOM, and
+ * isTrusted-gated handlers (Slack, Discord, Linear, Notion, Gmail, …).
+ *
+ * Synthetic dispatch (DOM events via chrome.scripting.executeScript)
+ * remains as the fallback for non-http URLs and tabs the user opted
+ * out via browser_set_cdp(tab_id, false). browser_execute_js still
+ * runs through CDP Runtime.evaluate to bypass Trusted Types CSP.
  *
  * Ref lookup contract: browser_read(mode: "a11y_tree") populates RefCache.
  * Each entry has a `.selector` field used by document.querySelector in
- * the injected world.
+ * the injected world; the CDP path then reads the element's center via
+ * injectedElementCenter and dispatches at those viewport coords.
  */
 
 interface InputOpts {
