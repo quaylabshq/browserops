@@ -1,10 +1,12 @@
 import { matchGatedDomain, GATED_DOMAIN_DIRECTIVE, type ErrorCode } from "@browserops/shared";
 import { getGatedDomainPatterns } from "../gated-state.js";
 import type { Router } from "../router.js";
+import type { CdpManager } from "../cdp.js";
 
 interface TabsOpts {
   tabIdMap: Map<string, number>;
   chromeIdToTabId: Map<number, string>;
+  cdp: CdpManager;
 }
 
 interface TabSummary {
@@ -61,7 +63,7 @@ async function waitForTabIdAssignment(
 }
 
 export function registerTabHandlers(router: Router, opts: TabsOpts): void {
-  const { tabIdMap, chromeIdToTabId } = opts;
+  const { tabIdMap, chromeIdToTabId, cdp } = opts;
 
   router.register("browser_list_tabs", async (): Promise<{ tabs: TabSummary[] }> => {
     const tabs = await chrome.tabs.query({});
@@ -105,6 +107,11 @@ export function registerTabHandlers(router: Router, opts: TabsOpts): void {
     }
     const tabId = await waitForTabIdAssignment(chromeIdToTabId, created.id);
     const url = created.url ?? created.pendingUrl;
+    // Match browser_navigate: attach CDP for any http(s) tab so subsequent
+    // input dispatch is trusted. Skipped automatically for chrome:// / about:.
+    if (created.id !== undefined && typeof url === "string" && url.length > 0) {
+      void cdp.autoAttachAlways(created.id, url);
+    }
     return url !== undefined && url !== "" ? { tab_id: tabId, url } : { tab_id: tabId };
   });
 

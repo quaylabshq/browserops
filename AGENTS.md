@@ -120,21 +120,21 @@ For clearing as an independent step (no typing follow-up), bind a `browser_press
 
 **Destructive chords are refused by the extension.** `Primary+W`, `Primary+Q`, `Primary+Shift+W`, `Alt+F4`, `Primary+T`, `Primary+N`, `Primary+Shift+N` would close tabs / quit the browser / open new contexts the user didn't ask for. Don't try to route around the deny-list — if you need something destructive, ask first.
 
-## Canvas apps (Figma, Google Docs, Sheets, Canva, Miro)
+## CDP-trusted input is the default
 
-Canvas apps render their UI to `<canvas>` elements — synthetic DOM events have no effect. **CDP is auto-enabled** when `browser_navigate` lands on a known canvas domain (Google Docs, Sheets, Figma, Canva, Miro, Whimsical, Figjam). All `browser_click`, `browser_click_at`, `browser_type`, and `browser_press` calls on that tab automatically use trusted CDP `Input.*` methods. The debugger shows a "controlled by automation" banner while active — this is expected.
+Every http(s) tab the agent navigates to gets persistent `chrome.debugger` attached automatically (`autoAttachAlways` in `packages/extension/src/background/cdp.ts`). All `browser_click`, `browser_click_at`, `browser_click_by_text`, `browser_type`, `browser_press`, and `browser_hover` calls dispatch through CDP `Input.*` — trusted compositor events that traverse iframes, shadow DOM, and `isTrusted`-gated handlers (Slack, Discord, Linear, Notion, Gmail rich editors, hover-only menus, canvas apps).
 
-For other canvas sites not in the auto-list, call `browser_set_cdp(tab_id, true)` manually after navigating.
+Chrome's "controlled by automated test software" banner appears on every driven tab while CDP is attached. This is expected, not a failure signal.
 
-Do **not** enable CDP for standard websites — synthetic dispatch works fine and avoids the banner.
+**Per-tab opt-out:** `browser_set_cdp(tab_id, false)` releases the persistent attach (5s idle detach kicks in). Synthetic DOM dispatch resumes for that tab — faster, no banner, but silently fails on `isTrusted`-gated UIs.
+
+**Non-http URLs** (`chrome://`, `about:`, `file://`, `devtools://`) are skipped — CDP would fail to attach or have no useful effect.
 
 ## Rich-text editors (Slack, Gmail, Discord, Notion, Linear)
 
-The `gated-domains` feature is **on by default**. browserops automatically attaches CDP ("debug mode") on navigation to these domains, which pre-configures the trusted-input dispatch path. Navigation results include `gated_domain: true`, and synthetic `browser_click` / `browser_type` / `browser_press` calls are nudged toward `browser_execute_js` when they detect zero observable change on the page. The tradeoff is Chrome's "controlled by automation" banner, visible while the feature is active — users who want to avoid it can opt out with `browserops feature disable gated-domains`. Custom domains can be added by writing a JSON array of glob patterns to `~/.browserops/gated-domains.json` — same format as `~/.browserops/risky-domains.json`.
+With CDP-trusted input universal, rich editors (Quill, ProseMirror, Slate, Draft.js, Lexical) accept trusted `Input.insertText` and key events without the synthetic-dispatch workarounds that used to be necessary. `browser_type` is the first thing to reach for.
 
-For users without the feature enabled, or as a fallback when CDP dispatch alone is insufficient: Rich editors (Quill, ProseMirror, Slate, Draft.js, Lexical) work with synthetic dispatch — `browser_type` automatically uses one-shot `execCommand("insertText")` on contenteditable elements, which avoids the focus-stealing issues that per-character keystroke mode has on these editors.
-
-If `browser_type` still fails (returns `WRITE_NOT_REFLECTED`), **do not retry** — go straight to `browser_execute_js`:
+If `browser_type` still returns `WRITE_NOT_REFLECTED` after the in-handler CDP rescue (rare — usually means the field is gated behind a custom event filter), drop to `browser_execute_js`:
 
 ```js
 browser_execute_js(tab_id, `
@@ -145,6 +145,8 @@ browser_execute_js(tab_id, `
 ```
 
 **Dialog overlays are the #1 blocker on chat apps.** Before attempting any interaction, check the `browser_read` a11y tree for modal dialogs, upsell banners, or cookie prompts. Dismiss them first (Escape key or click the close button) before interacting with the editor.
+
+The `gated-domains` feature is now a narrow advisor: when on (default), `browser_navigate` / `browser_current_tab` responses include `gated_domain: true` on a curated list (Gmail/Slack/Notion/Linear/Discord/…) so the agent can apply domain-specific heuristics. The auto-CDP-attach piece is no longer behind this flag — it runs universally. Disabling the feature only suppresses the advisor hint; CDP still attaches.
 
 ## Approval mode
 

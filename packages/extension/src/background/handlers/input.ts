@@ -17,14 +17,26 @@ function parseExpectEffect(raw: unknown): ExpectEffect | undefined {
 }
 
 /**
- * browser_click / type / press / scroll / hover / execute_js handlers.
+ * browser_click / type / press / scroll / hover / click_by_text /
+ * execute_js handlers.
  *
- * All input dispatch is synthetic (DOM events via chrome.scripting.executeScript).
- * CDP is only used by browser_execute_js (Runtime.evaluate to bypass Trusted Types CSP).
+ * Dispatch model: CDP-trusted is the default. Every http(s) tab gets
+ * persistent chrome.debugger attached (see CdpManager.autoAttachAlways
+ * + the call site in handlers/navigation.ts). When cdp.isPersistent
+ * returns true for a tab, click/type/press/hover/click_by_text dispatch
+ * via Input.dispatchMouseEvent / Input.insertText / Input.dispatchKeyEvent
+ * — trusted compositor events that traverse iframes, shadow DOM, and
+ * isTrusted-gated handlers (Slack, Discord, Linear, Notion, Gmail, …).
+ *
+ * Synthetic dispatch (DOM events via chrome.scripting.executeScript)
+ * remains as the fallback for non-http URLs and tabs the user opted
+ * out via browser_set_cdp(tab_id, false). browser_execute_js still
+ * runs through CDP Runtime.evaluate to bypass Trusted Types CSP.
  *
  * Ref lookup contract: browser_read(mode: "a11y_tree") populates RefCache.
  * Each entry has a `.selector` field used by document.querySelector in
- * the injected world.
+ * the injected world; the CDP path then reads the element's center via
+ * injectedElementCenter and dispatches at those viewport coords.
  */
 
 interface InputOpts {
@@ -256,6 +268,15 @@ async function cdpPress(
   });
   await cdp.send(chromeId, "Input.dispatchKeyEvent", {
     type: "keyUp", key, modifiers: m,
+  });
+}
+
+async function cdpHover(
+  cdp: CdpManager, chromeId: number,
+  x: number, y: number,
+): Promise<void> {
+  await cdp.send(chromeId, "Input.dispatchMouseEvent", {
+    type: "mouseMoved", x, y, button: "none", modifiers: 0,
   });
 }
 
@@ -847,6 +868,10 @@ interface ClickByTextSpec {
   caseSensitive: boolean;
   button: number;
   modifiers: { ctrl: boolean; alt: boolean; shift: boolean; meta: boolean };
+  /** When true, locate the target and return its center coords without
+   *  dispatching the synthetic click sequence. Used by the CDP path so the
+   *  trusted Input.dispatchMouseEvent can fire at the resolved coordinates. */
+  dryRun: boolean;
 }
 
 /**
@@ -869,6 +894,8 @@ interface ClickByTextSpec {
 function injectedClickByText(spec: ClickByTextSpec): {
   found: boolean;
   matched?: { role: string; name: string; tag: string };
+  x?: number;
+  y?: number;
   occluded?: boolean;
   occluder?: { tag: string; text: string; role: string | null } | null;
 } {
@@ -1032,6 +1059,14 @@ function injectedClickByText(spec: ClickByTextSpec): {
       tag: hit.tagName.toLowerCase(),
       text: (hit.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 80),
       role: hit.getAttribute("role"),
+    };
+  }
+
+  if (spec.dryRun) {
+    return {
+      found: true,
+      matched: { role: winner.role, name: winner.name, tag: winner.tag },
+      x, y, occluded, occluder,
     };
   }
 
@@ -2026,13 +2061,19 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       }
       const mods = parseModifiers(raw["modifiers"]);
       const chromeId = resolveChromeId(tabIdMap, tab_id);
+      const buttonName = (button as ClickParams["button"]) ?? "left";
+      const useCdp = cdp.isPersistent(chromeId);
       const spec: ClickByTextSpec = {
         text,
         matchMode: (match as ClickByTextSpec["matchMode"]) ?? "substring",
         roleFilter: typeof roleRaw === "string" && roleRaw.length > 0 ? roleRaw.toLowerCase() : null,
         caseSensitive,
-        button: BUTTON_INDEX[(button as ClickParams["button"]) ?? "left"],
+        button: BUTTON_INDEX[buttonName],
         modifiers: modifierFlags(mods),
+        // Locate-only when CDP is attached so the trusted Input.dispatchMouseEvent
+        // is what actually fires — synthetic dispatch is silently ignored by
+        // Slack/Discord/Linear handlers that gate on event.isTrusted.
+        dryRun: useCdp,
       };
       const res = await execInTab(chromeId, injectedClickByText, [spec] as const);
       if (res.found === false) {
@@ -2040,6 +2081,12 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
           "TEXT_NOT_FOUND",
           `no visible element matched text "${text}" (${spec.matchMode}${spec.roleFilter ? `, role=${spec.roleFilter}` : ""})`,
         );
+      }
+      if (useCdp) {
+        if (typeof res.x !== "number" || typeof res.y !== "number") {
+          throw codedError("INTERNAL", "click_by_text dry run did not return coordinates");
+        }
+        await cdpClick(cdp, chromeId, res.x, res.y, buttonName, modifierFlags(mods));
       }
       const result: {
         clicked: true;
@@ -2434,6 +2481,20 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
     const params = parseHover(raw);
     const chromeId = resolveChromeId(tabIdMap, params.tab_id);
     const selector = resolveSelector(refCache, params.tab_id, params.ref);
+
+    // Persistent CDP path: trusted hover via Input.dispatchMouseEvent.
+    // Synthetic mouseover/mouseenter is silently ignored by hover-gated UIs
+    // (Slack message-action toolbar, GitHub tooltip stacks) — only a real
+    // mouse move surfaces them.
+    if (cdp.isPersistent(chromeId)) {
+      const center = await execInTab(chromeId, injectedElementCenter, [selector] as const);
+      if (center === null) {
+        throw codedError("REF_STALE", `ref ${params.ref} no longer resolves in tab ${params.tab_id}`);
+      }
+      await cdpHover(cdp, chromeId, center.x, center.y);
+      return { hovered: true };
+    }
+
     const res = await execInTab(chromeId, injectedHover, [selector] as const);
     if (res.found === false) {
       throw codedError("REF_STALE", `ref ${params.ref} no longer resolves in tab ${params.tab_id}`);
