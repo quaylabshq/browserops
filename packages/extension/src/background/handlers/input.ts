@@ -2607,6 +2607,11 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
           expression,
           returnByValue: true,
           allowUnsafeEvalBlockedByCSP: true,
+          // Resolve top-level Promises (async IIFEs, fetch().then chains)
+          // before serialising the result. Without this Chrome serialises
+          // the Promise object itself, which round-trips to the agent as
+          // an empty {} and forces a JSON.stringify-and-avoid-async dance.
+          awaitPromise: true,
         }),
       );
     try {
