@@ -30,10 +30,10 @@ function header(enabledFeatures: ReadonlySet<FeatureName>): Lines {
     "",
     "Full operating guide: if your host supports Claude skills, invoke the",
     `\`browserops\` skill before your first ${skillCallTargets} call. It`,
-    "covers the observation-centric execution model (page_effect), trusted vs",
-    "synthetic dispatch, per-tool cookbook, failure-mode → fix-it map,",
-    "sub-agent delegation rules, and procedure authoring discipline. The",
-    "summary below is the minimum; the skill is the canonical reference.",
+    "covers the observation-centric execution model (page_effect), per-tool",
+    "cookbook, failure-mode → fix-it map, sub-agent delegation rules, and",
+    "procedure authoring discipline. The summary below is the minimum; the",
+    "skill is the canonical reference.",
   ];
 }
 
@@ -136,18 +136,13 @@ const tabSelection: Lines = [
 ];
 
 const dispatch: Lines = [
-  "Dispatch model (CDP-trusted by default):",
+  "Dispatch model (CDP-trusted, universal):",
   "- Every http(s) tab gets persistent chrome.debugger attached on navigation.",
   "  browser_click / click_at / click_by_text / type / press / hover all",
   "  dispatch through CDP Input.* — trusted compositor events that traverse",
-  "  iframes, shadow DOM, and isTrusted-gated handlers (Slack, Discord,",
-  "  Linear, Notion, Gmail rich editors). The \"Chrome is being controlled",
-  "  by automated test software\" banner appears as a result — that is",
-  "  expected and not a sign of failure.",
-  "- Opt a specific tab out with browser_set_cdp(tab_id, false) when the",
-  "  banner is unacceptable for the current task; the tab falls back to",
-  "  synthetic DOM dispatch (which is faster but silently fails on",
-  "  isTrusted-gated UIs).",
+  "  iframes, shadow DOM, and isTrusted-gated handlers. The \"Chrome is being",
+  "  controlled by automated test software\" banner appears as a result — that",
+  "  is expected and not a sign of failure.",
 ];
 
 const clicking: Lines = [

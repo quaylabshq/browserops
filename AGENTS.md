@@ -132,7 +132,7 @@ Chrome's "controlled by automated test software" banner appears on every driven 
 
 ## Rich-text editors (Slack, Gmail, Discord, Notion, Linear)
 
-With CDP-trusted input universal, rich editors (Quill, ProseMirror, Slate, Draft.js, Lexical) accept trusted `Input.insertText` and key events without the synthetic-dispatch workarounds that used to be necessary. `browser_type` is the first thing to reach for.
+Rich editors (Quill, ProseMirror, Slate, Draft.js, Lexical) accept trusted `Input.insertText` and key events because CDP is universal. `browser_type` is the first thing to reach for.
 
 If `browser_type` still returns `WRITE_NOT_REFLECTED` after the in-handler CDP rescue (rare — usually means the field is gated behind a custom event filter), drop to `browser_execute_js`:
 
@@ -145,8 +145,6 @@ browser_execute_js(tab_id, `
 ```
 
 **Dialog overlays are the #1 blocker on chat apps.** Before attempting any interaction, check the `browser_read` a11y tree for modal dialogs, upsell banners, or cookie prompts. Dismiss them first (Escape key or click the close button) before interacting with the editor.
-
-The `gated-domains` feature is now a narrow advisor: when on (default), `browser_navigate` / `browser_current_tab` responses include `gated_domain: true` on a curated list (Gmail/Slack/Notion/Linear/Discord/…) so the agent can apply domain-specific heuristics. The auto-CDP-attach piece is no longer behind this flag — it runs universally. Disabling the feature only suppresses the advisor hint; CDP still attaches.
 
 ## Approval mode
 
