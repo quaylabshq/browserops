@@ -5,6 +5,7 @@ import type { RefCache } from "../ref-cache.js";
 import type { CdpManager } from "../cdp.js";
 import type { NetworkTracker } from "../network-tracker.js";
 import { withEffectObservation, checkEffectExpectation } from "./effects.js";
+import { resolveKey } from "./key-resolver.js";
 
 type ExpectEffect = "any" | "dom" | "navigation" | "none";
 
@@ -258,16 +259,36 @@ async function cdpType(cdp: CdpManager, chromeId: number, text: string): Promise
 
 async function cdpPress(
   cdp: CdpManager, chromeId: number,
-  key: string,
+  token: string,
   mods: { ctrl: boolean; alt: boolean; shift: boolean; meta: boolean },
 ): Promise<void> {
+  const k = resolveKey(token);
   const m = cdpModBits(mods);
+  // Always send key + code + windowsVirtualKeyCode + nativeVirtualKeyCode.
+  // CDP does not auto-fill the VK codes from `key` alone — legacy editors
+  // (Quill / Sheets formula bar / ProseMirror) that gate on
+  // `event.keyCode === 13` would see 0 and bail. text is emitted on
+  // keyDown only for printables, and only when no chord modifier is set
+  // so Cmd+A doesn't accidentally also insert the character "a".
+  const downParams: Record<string, unknown> = {
+    type: "keyDown",
+    key: k.key,
+    code: k.code,
+    windowsVirtualKeyCode: k.vkCode,
+    nativeVirtualKeyCode: k.vkCode,
+    modifiers: m,
+  };
+  if (k.text !== undefined && !mods.ctrl && !mods.meta) {
+    downParams["text"] = k.text;
+  }
+  await cdp.send(chromeId, "Input.dispatchKeyEvent", downParams);
   await cdp.send(chromeId, "Input.dispatchKeyEvent", {
-    type: "keyDown", key, modifiers: m,
-    ...(key.length === 1 ? { text: key } : {}),
-  });
-  await cdp.send(chromeId, "Input.dispatchKeyEvent", {
-    type: "keyUp", key, modifiers: m,
+    type: "keyUp",
+    key: k.key,
+    code: k.code,
+    windowsVirtualKeyCode: k.vkCode,
+    nativeVirtualKeyCode: k.vkCode,
+    modifiers: m,
   });
 }
 
@@ -275,6 +296,18 @@ async function cdpHover(
   cdp: CdpManager, chromeId: number,
   x: number, y: number,
 ): Promise<void> {
+  // Two-stage move. Chrome's input pipeline tracks the last mouse position;
+  // when a prior click landed at the same (x, y) the compositor sees the
+  // follow-up mouseMoved as a zero-delta no-op and does not dispatch new
+  // mouseover/mouseenter DOM events. React derives onMouseEnter from
+  // native mouseenter, which only fires on an outside-to-inside transition
+  // — so hover-gated UIs (Slack message-action toolbar, GitHub tooltip
+  // stacks, Linear sidebar peek) silently fail. Moving to (0, 0) first
+  // forces a position transition; the second move into (x, y) then
+  // generates the trusted mouseover/mouseenter pair.
+  await cdp.send(chromeId, "Input.dispatchMouseEvent", {
+    type: "mouseMoved", x: 0, y: 0, button: "none", modifiers: 0,
+  });
   await cdp.send(chromeId, "Input.dispatchMouseEvent", {
     type: "mouseMoved", x, y, button: "none", modifiers: 0,
   });
@@ -793,6 +826,9 @@ function dispatchEnterAndSubmit(
 
 function injectedPress(
   key: string,
+  code: string,
+  vkCode: number,
+  text: string | null,
   modifiers: { ctrl: boolean; alt: boolean; shift: boolean; meta: boolean },
 ): void {
   const active: HTMLElement =
@@ -800,21 +836,32 @@ function injectedPress(
     document.body;
   const init: KeyboardEventInit = {
     key,
-    code: key.length === 1 ? `Key${key.toUpperCase()}` : key,
+    code,
     bubbles: true,
     cancelable: true,
+    composed: true,
     ctrlKey: modifiers.ctrl,
     altKey: modifiers.alt,
     shiftKey: modifiers.shift,
     metaKey: modifiers.meta,
   };
-  active.dispatchEvent(new KeyboardEvent("keydown", init));
-  // keypress is only meaningful for printable characters; firing it
-  // unconditionally is harmless — listeners that don't want it filter on key.
-  if (key.length === 1) {
-    active.dispatchEvent(new KeyboardEvent("keypress", init));
+  const fire = (type: "keydown" | "keypress" | "keyup"): void => {
+    const ev = new KeyboardEvent(type, init);
+    // keyCode / which are deprecated on the spec but legacy editors still
+    // gate on them. KeyboardEventInit does not officially carry these, so
+    // patch the event after construction.
+    if (vkCode !== 0) {
+      try { Object.defineProperty(ev, "keyCode", { value: vkCode, configurable: true }); } catch { /* ignore */ }
+      try { Object.defineProperty(ev, "which",   { value: vkCode, configurable: true }); } catch { /* ignore */ }
+    }
+    active.dispatchEvent(ev);
+  };
+  fire("keydown");
+  // keypress is only meaningful for true printables and chord-free presses.
+  if (text !== null && !modifiers.ctrl && !modifiers.meta) {
+    fire("keypress");
   }
-  active.dispatchEvent(new KeyboardEvent("keyup", init));
+  fire("keyup");
 }
 
 function injectedScrollRef(selector: string): { found: boolean } {
@@ -2430,12 +2477,20 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       return dispatch();
     }
 
-    // Synthetic path.
+    // Synthetic path. Pre-resolve the key tuple here so the injected fn
+    // ships only the data it needs and stays free of imports.
     const dispatchPress = async (): Promise<{ pressed: true }> => {
+      const kTuple = resolveKey(terminal);
       await execInTab(
         chromeId,
         injectedPress,
-        [terminal, modifierFlags(mods)] as const,
+        [
+          kTuple.key,
+          kTuple.code,
+          kTuple.vkCode,
+          kTuple.text ?? null,
+          modifierFlags(mods),
+        ] as const,
       );
       return { pressed: true };
     };
@@ -2542,17 +2597,37 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
     const chromeId = resolveChromeId(tabIdMap, params.tab_id);
     // Use CDP Runtime.evaluate instead of injected eval so this works on pages
     // with Trusted Types CSP (e.g. Gmail), where string-based eval is blocked.
-    try {
-      const res = await cdp.withAttach(chromeId, () =>
-        cdp.send<{
-          result: { type: string; value?: unknown };
-          exceptionDetails?: { text: string; exception?: { description?: string } };
-        }>(chromeId, "Runtime.evaluate", {
-          expression: params.code,
+    type EvalResult = {
+      result: { type: string; value?: unknown };
+      exceptionDetails?: { text: string; exception?: { description?: string } };
+    };
+    const evaluate = (expression: string): Promise<EvalResult> =>
+      cdp.withAttach(chromeId, () =>
+        cdp.send<EvalResult>(chromeId, "Runtime.evaluate", {
+          expression,
           returnByValue: true,
           allowUnsafeEvalBlockedByCSP: true,
+          // Resolve top-level Promises (async IIFEs, fetch().then chains)
+          // before serialising the result. Without this Chrome serialises
+          // the Promise object itself, which round-trips to the agent as
+          // an empty {} and forces a JSON.stringify-and-avoid-async dance.
+          awaitPromise: true,
         }),
       );
+    try {
+      let res = await evaluate(params.code);
+      // Agents reach for browser_execute_js the same way they reach for a
+      // browser devtools console — they write `const x = ...; return x;` as
+      // if execute_js takes a function body. CDP's Runtime.evaluate runs the
+      // expression at script scope, where a top-level `return` is a
+      // SyntaxError. Detect the canonical message and retry the code wrapped
+      // in an IIFE so the natural pattern just works.
+      if (res.exceptionDetails !== undefined) {
+        const errText = `${res.exceptionDetails.text} ${res.exceptionDetails.exception?.description ?? ""}`;
+        if (/Illegal return|return\s+(?:statement\s+is\s+)?outside(?:\s+of)?\s+(?:a\s+)?function/i.test(errText)) {
+          res = await evaluate(`(() => { ${params.code} })()`);
+        }
+      }
       if (res.exceptionDetails !== undefined) {
         const msg = res.exceptionDetails.exception?.description ?? res.exceptionDetails.text;
         return { thrown: true, value: null, error: msg ?? "runtime exception" };
