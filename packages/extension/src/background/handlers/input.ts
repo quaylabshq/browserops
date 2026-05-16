@@ -2597,17 +2597,32 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
     const chromeId = resolveChromeId(tabIdMap, params.tab_id);
     // Use CDP Runtime.evaluate instead of injected eval so this works on pages
     // with Trusted Types CSP (e.g. Gmail), where string-based eval is blocked.
-    try {
-      const res = await cdp.withAttach(chromeId, () =>
-        cdp.send<{
-          result: { type: string; value?: unknown };
-          exceptionDetails?: { text: string; exception?: { description?: string } };
-        }>(chromeId, "Runtime.evaluate", {
-          expression: params.code,
+    type EvalResult = {
+      result: { type: string; value?: unknown };
+      exceptionDetails?: { text: string; exception?: { description?: string } };
+    };
+    const evaluate = (expression: string): Promise<EvalResult> =>
+      cdp.withAttach(chromeId, () =>
+        cdp.send<EvalResult>(chromeId, "Runtime.evaluate", {
+          expression,
           returnByValue: true,
           allowUnsafeEvalBlockedByCSP: true,
         }),
       );
+    try {
+      let res = await evaluate(params.code);
+      // Agents reach for browser_execute_js the same way they reach for a
+      // browser devtools console — they write `const x = ...; return x;` as
+      // if execute_js takes a function body. CDP's Runtime.evaluate runs the
+      // expression at script scope, where a top-level `return` is a
+      // SyntaxError. Detect the canonical message and retry the code wrapped
+      // in an IIFE so the natural pattern just works.
+      if (res.exceptionDetails !== undefined) {
+        const errText = `${res.exceptionDetails.text} ${res.exceptionDetails.exception?.description ?? ""}`;
+        if (/Illegal return|return\s+(?:statement\s+is\s+)?outside(?:\s+of)?\s+(?:a\s+)?function/i.test(errText)) {
+          res = await evaluate(`(() => { ${params.code} })()`);
+        }
+      }
       if (res.exceptionDetails !== undefined) {
         const msg = res.exceptionDetails.exception?.description ?? res.exceptionDetails.text;
         return { thrown: true, value: null, error: msg ?? "runtime exception" };
