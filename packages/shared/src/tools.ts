@@ -649,7 +649,6 @@ const screenshot: ToolDef = {
     required: ["image_base64", "width", "height", "format"] as const,
     properties: {
       image_base64: { type: "string", contentEncoding: "base64" },
-      image: { type: "string", contentEncoding: "base64" },
       width: { type: "integer", minimum: 1 },
       height: { type: "integer", minimum: 1 },
       format: { enum: ["png", "jpeg"] as const },
