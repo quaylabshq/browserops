@@ -367,7 +367,7 @@ viewport scope.
 - **Verify**: action that triggers a console.error yields
   `effect.console_errors >= 1`.
 - **Commit**: `feat(extension): record a11y deltas and console errors in effect`
-- [ ] Done
+- [x] Done
 
 ### 1.4 — Wrap action handlers with captureEffect
 
