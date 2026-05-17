@@ -944,6 +944,11 @@ export class McpBridgeServer {
 // Helpers
 // ---------------------------------------------------------------------------
 
+// Action handlers attach a page_effect envelope (`effect: Effect`) — a
+// structural delta about what changed during the action window. The bridge
+// forwards the extension's result verbatim, so the envelope reaches MCP
+// clients unmodified. The per-tool outputSchema in shared/src/tools.ts must
+// list `effect` to keep strict-validating clients happy.
 function toolOk(result: unknown): ToolCallResult {
   const text = typeof result === "string" ? result : safeJson(result);
   return {
