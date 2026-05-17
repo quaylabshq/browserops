@@ -1566,6 +1566,35 @@ export function registerReadHandler(
       }
     }
 
+    if (rawParams["best_match"] === true) {
+      const q = query.toLowerCase();
+      // Pure tie-breaker: lower score wins.
+      const scoreOf = (name: string, rect: { width: number; height: number }): number => {
+        const n = name.toLowerCase();
+        let kind = 3; // substring
+        if (n === q) kind = 1;
+        else if (n.startsWith(q)) kind = 2;
+        // Smaller bounding box (more specific) preferred at ties.
+        return kind * 1_000_000 + rect.width * rect.height;
+      };
+      let bestIdx = -1;
+      let bestScore = Infinity;
+      const arr = matches as Array<{ name: string; rect: { width: number; height: number } }>;
+      for (let i = 0; i < arr.length; i++) {
+        const m = arr[i]!;
+        const s = scoreOf(m.name, m.rect);
+        if (s < bestScore) {
+          bestScore = s;
+          bestIdx = i;
+        }
+      }
+      return {
+        match: bestIdx >= 0 ? matches[bestIdx] : null,
+        total: result.total,
+        query,
+      };
+    }
+
     return {
       matches,
       total: result.total,
