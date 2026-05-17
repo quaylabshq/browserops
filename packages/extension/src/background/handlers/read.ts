@@ -1433,6 +1433,10 @@ export function registerReadHandler(
     };
     opts.refCache.set(tabId, snapshot);
 
+    const onlyEnabled = rawParams["only_enabled"] === true;
+    const onlyVisible = rawParams["only_visible"] === true;
+    const onlyInViewport = rawParams["only_in_viewport"] === true;
+
     // Augment matches with visual fields by default. The quick_read injected
     // fn already attaches a `rect` so the agent gets bounds either way, but
     // the augmentation pass adds visible / in_viewport / occluded_by / etc.
@@ -1476,6 +1480,19 @@ export function registerReadHandler(
       } catch (err) {
         console.warn("[browserops] quick_read augmentation skipped:", err);
       }
+    }
+
+    if (onlyEnabled || onlyVisible || onlyInViewport) {
+      matches = (matches as Array<{
+        visible?: boolean;
+        in_viewport?: boolean;
+        disabled_visual?: boolean;
+      }>).filter((m) => {
+        if (onlyEnabled && m.disabled_visual === true) return false;
+        if (onlyVisible && m.visible === false) return false;
+        if (onlyInViewport && m.in_viewport === false) return false;
+        return true;
+      }) as typeof matches;
     }
 
     return {

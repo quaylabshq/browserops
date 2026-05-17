@@ -1071,7 +1071,7 @@ and spatial filters.
 - **Files**: `packages/shared/src/tools.ts`,
   `packages/extension/src/background/handlers/quick-read.ts`
 - **Commit**: `feat(extension): add visual-state filters to browser_quick_read`
-- [ ] Done
+- [x] Done
 
 #### 4.2.2 — Spatial filter `within_region`
 
