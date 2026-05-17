@@ -2,6 +2,7 @@ import type { ErrorCode } from "@browserops/shared";
 import { sliceContent } from "@browserops/shared";
 import type { Router } from "../router.js";
 import type { RefCache, RefEntry, RefSnapshot } from "../ref-cache.js";
+import { augment } from "../../lib/a11y-augment.js";
 
 /**
  * browser_read handler.
@@ -35,6 +36,7 @@ interface ReadParams {
   max_length: number;
   selector?: string;
   scope: ReadScope;
+  augment: boolean;
 }
 
 interface ReadResult {
@@ -142,6 +144,14 @@ function parseParams(raw: Record<string, unknown>): ReadParams {
     else if (scopeRaw.startsWith("ref:")) scope = { kind: "ref", ref: scopeRaw.slice(4) };
     else throw codedError("INVALID_PARAMS", `scope must be 'viewport'|'document'|'ref:<id>', got ${scopeRaw}`);
   }
+  const augmentRaw = raw["augment"];
+  let augment = true;
+  if (augmentRaw !== undefined) {
+    if (typeof augmentRaw !== "boolean") {
+      throw codedError("INVALID_PARAMS", "augment must be boolean");
+    }
+    augment = augmentRaw;
+  }
   const out: ReadParams = {
     tab_id: tabId,
     mode: mode as ReadMode,
@@ -150,6 +160,7 @@ function parseParams(raw: Record<string, unknown>): ReadParams {
     length,
     max_length,
     scope,
+    augment,
   };
   if (selector !== undefined) out.selector = selector;
   return out;
@@ -942,9 +953,44 @@ export function registerReadHandler(
       };
       opts.refCache.set(params.tab_id, snapshot);
       const sliced = sliceContent(walk.tree, params.start, effectiveLength);
+      // Visual augmentation: one extra round-trip that returns bounds /
+      // visibility / occlusion / style per ref. Costs O(refs) elementFromPoint
+      // calls inside the injected fn but is capped at 200 occlusion samples
+      // per call to stay under ~30 ms on typical pages.
+      let refsOut: ReadResult["refs"] = walk.entries;
+      if (params.augment && walk.entries.length > 0) {
+        try {
+          const a11yNodes = walk.entries.map((e) => ({
+            ref: String(e.ref),
+            role: e.role,
+            name: e.name,
+            selector: e.selector,
+          }));
+          const augmented = await augment(chromeTabId, a11yNodes);
+          refsOut = walk.entries.map((entry, i) => {
+            const a = augmented[i];
+            if (a === undefined) return entry;
+            return {
+              ...entry,
+              bounds: a.bounds,
+              visible: a.visible,
+              in_viewport: a.in_viewport,
+              occluded_by: a.occluded_by,
+              bg_color: a.bg_color,
+              fg_color: a.fg_color,
+              opacity: a.opacity,
+              disabled_visual: a.disabled_visual,
+              ...(a.display !== undefined ? { display: a.display } : {}),
+              ...(a.flex_direction !== undefined ? { flex_direction: a.flex_direction } : {}),
+            };
+          });
+        } catch (err) {
+          console.warn("[browserops] augmentation skipped:", err);
+        }
+      }
       const result: ReadResult = {
         content: sliced.slice,
-        refs: walk.entries,
+        refs: refsOut,
         url,
         title,
         total_length: sliced.total_length,
