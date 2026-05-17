@@ -1049,7 +1049,7 @@ and spatial filters.
 #### 4.1.7 — Wire into `browser_type`
 
 - **Commit**: `feat(extension): support expected predicate in browser_type`
-- [ ] Done
+- [x] Done
 
 #### 4.1.8 — Wire into `browser_press`
 
