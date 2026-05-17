@@ -1,6 +1,7 @@
-import { NAVIGATE_TIMEOUT_MS, WAIT_FOR_TIMEOUT_CAP_MS, type Effect, type ErrorCode, type PageEffect } from "@browserops/shared";
+import { NAVIGATE_TIMEOUT_MS, WAIT_FOR_TIMEOUT_CAP_MS, type ActionExpectation, type Effect, type ErrorCode, type PageEffect } from "@browserops/shared";
 import { checkEffectExpectation } from "./effects.js";
 import { captureEffect } from "../effect.js";
+import { pollUntilMet } from "../expectation-poller.js";
 import type { Router } from "../router.js";
 import type { RefCache } from "../ref-cache.js";
 import type { NetworkTracker } from "../network-tracker.js";
@@ -93,7 +94,7 @@ export function registerNavigationHandlers(router: Router, opts: NavigationOpts)
 
   router.register(
     "browser_navigate",
-    async (params): Promise<{ final_url: string; page_effect?: PageEffect; effect?: Effect; warnings?: string[] }> => {
+    async (params): Promise<{ final_url: string; page_effect?: PageEffect; effect?: Effect; expectation_met?: boolean; mismatch_reason?: string; warnings?: string[] }> => {
       const chromeId = resolveChromeId(tabIdMap, params["tab_id"]);
       const url = params["url"];
       if (typeof url !== "string") {
@@ -179,7 +180,14 @@ export function registerNavigationHandlers(router: Router, opts: NavigationOpts)
       if (warning !== null) out.warnings = [warning];
       return out;
       });
-      return { ...handlerResult, effect: navEffect };
+      let verification: { expectation_met?: boolean; mismatch_reason?: string } = {};
+      const expectedRaw = params["expected"];
+      if (expectedRaw !== undefined && typeof expectedRaw === "object" && expectedRaw !== null) {
+        const v = await pollUntilMet(chromeId, navEffect, expectedRaw as ActionExpectation);
+        verification.expectation_met = v.expectation_met;
+        if (v.mismatch_reason !== undefined) verification.mismatch_reason = v.mismatch_reason;
+      }
+      return { ...handlerResult, effect: navEffect, ...verification };
     },
   );
 
