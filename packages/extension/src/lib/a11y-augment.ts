@@ -29,19 +29,76 @@ export interface A11yNode {
 
 export type AugmentedNode = A11yNode & VisualFields;
 
+/** Injected: takes the selector list and returns one entry per node with
+ *  bounds in a single round-trip. Subsequent substeps extend this same
+ *  function with visibility / occlusion / style fields. Self-contained —
+ *  no closures over module scope. */
+export function collectAugmentedFields(
+  selectors: readonly string[],
+): Array<VisualFields & { resolved: boolean }> {
+  const out: Array<VisualFields & { resolved: boolean }> = [];
+  for (const sel of selectors) {
+    const el = document.querySelector(sel);
+    if (el === null) {
+      out.push({
+        resolved: false,
+        bounds: null,
+        visible: false,
+        in_viewport: false,
+        occluded_by: null,
+        bg_color: null,
+        fg_color: null,
+        opacity: 1,
+        disabled_visual: false,
+      });
+      continue;
+    }
+    const rect = el.getBoundingClientRect();
+    const bounds =
+      rect.width === 0 && rect.height === 0
+        ? null
+        : { x: rect.x, y: rect.y, w: rect.width, h: rect.height };
+    out.push({
+      resolved: true,
+      bounds,
+      visible: false,
+      in_viewport: false,
+      occluded_by: null,
+      bg_color: null,
+      fg_color: null,
+      opacity: 1,
+      disabled_visual: false,
+    });
+  }
+  return out;
+}
+
 export async function augment(
-  _tabId: number,
+  tabId: number,
   nodes: readonly A11yNode[],
 ): Promise<AugmentedNode[]> {
-  return nodes.map((n) => ({
-    ...n,
-    bounds: null,
-    visible: false,
-    in_viewport: false,
-    occluded_by: null,
-    bg_color: null,
-    fg_color: null,
-    opacity: 1,
-    disabled_visual: false,
-  }));
+  if (nodes.length === 0) return [];
+  const { execInTab } = await import("../background/handlers/input.js");
+  const selectors = nodes.map((n) => n.selector);
+  let fields: Array<VisualFields & { resolved: boolean }> = [];
+  try {
+    fields = await execInTab(tabId, collectAugmentedFields, [selectors] as const);
+  } catch (err) {
+    console.warn("[browserops] a11y augmentation failed:", err);
+  }
+  return nodes.map((node, i) => {
+    const f = fields[i] ?? {
+      resolved: false,
+      bounds: null,
+      visible: false,
+      in_viewport: false,
+      occluded_by: null,
+      bg_color: null,
+      fg_color: null,
+      opacity: 1,
+      disabled_visual: false,
+    };
+    const { resolved: _resolved, ...visual } = f;
+    return { ...node, ...visual };
+  });
 }
