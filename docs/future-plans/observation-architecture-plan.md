@@ -793,7 +793,7 @@ representation given page characteristics and intent.
 - **Files**: `packages/shared/src/tools.ts`,
   `packages/extension/src/background/handlers/quick-read.ts`
 - **Commit**: `feat(extension): wire a11y augmentation into browser_quick_read`
-- [ ] Done
+- [x] Done
 
 ### 3.2 — Box-drawing layout renderer
 

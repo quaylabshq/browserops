@@ -1433,8 +1433,53 @@ export function registerReadHandler(
     };
     opts.refCache.set(tabId, snapshot);
 
+    // Augment matches with visual fields by default. The quick_read injected
+    // fn already attaches a `rect` so the agent gets bounds either way, but
+    // the augmentation pass adds visible / in_viewport / occluded_by / etc.
+    let matches: typeof result.entries | Array<typeof result.entries[number] & {
+      visible?: boolean;
+      in_viewport?: boolean;
+      occluded_by?: string | null;
+      bg_color?: string | null;
+      fg_color?: string | null;
+      opacity?: number;
+      disabled_visual?: boolean;
+      display?: string;
+      flex_direction?: string;
+    }> = result.entries;
+    const augmentFlag = rawParams["augment"];
+    if (augmentFlag !== false && result.entries.length > 0) {
+      try {
+        const a11yNodes = result.entries.map((e) => ({
+          ref: String(e.ref),
+          role: e.role,
+          name: e.name,
+          selector: e.selector,
+        }));
+        const augmented = await augment(chromeTabId, a11yNodes);
+        matches = result.entries.map((entry, i) => {
+          const a = augmented[i];
+          if (a === undefined) return entry;
+          return {
+            ...entry,
+            visible: a.visible,
+            in_viewport: a.in_viewport,
+            occluded_by: a.occluded_by,
+            bg_color: a.bg_color,
+            fg_color: a.fg_color,
+            opacity: a.opacity,
+            disabled_visual: a.disabled_visual,
+            ...(a.display !== undefined ? { display: a.display } : {}),
+            ...(a.flex_direction !== undefined ? { flex_direction: a.flex_direction } : {}),
+          };
+        });
+      } catch (err) {
+        console.warn("[browserops] quick_read augmentation skipped:", err);
+      }
+    }
+
     return {
-      matches: result.entries,
+      matches,
       total: result.total,
       query,
     };
