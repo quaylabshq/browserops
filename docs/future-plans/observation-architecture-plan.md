@@ -563,7 +563,7 @@ translation.
   LRU eviction past 32.
 - **Files**: `packages/extension/src/background/observation-cache.test.ts`
 - **Commit**: `test(extension): cover observation cache TTL and LRU`
-- [ ] Done
+- [x] Done
 
 ### 2.2 — Action-grade screenshot output
 
