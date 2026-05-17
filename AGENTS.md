@@ -114,7 +114,7 @@ Common chord recipes:
 | Delete forward | `["Delete"]` |
 | Clear a field (keyboard) | `["Primary", "KeyA"]` then `["Delete"]` |
 
-**Clearing fields.** For the common case ("overwrite this bad text with new text"), use `browser_type` with `clear_mode: "auto"` (or `clear_first: true`) rather than a two-step chord — `auto` picks the fastest safe strategy per element type, verifies emptiness, and falls back to keyboard Delete if execCommand was ignored by a rich editor.
+**Clearing fields.** For the common case ("overwrite this bad text with new text"), use `browser_type` with `clear_mode: "auto"` rather than a two-step chord — `auto` picks the fastest safe strategy per element type, verifies emptiness, and falls back to keyboard Delete if execCommand was ignored by a rich editor.
 
 For clearing as an independent step (no typing follow-up), bind a `browser_press` chord directly: `["Primary", "KeyA"]` followed by `["Delete"]`.
 

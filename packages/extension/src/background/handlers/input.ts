@@ -103,7 +103,6 @@ interface TypeParams {
   text: string;
   mode?: TypeMode;
   submit?: boolean;
-  clear_first?: boolean;
   clear_mode?: ClearMode;
   delay_ms?: number;
   observe_effects?: boolean;
@@ -1477,7 +1476,6 @@ function parseType(raw: Record<string, unknown>): TypeParams {
     throw codedError("INVALID_PARAMS", "mode must be keystroke|paste");
   }
   const submit = raw["submit"];
-  const clearFirst = raw["clear_first"];
   const clearMode = raw["clear_mode"];
   if (
     clearMode !== undefined &&
@@ -1496,7 +1494,6 @@ function parseType(raw: Record<string, unknown>): TypeParams {
     ref,
     text,
     submit: typeof submit === "boolean" ? submit : false,
-    clear_first: typeof clearFirst === "boolean" ? clearFirst : false,
     mode: mode !== undefined ? (mode as TypeMode) : undefined,
   };
   if (clearMode !== undefined) result.clear_mode = clearMode as ClearMode;
@@ -1508,16 +1505,9 @@ function parseType(raw: Record<string, unknown>): TypeParams {
   return result;
 }
 
-/**
- * Resolve the effective clearMode for this call. If clear_mode is set
- * explicitly, use it. Otherwise clear_first:true defaults to "auto" (the
- * robust path); clear_first:false (or omitted) means "do not clear" —
- * returned as undefined.
- */
+/** Resolve the effective clearMode for this call (undefined = no pre-clear). */
 function resolveClearMode(params: TypeParams): ClearMode | undefined {
-  if (params.clear_mode !== undefined) return params.clear_mode;
-  if (params.clear_first) return "auto";
-  return undefined;
+  return params.clear_mode;
 }
 
 function resolveTypeMode(text: string, explicit: TypeMode | undefined): TypeMode {
@@ -2315,7 +2305,7 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
             {
               next_action: isContentEditable
                 ? "contenteditable / rich editor detected — switch to browser_execute_js with `el.focus(); document.execCommand('insertText', false, <text>)` instead of retrying browser_type"
-                : "value did not reflect — call browser_quick_read again to confirm element is still focusable, then retry once with clear_first:true; if still failing, enable CDP via browser_set_cdp",
+                : "value did not reflect — call browser_quick_read again to confirm element is still focusable, then retry once with clear_mode:'auto'; if still failing, fall back to browser_execute_js",
               diagnostic: {
                 ref: params.ref,
                 tab_id: params.tab_id,
