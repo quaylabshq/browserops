@@ -1,10 +1,11 @@
-import type { ErrorCode, PageEffect } from "@browserops/shared";
+import type { Effect, ErrorCode, PageEffect } from "@browserops/shared";
 import { isDestructiveChord } from "@browserops/shared";
 import type { Router } from "../router.js";
 import type { RefCache } from "../ref-cache.js";
 import type { CdpManager } from "../cdp.js";
 import type { NetworkTracker } from "../network-tracker.js";
 import { withEffectObservation, checkEffectExpectation } from "./effects.js";
+import { captureEffect } from "../effect.js";
 import { resolveKey } from "./key-resolver.js";
 
 type ExpectEffect = "any" | "dom" | "navigation" | "none";
@@ -1891,6 +1892,7 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       retargeted?: boolean;
       suggestion?: string;
       page_effect?: PageEffect;
+      effect?: Effect;
       warnings?: string[];
     }> => {
       const params = parseClick(raw);
@@ -1902,6 +1904,8 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       const expectEffect = params.expect_effect;
       const mods = modifierFlags(modifiers);
       const buttonName = params.button ?? "left";
+
+      const { result: handlerResult, effect } = await captureEffect(chromeId, async () => {
 
       // Persistent CDP path: trusted click via Input.dispatchMouseEvent.
       if (cdp.isPersistent(chromeId)) {
@@ -2029,6 +2033,8 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
         return { ...r, warnings: ["expect_effect set but observe_effects:false — no effect data to verify against"] };
       }
       return buildResult();
+      });
+      return { ...handlerResult, effect };
     },
   );
 
