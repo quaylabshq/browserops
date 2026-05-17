@@ -92,6 +92,7 @@ interface ClickAtParams {
   y: number;
   button?: "left" | "middle" | "right";
   modifiers?: readonly Modifier[];
+  coord_space?: "css" | { kind: "screenshot"; token: string };
 }
 
 type TypeMode = "keystroke" | "paste";
@@ -1454,12 +1455,26 @@ function parseClickAt(raw: Record<string, unknown>): ClickAtParams {
     throw codedError("INVALID_PARAMS", "button must be left|middle|right");
   }
   const mods = parseModifiers(raw["modifiers"]);
+  let coord_space: ClickAtParams["coord_space"] = "css";
+  const coordRaw = raw["coord_space"];
+  if (coordRaw !== undefined) {
+    if (typeof coordRaw !== "string") {
+      throw codedError("INVALID_PARAMS", "coord_space must be a string");
+    }
+    if (coordRaw === "css") coord_space = "css";
+    else if (coordRaw.startsWith("screenshot:")) {
+      coord_space = { kind: "screenshot", token: coordRaw.slice("screenshot:".length) };
+    } else {
+      throw codedError("INVALID_PARAMS", "coord_space must be 'css' or 'screenshot:<token>'");
+    }
+  }
   return {
     tab_id,
     x,
     y,
     button: (button as ClickAtParams["button"]) ?? "left",
     modifiers: mods,
+    coord_space,
   };
 }
 

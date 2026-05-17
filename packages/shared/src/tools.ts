@@ -889,7 +889,7 @@ const click: ToolDef = {
 const clickAt: ToolDef = {
   name: "browser_click_at",
   description:
-    "Click at viewport coordinates (x, y) — no ref required. Escape hatch for canvas, maps, games, and anything the a11y walker can't address. Response includes a `page_effect` envelope describing what changed during the action window.",
+    "Click at viewport coordinates (x, y) — no ref required. Escape hatch for canvas, maps, games, and anything the a11y walker can't address. With `coord_space: 'screenshot:<token>'`, x/y are interpreted in screenshot pixels and translated to CSS pixels via the observation cache. Response includes a `page_effect` envelope describing what changed during the action window.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -900,6 +900,13 @@ const clickAt: ToolDef = {
       y: { type: "number", minimum: 0 },
       button: { enum: ["left", "middle", "right"] as const, default: "left" },
       modifiers: modifiersSchema,
+      coord_space: {
+        description:
+          "Coordinate space for x,y. 'css' (default) treats them as CSS pixels relative to the viewport. 'screenshot:<token>' treats them as pixels inside the screenshot identified by the token (returned by browser_screenshot / browser_observe).",
+        type: "string",
+        pattern: "^(css|screenshot:.+)$",
+        default: "css",
+      },
     },
   },
   outputSchema: {

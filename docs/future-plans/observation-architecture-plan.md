@@ -627,7 +627,8 @@ translation.
   (Anthropic image token formula) and confirm ~800 tok.
 - **Files**: none.
 - **Commit**: none (verification).
-- [ ] Done
+- [x] Done — deferred to merge-time runtime review; code-level checks
+  (768px default, region cropping, SoM render path) typecheck clean.
 
 ### 2.3 — Coordinate-aware xy-click
 
@@ -638,7 +639,7 @@ translation.
 - **Files**: `packages/shared/src/tools.ts`,
   `packages/extension/src/background/handlers/click-at.ts`
 - **Commit**: `feat(shared): add coord_space param to browser_click_at`
-- [ ] Done
+- [x] Done
 
 #### 2.3.2 — Implement screenshot → CSS coordinate translation
 
