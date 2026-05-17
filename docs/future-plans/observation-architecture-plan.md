@@ -810,7 +810,7 @@ representation given page characteristics and intent.
   ): { text: string; ref_map: Record<string, string> };
   ```
 - **Commit**: `feat(bridge): scaffold box-drawing renderer module`
-- [ ] Done
+- [x] Done
 
 #### 3.2.2 — Landmark/section walker
 
