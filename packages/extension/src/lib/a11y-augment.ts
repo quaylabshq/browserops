@@ -37,6 +37,8 @@ export function collectAugmentedFields(
   selectors: readonly string[],
 ): Array<VisualFields & { resolved: boolean }> {
   const out: Array<VisualFields & { resolved: boolean }> = [];
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
   for (const sel of selectors) {
     const el = document.querySelector(sel);
     if (el === null) {
@@ -58,15 +60,28 @@ export function collectAugmentedFields(
       rect.width === 0 && rect.height === 0
         ? null
         : { x: rect.x, y: rect.y, w: rect.width, h: rect.height };
+    const style = window.getComputedStyle(el);
+    const opacity = Number.parseFloat(style.opacity);
+    const visible =
+      bounds !== null &&
+      style.display !== "none" &&
+      style.visibility !== "hidden" &&
+      opacity > 0.01;
+    const in_viewport =
+      bounds !== null &&
+      bounds.x + bounds.w >= 0 &&
+      bounds.y + bounds.h >= 0 &&
+      bounds.x <= vw &&
+      bounds.y <= vh;
     out.push({
       resolved: true,
       bounds,
-      visible: false,
-      in_viewport: false,
+      visible,
+      in_viewport,
       occluded_by: null,
       bg_color: null,
       fg_color: null,
-      opacity: 1,
+      opacity: isFinite(opacity) ? opacity : 1,
       disabled_visual: false,
     });
   }
