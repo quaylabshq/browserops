@@ -1086,7 +1086,7 @@ and spatial filters.
   to nodes whose bounds center is within radius of the named ref's
   bounds center.
 - **Commit**: `feat(extension): add near filter to browser_quick_read`
-- [ ] Done
+- [x] Done
 
 #### 4.2.4 — `best_match` single-result mode
 
