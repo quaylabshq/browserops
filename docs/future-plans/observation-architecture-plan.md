@@ -618,7 +618,7 @@ translation.
   `packages/extension/src/lib/som-overlay.ts`.
 - **Output shape addition**: `som_map: { "1": { ref, role, name }, ... }`
 - **Commit**: `feat(extension): add SoM overlay annotation to browser_screenshot`
-- [ ] Done
+- [x] Done
 
 #### 2.2.5 — Screenshot smoke + token budget check
 
