@@ -1,4 +1,4 @@
-import type { Effect, ErrorCode, PageEffect } from "@browserops/shared";
+import type { ActionExpectation, Effect, ErrorCode, PageEffect } from "@browserops/shared";
 import { isDestructiveChord } from "@browserops/shared";
 import type { Router } from "../router.js";
 import type { RefCache } from "../ref-cache.js";
@@ -6,7 +6,22 @@ import type { CdpManager } from "../cdp.js";
 import type { NetworkTracker } from "../network-tracker.js";
 import { withEffectObservation, checkEffectExpectation } from "./effects.js";
 import { captureEffect } from "../effect.js";
+import { pollUntilMet } from "../expectation-poller.js";
 import { get as getObservation } from "../observation-cache.js";
+
+/**
+ * Parses the optional `expected` predicate. Lenient — unknown fields pass
+ * through (the matcher ignores them). Throws INVALID_PARAMS only when the
+ * top-level shape is wrong (e.g. not an object).
+ */
+function parseExpected(raw: unknown): ActionExpectation | undefined {
+  if (raw === undefined) return undefined;
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    throw codedError("INVALID_PARAMS", "expected must be an object");
+  }
+  // Trust the shape — the matcher tolerates absent fields.
+  return raw as ActionExpectation;
+}
 import { resolveKey } from "./key-resolver.js";
 
 interface ResolvedCoords {
@@ -116,6 +131,7 @@ interface ClickParams {
   modifiers?: readonly Modifier[];
   observe_effects?: boolean;
   expect_effect?: ExpectEffect;
+  expected?: ActionExpectation;
 }
 
 interface ClickAtParams {
@@ -1471,6 +1487,8 @@ function parseClick(raw: Record<string, unknown>): ClickParams {
   if (raw["observe_effects"] === false) result.observe_effects = false;
   const expectEffect = parseExpectEffect(raw["expect_effect"]);
   if (expectEffect !== undefined) result.expect_effect = expectEffect;
+  const expected = parseExpected(raw["expected"]);
+  if (expected !== undefined) result.expected = expected;
   return result;
 }
 
@@ -2007,6 +2025,8 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       suggestion?: string;
       page_effect?: PageEffect;
       effect?: Effect;
+      expectation_met?: boolean;
+      mismatch_reason?: string;
       warnings?: string[];
     }> => {
       const params = parseClick(raw);
@@ -2148,7 +2168,13 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       }
       return buildResult();
       });
-      return { ...handlerResult, effect };
+      let verification: { expectation_met?: boolean; mismatch_reason?: string } = {};
+      if (params.expected !== undefined) {
+        const v = await pollUntilMet(chromeId, effect, params.expected);
+        verification.expectation_met = v.expectation_met;
+        if (v.mismatch_reason !== undefined) verification.mismatch_reason = v.mismatch_reason;
+      }
+      return { ...handlerResult, effect, ...verification };
     },
   );
 
