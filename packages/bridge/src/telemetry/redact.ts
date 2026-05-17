@@ -35,7 +35,6 @@ const MCP_COMMON: ReadonlySet<string> = new Set([
   "client_name",
   "param_keys",
   "tab_hostname",
-  "is_gated_domain",
   "feature_gate_hit",
 ]);
 

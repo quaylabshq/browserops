@@ -18,7 +18,6 @@ import {
 import { createTraceWriter, type TraceWriter } from "./trace-writer.js";
 import { Logger, type LogLevel } from "./logger.js";
 import { loadRiskyDomainMatcher, type RiskyDomainMatcher } from "./risky-domains.js";
-import { loadGatedDomainMatcher, type GatedDomainMatcher } from "./gated-domains.js";
 import { Safety } from "./safety.js";
 import { TabRegistry, type TabRecord } from "./tab-registry.js";
 import { loadOrCreateToken } from "./token.js";
@@ -36,7 +35,6 @@ export interface DaemonRuntime {
   safety: Safety;
   enabledFeatures: { current: Set<FeatureName> };
   riskyMatcher: RiskyDomainMatcher;
-  gatedMatcher: GatedDomainMatcher;
   pairCode: string;
   /**
    * Mutable fan-out point invoked when the extension reports a closed
@@ -74,10 +72,7 @@ export async function bootDaemonRuntime(opts: BootDaemonRuntimeOptions): Promise
   const port = Number.parseInt(process.env[ENV.PORT] ?? String(DEFAULT_WS_PORT), 10);
   const allowedExtensionId = process.env[ENV.EXTENSION_ID] ?? "";
 
-  const [riskyMatcher, gatedMatcher] = await Promise.all([
-    loadRiskyDomainMatcher(),
-    loadGatedDomainMatcher(),
-  ]);
+  const riskyMatcher = await loadRiskyDomainMatcher();
   const tabs = new TabRegistry();
 
   // Mutable hook the daemon overrides post-construction with a fan-out
@@ -143,8 +138,6 @@ export async function bootDaemonRuntime(opts: BootDaemonRuntimeOptions): Promise
       }
     },
     getFeatures: () => [...enabledFeatures.current],
-    getGatedDomains: () =>
-      enabledFeatures.current.has("gated-domains") ? [...gatedMatcher.patterns] : undefined,
   });
 
   await wsBridge.start();
@@ -184,7 +177,6 @@ export async function bootDaemonRuntime(opts: BootDaemonRuntimeOptions): Promise
     safety,
     enabledFeatures,
     riskyMatcher,
-    gatedMatcher,
     pairCode: wsBridge.pairCode,
     get onTabClosed() {
       return hooks.onTabClosed;
