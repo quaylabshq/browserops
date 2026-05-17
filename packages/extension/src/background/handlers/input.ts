@@ -224,6 +224,14 @@ interface ResolvedRef {
 }
 
 function resolveRef(refCache: RefCache, tabId: string, ref: number): ResolvedRef {
+  // Try the current snapshot first; if the ref was issued by a prior read
+  // and a same-page observation has since replaced the snapshot, fall
+  // back to the one-deep history. This is the common case after the
+  // agent does read -> click -> quick_read (verification) -> click again.
+  const hit = refCache.lookupWithFallback(tabId, ref);
+  if (hit !== undefined) {
+    return { selector: hit.entry.selector, role: hit.entry.role };
+  }
   const snap = refCache.get(tabId);
   if (snap === undefined) {
     throw codedError(
@@ -236,24 +244,20 @@ function resolveRef(refCache: RefCache, tabId: string, ref: number): ResolvedRef
       },
     );
   }
-  const entry = snap.entries.get(ref);
-  if (entry === undefined) {
-    throw codedError(
-      "REF_NOT_FOUND",
-      `ref ${ref} not present in current snapshot for ${tabId}`,
-      {
-        next_action:
-          "element ref is stale — call browser_quick_read again to get a fresh ref, do not reuse the old one",
-        diagnostic: {
-          tab_id: tabId,
-          ref,
-          snapshot_url: snap.url,
-          snapshot_size: snap.entries.size,
-        },
+  throw codedError(
+    "REF_NOT_FOUND",
+    `ref ${ref} not present in current snapshot for ${tabId}`,
+    {
+      next_action:
+        "element ref is stale — call browser_quick_read again to get a fresh ref, do not reuse the old one",
+      diagnostic: {
+        tab_id: tabId,
+        ref,
+        snapshot_url: snap.url,
+        snapshot_size: snap.entries.size,
       },
-    );
-  }
-  return { selector: entry.selector, role: entry.role };
+    },
+  );
 }
 
 function resolveSelector(refCache: RefCache, tabId: string, ref: number): string {
