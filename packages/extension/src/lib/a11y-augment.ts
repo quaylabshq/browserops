@@ -40,6 +40,25 @@ export function collectAugmentedFields(
   const vw = window.innerWidth;
   const vh = window.innerHeight;
 
+  function parseRgb(s: string): [number, number, number] | null {
+    const m = s.match(/rgba?\(\s*(\d+)[ ,]+(\d+)[ ,]+(\d+)/);
+    if (m === null) return null;
+    return [parseInt(m[1] ?? "0", 10), parseInt(m[2] ?? "0", 10), parseInt(m[3] ?? "0", 10)];
+  }
+
+  function relLum(rgb: [number, number, number]): number {
+    const ch = rgb.map((v) => {
+      const x = v / 255;
+      return x <= 0.03928 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
+    });
+    return 0.2126 * (ch[0] ?? 0) + 0.7152 * (ch[1] ?? 0) + 0.0722 * (ch[2] ?? 0);
+  }
+
+  function toHex(rgb: [number, number, number]): string {
+    const h = (n: number): string => n.toString(16).padStart(2, "0");
+    return `#${h(rgb[0])}${h(rgb[1])}${h(rgb[2])}`;
+  }
+
   function selectorFor(node: Element): string {
     const parts: string[] = [];
     let n: Element | null = node;
@@ -106,6 +125,24 @@ export function collectAugmentedFields(
       bounds.y + bounds.h >= 0 &&
       bounds.x <= vw &&
       bounds.y <= vh;
+    const bgRgb = parseRgb(style.backgroundColor);
+    const fgRgb = parseRgb(style.color);
+    const bg_color = bgRgb ? toHex(bgRgb) : null;
+    const fg_color = fgRgb ? toHex(fgRgb) : null;
+    let contrastFlag = false;
+    if (bgRgb && fgRgb) {
+      const lum1 = relLum(bgRgb);
+      const lum2 = relLum(fgRgb);
+      const lighter = Math.max(lum1, lum2);
+      const darker = Math.min(lum1, lum2);
+      const ratio = (lighter + 0.05) / (darker + 0.05);
+      contrastFlag = ratio < 3;
+    }
+    const disabled_visual =
+      contrastFlag ||
+      style.pointerEvents === "none" ||
+      style.cursor === "not-allowed";
+
     let occluded_by: string | null = null;
     if (visible && in_viewport && occlusionsRemaining > 0 && bounds !== null) {
       occlusionsRemaining -= 1;
@@ -124,10 +161,12 @@ export function collectAugmentedFields(
       visible,
       in_viewport,
       occluded_by,
-      bg_color: null,
-      fg_color: null,
+      bg_color,
+      fg_color,
       opacity: isFinite(opacity) ? opacity : 1,
-      disabled_visual: false,
+      disabled_visual,
+      display: style.display,
+      flex_direction: style.flexDirection,
     });
   }
   return out;
