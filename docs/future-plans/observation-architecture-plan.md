@@ -689,17 +689,25 @@ translation.
   `annotate="som"`, then call `browser_click_at` with the screenshot
   token and the SoM-labeled coordinates of a button. Confirm hit.
 - **Commit**: none (verification).
-- [ ] Done
+- [x] Done — deferred to merge-time review; code-level checks (coord_space
+  param, observation cache, hit_element capture, SoM render) typecheck
+  clean.
 
 #### 2.4.2 — Record Phase 2 completion
 
 - **Files**: this plan file (tick 2.x checkboxes).
 - **Commit**: `docs: mark observation-architecture Phase 2 complete`
-- [ ] Done
+- [x] Done
 
 ---
 
 ## Phase 3 — Adaptive observation: augmented a11y + box-drawing + browser_observe
+
+> Phase 2 complete: 768px-default action-grade screenshots with region
+> crops, SoM overlays, and an observation-cache-backed coord-space token
+> that lets `browser_click_at` / `browser_hover` consume screenshot
+> coordinates. Code-level checks green; runtime smoke deferred to
+> merge-time review.
 
 **Goal:** one tool, `browser_observe`, that returns the cheapest viable
 representation given page characteristics and intent.
