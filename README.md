@@ -71,7 +71,7 @@ browserops sync skills       # only refresh ~/.claude/skills/<name>/SKILL.md
 browserops sync --dry-run    # preview without writing
 
 browserops feature list                # show experimental features and their state
-browserops feature enable <name>       # opt into procedures, gated-domains, or memory
+browserops feature enable <name>       # opt into procedures or lore
 browserops feature disable <name>      # opt out
 ```
 
@@ -332,12 +332,6 @@ There is no index manifest by design — the bridge globs the directory and pars
 
 When the `lore` feature is on, the MCP `initialize` instructions surfaced to your agent grow a short paragraph about `lore_save` / `_search` / `_get` / `_delete` — agents pick it up automatically on the next session. With the feature off, those tools and their documentation are stripped from both `tools/list` and the server instructions, keeping the prompt minimal.
 
-## Gated domains
-
-> **Experimental — on by default.** Disable with `browserops feature disable gated-domains` (then `browserops restart`) if you'd rather avoid Chrome's "controlled by automation" banner on the listed domains.
-
-Auto-attaches CDP ("debug mode") on navigation to rich-editor and SPA domains (Gmail, Slack, Notion, Linear, Discord, Figma) so that synthetic input dispatch works reliably without site-specific checks. When enabled, `browser_navigate` and `browser_current_tab` results include `gated_domain: true`, and the bridge nudges toward `browser_execute_js` when clicks/typing/key presses show zero observable page change. Default domains: `mail.google.com`, `app.gmail.com`, `*.slack.com`, `*.notion.so`, `linear.app`, `discord.com`, `*.discord.com`, `*.figma.com`. Extend with `~/.browserops/gated-domains.json` (JSON array of glob patterns; same format as `~/.browserops/risky-domains.json`). Note: Chrome displays a "controlled by automation" banner while this feature is active.
-
 ## Safety defaults
 
 - **Rate limit:** 16 actions/minute per tab, 60/minute globally. Exceeded → `RATE_LIMITED` with `retry_after_ms`.
@@ -398,7 +392,7 @@ Currently ~220 unit tests total across shared (envelope guards, tool catalogue i
 | `BROWSEROPS_LOG_LEVEL` | `normal` | `normal` truncates strings > 200 chars; `audit` logs full payloads |
 | `BROWSEROPS_APPROVAL` | `auto` | `auto` (default) or `gate`; controls approval mode for risky actions |
 | `BROWSEROPS_TRACE` | unset | `=1` writes trace events including auto-approvals to `~/.browserops/trace.jsonl` |
-| `BROWSEROPS_FEATURES` | unset | Comma-separated experimental feature names to force-enable (e.g. `procedures,gated-domains`). Overrides `~/.browserops/config.json` when explicitly set; an empty string disables everything. Persistent toggles use `browserops feature enable/disable <name>` instead. |
+| `BROWSEROPS_FEATURES` | unset | Comma-separated experimental feature names to force-enable (e.g. `procedures,lore`). Overrides `~/.browserops/config.json` when explicitly set; an empty string disables everything. Persistent toggles use `browserops feature enable/disable <name>` instead. |
 
 ## Troubleshooting
 

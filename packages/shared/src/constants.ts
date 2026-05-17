@@ -40,7 +40,6 @@ export const STATE_DIR_NAME = ".browserops";
 export const TOKEN_FILENAME = "token";
 export const LOG_FILENAME = "log.jsonl";
 export const RISKY_DOMAINS_FILENAME = "risky-domains.json";
-export const GATED_DOMAINS_FILENAME = "gated-domains.json";
 
 /**
  * Multi-session daemon paths. The shim binary connects to this socket;
@@ -66,7 +65,7 @@ export const ENV = {
   /** Override the directory where trace .jsonl files are written. */
   TRACE_DIR: "BROWSEROPS_TRACE_DIR",
   /**
-   * Comma-separated gated feature names (e.g. "procedures,gated-domains").
+   * Comma-separated gated feature names (e.g. "procedures,lore").
    * When set, overrides ~/.browserops/config.json's features block.
    * Set to empty string to explicitly disable everything.
    */

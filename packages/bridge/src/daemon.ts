@@ -286,7 +286,6 @@ async function attachMcpSession(
     sessionId: session.id,
     enabledFeatures: runtime.enabledFeatures.current,
     traceWriter: runtime.traceWriter,
-    gatedMatcher: runtime.gatedMatcher,
     renameSession,
     clientName: session.client_info.name,
   });

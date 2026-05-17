@@ -103,7 +103,6 @@ interface TypeParams {
   text: string;
   mode?: TypeMode;
   submit?: boolean;
-  clear_first?: boolean;
   clear_mode?: ClearMode;
   delay_ms?: number;
   observe_effects?: boolean;
@@ -1477,7 +1476,6 @@ function parseType(raw: Record<string, unknown>): TypeParams {
     throw codedError("INVALID_PARAMS", "mode must be keystroke|paste");
   }
   const submit = raw["submit"];
-  const clearFirst = raw["clear_first"];
   const clearMode = raw["clear_mode"];
   if (
     clearMode !== undefined &&
@@ -1496,7 +1494,6 @@ function parseType(raw: Record<string, unknown>): TypeParams {
     ref,
     text,
     submit: typeof submit === "boolean" ? submit : false,
-    clear_first: typeof clearFirst === "boolean" ? clearFirst : false,
     mode: mode !== undefined ? (mode as TypeMode) : undefined,
   };
   if (clearMode !== undefined) result.clear_mode = clearMode as ClearMode;
@@ -1508,16 +1505,9 @@ function parseType(raw: Record<string, unknown>): TypeParams {
   return result;
 }
 
-/**
- * Resolve the effective clearMode for this call. If clear_mode is set
- * explicitly, use it. Otherwise clear_first:true defaults to "auto" (the
- * robust path); clear_first:false (or omitted) means "do not clear" —
- * returned as undefined.
- */
+/** Resolve the effective clearMode for this call (undefined = no pre-clear). */
 function resolveClearMode(params: TypeParams): ClearMode | undefined {
-  if (params.clear_mode !== undefined) return params.clear_mode;
-  if (params.clear_first) return "auto";
-  return undefined;
+  return params.clear_mode;
 }
 
 function resolveTypeMode(text: string, explicit: TypeMode | undefined): TypeMode {
@@ -1947,11 +1937,17 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       }
 
       // Synthetic path.
-      const dismissOverlay = raw["dismiss_overlay"] === true;
-      const autoDismiss = raw["auto_dismiss"] === true;
-      if (dismissOverlay && autoDismiss) {
-        throw codedError("INVALID_PARAMS", "dismiss_overlay and auto_dismiss are mutually exclusive");
+      const overlayRaw = raw["overlay"];
+      if (
+        overlayRaw !== undefined &&
+        overlayRaw !== "none" &&
+        overlayRaw !== "simple" &&
+        overlayRaw !== "smart"
+      ) {
+        throw codedError("INVALID_PARAMS", "overlay must be none|simple|smart");
       }
+      const overlay: "none" | "simple" | "smart" =
+        overlayRaw === "simple" || overlayRaw === "smart" ? overlayRaw : "none";
       let res = await execInTab(chromeId, injectedClick, [selector, button, mods] as const);
       if (res.found === false) {
         throw codedError(
@@ -1961,31 +1957,21 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       }
       let dismissedOverlay = false;
       let dismissStrategy: string | undefined;
-      if ((dismissOverlay || autoDismiss) && res.occluded === true) {
-        if (autoDismiss) {
-          const dismiss = await execInTab(chromeId, injectedAutoDismiss, [selector] as const);
-          if (dismiss.dismissed) {
-            dismissedOverlay = true;
-            dismissStrategy = dismiss.strategy;
-            res = await execInTab(chromeId, injectedClick, [selector, button, mods] as const);
-            if (res.found === false) {
-              throw codedError(
-                "REF_STALE",
-                `ref ${params.ref} became stale after overlay dismissal in tab ${params.tab_id}`,
-              );
-            }
-          }
-        } else {
-          const dismiss = await execInTab(chromeId, injectedDismissOverlay, [selector] as const);
-          if (dismiss.dismissed) {
-            dismissedOverlay = true;
-            res = await execInTab(chromeId, injectedClick, [selector, button, mods] as const);
-            if (res.found === false) {
-              throw codedError(
-                "REF_STALE",
-                `ref ${params.ref} became stale after overlay dismissal in tab ${params.tab_id}`,
-              );
-            }
+      if (overlay !== "none" && res.occluded === true) {
+        const injected = overlay === "smart" ? injectedAutoDismiss : injectedDismissOverlay;
+        const dismiss = await execInTab(chromeId, injected, [selector] as const) as {
+          dismissed: boolean;
+          strategy?: string;
+        };
+        if (dismiss.dismissed) {
+          dismissedOverlay = true;
+          if (overlay === "smart") dismissStrategy = dismiss.strategy;
+          res = await execInTab(chromeId, injectedClick, [selector, button, mods] as const);
+          if (res.found === false) {
+            throw codedError(
+              "REF_STALE",
+              `ref ${params.ref} became stale after overlay dismissal in tab ${params.tab_id}`,
+            );
           }
         }
       }
@@ -2010,15 +1996,14 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
           r.occluded = true;
           r.occluder = res.occluder ?? null;
           r.clicked = false;
-          if (!dismissOverlay && !autoDismiss) {
-            // Provide actionable suggestion based on occluder text.
+          if (overlay === "none") {
             const occText = (res.occluder?.text ?? "").toLowerCase();
             if (/cookie|consent|gdpr|accept/.test(occText)) {
-              r.suggestion = "cookie/consent overlay detected — retry with auto_dismiss: true";
+              r.suggestion = "cookie/consent overlay detected — retry with overlay: 'smart'";
             } else if (res.occluder?.role === "dialog" || res.occluder?.role === "alertdialog") {
-              r.suggestion = "dialog overlay detected — retry with auto_dismiss: true";
+              r.suggestion = "dialog overlay detected — retry with overlay: 'smart'";
             } else {
-              r.suggestion = "retry with dismiss_overlay: true or auto_dismiss: true";
+              r.suggestion = "retry with overlay: 'simple' or overlay: 'smart'";
             }
           } else {
             r.suggestion =
@@ -2315,7 +2300,7 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
             {
               next_action: isContentEditable
                 ? "contenteditable / rich editor detected — switch to browser_execute_js with `el.focus(); document.execCommand('insertText', false, <text>)` instead of retrying browser_type"
-                : "value did not reflect — call browser_quick_read again to confirm element is still focusable, then retry once with clear_first:true; if still failing, enable CDP via browser_set_cdp",
+                : "value did not reflect — call browser_quick_read again to confirm element is still focusable, then retry once with clear_mode:'auto'; if still failing, fall back to browser_execute_js",
               diagnostic: {
                 ref: params.ref,
                 tab_id: params.tab_id,
