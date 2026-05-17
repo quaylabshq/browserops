@@ -2572,32 +2572,35 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       params.ref !== undefined
         ? resolveSelector(refCache, params.tab_id, params.ref)
         : null;
-    const res = await execInTab(chromeId, injectedFindAndReplaceSynthetic, [
-      selectorArg,
-      params.find,
-      params.replace,
-      params.occurrence,
-      params.case_sensitive,
-    ] as const);
-    if (res.status === "no_target") {
-      throw codedError(
-        "INVALID_PARAMS",
-        "no target element (ref was not provided and document.activeElement is not editable)",
-      );
-    }
-    if (res.status === "not_found") {
-      throw codedError("TEXT_NOT_FOUND", `substring not found in target element`);
-    }
-    if (res.status === "unsupported_kind") {
-      throw codedError(
-        "INTERNAL",
-        `element <${res.tag}> is not editable (expected input, textarea, or contenteditable)`,
-      );
-    }
-    return {
-      replaced: res.replaced,
-      used_fallback: res.used_fallback,
-    };
+    const { result, effect } = await captureEffect(chromeId, async () => {
+      const res = await execInTab(chromeId, injectedFindAndReplaceSynthetic, [
+        selectorArg,
+        params.find,
+        params.replace,
+        params.occurrence,
+        params.case_sensitive,
+      ] as const);
+      if (res.status === "no_target") {
+        throw codedError(
+          "INVALID_PARAMS",
+          "no target element (ref was not provided and document.activeElement is not editable)",
+        );
+      }
+      if (res.status === "not_found") {
+        throw codedError("TEXT_NOT_FOUND", `substring not found in target element`);
+      }
+      if (res.status === "unsupported_kind") {
+        throw codedError(
+          "INTERNAL",
+          `element <${res.tag}> is not editable (expected input, textarea, or contenteditable)`,
+        );
+      }
+      return {
+        replaced: res.replaced,
+        used_fallback: res.used_fallback,
+      };
+    });
+    return { ...result, effect };
   });
 
   router.register("browser_execute_js", async (raw) => {

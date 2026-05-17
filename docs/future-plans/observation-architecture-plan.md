@@ -434,7 +434,7 @@ assert the field is present and well-formed.
 
 - **Files**: `packages/extension/src/background/handlers/find-and-replace.ts`
 - **Commit**: `feat(extension): return page_effect envelope from browser_find_and_replace`
-- [ ] Done
+- [x] Done
 
 ### 1.5 — Surface `effect` through MCP
 
