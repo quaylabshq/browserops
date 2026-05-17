@@ -147,13 +147,63 @@ export function renderBoxDrawing(
   const lines: string[] = [];
   for (const g of groups) {
     lines.push(renderLandmarkHeader(g));
+    let tableMode: { table: BoxDrawingNode; rows: BoxDrawingNode[][] } | null = null;
     for (const n of g.nodes) {
       if (LANDMARK_ROLES.has(n.role)) continue; // skip the landmark itself
+      if (n.role === "table" || n.role === "grid") {
+        if (tableMode !== null) flushTable(lines, tableMode);
+        tableMode = { table: n, rows: [[]] };
+        continue;
+      }
+      if (tableMode !== null && (n.role === "row")) {
+        tableMode.rows.push([]);
+        continue;
+      }
+      if (tableMode !== null && (n.role === "cell" || n.role === "gridcell" || n.role === "columnheader" || n.role === "rowheader")) {
+        const lastRow = tableMode.rows[tableMode.rows.length - 1] ?? [];
+        if (tableMode.rows.length === 0) tableMode.rows.push([]);
+        lastRow.push(n);
+        continue;
+      }
+      if (tableMode !== null) {
+        flushTable(lines, tableMode);
+        tableMode = null;
+      }
       if (INTERACTIVE_ROLES.has(n.role) || n.role === "heading") {
         lines.push(renderLeafLine(n));
       }
     }
+    if (tableMode !== null) flushTable(lines, tableMode);
     lines.push(renderLandmarkFooter());
   }
   return { text: lines.join("\n"), ref_map };
+}
+
+function flushTable(
+  lines: string[],
+  table: { table: BoxDrawingNode; rows: BoxDrawingNode[][] },
+): void {
+  const nonEmpty = table.rows.filter((r) => r.length > 0);
+  if (nonEmpty.length === 0) {
+    lines.push(`│  [TABLE r${table.table.ref}] (empty)`);
+    return;
+  }
+  const colWidths: number[] = [];
+  for (const row of nonEmpty) {
+    for (let i = 0; i < row.length; i++) {
+      const cell = row[i]!;
+      const text = `${cell.name} r${cell.ref}`;
+      colWidths[i] = Math.max(colWidths[i] ?? 0, text.length);
+    }
+  }
+  const sep = "+" + colWidths.map((w) => "-".repeat(w + 2)).join("+") + "+";
+  lines.push(`│  TABLE r${table.table.ref}`);
+  lines.push(`│  ${sep}`);
+  for (const row of nonEmpty) {
+    const cells = row
+      .map((c, i) => ` ${(`${c.name} r${c.ref}`).padEnd(colWidths[i] ?? 0)} `)
+      .join("|");
+    lines.push(`│  |${cells}|`);
+    lines.push(`│  ${sep}`);
+  }
 }
