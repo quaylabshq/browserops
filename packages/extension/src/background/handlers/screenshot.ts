@@ -342,7 +342,6 @@ export function registerScreenshotHandler(
       });
       return {
         image_base64,
-        image: image_base64,
         width: cssW,
         height: cssH,
         format,
@@ -410,7 +409,6 @@ export function registerScreenshotHandler(
     });
     return {
       image_base64: finalBase64,
-      image: finalBase64,
       width: finalW,
       height: finalH,
       format: "jpeg" as const,
