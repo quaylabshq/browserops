@@ -1154,7 +1154,7 @@ and spatial filters.
   a known success criterion.
 - **Files**: `skills/browserops-teach.md`
 - **Commit**: `feat(skills): update browserops-teach for observe + expected predicates`
-- [ ] Done
+- [x] Done
 
 #### 5.1.3 — Update CLAUDE.md references
 
