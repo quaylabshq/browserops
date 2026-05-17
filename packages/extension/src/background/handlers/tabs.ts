@@ -1,5 +1,4 @@
-import { matchGatedDomain, GATED_DOMAIN_DIRECTIVE, type ErrorCode } from "@browserops/shared";
-import { getGatedDomainPatterns } from "../gated-state.js";
+import { type ErrorCode } from "@browserops/shared";
 import type { Router } from "../router.js";
 import type { CdpManager } from "../cdp.js";
 
@@ -16,8 +15,6 @@ interface TabSummary {
   active: boolean;
   window_id: number;
   index: number;
-  gated_domain?: true;
-  gated_domain_directive?: string;
 }
 
 const NEW_TAB_ASSIGN_POLL_MS = 25;
@@ -87,12 +84,7 @@ export function registerTabHandlers(router: Router, opts: TabsOpts): void {
     if (tabId === undefined) {
       throw makeError("TAB_NOT_FOUND", `active tab ${tab.id} has no bridge tab_id yet`);
     }
-    const summary = toSummary(tab, tabId);
-    const url = tab.url ?? tab.pendingUrl ?? "";
-    if (matchGatedDomain(url, getGatedDomainPatterns())) {
-      return { ...summary, gated_domain: true, gated_domain_directive: GATED_DOMAIN_DIRECTIVE };
-    }
-    return summary;
+    return toSummary(tab, tabId);
   });
 
   router.register("browser_new_tab", async (params): Promise<{ tab_id: string; url?: string }> => {
