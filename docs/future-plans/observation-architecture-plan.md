@@ -576,7 +576,7 @@ translation.
 - **Files**: `packages/shared/src/tools.ts`,
   `packages/extension/src/background/handlers/screenshot.ts`
 - **Commit**: `feat(extension): default browser_screenshot to 768px longest edge`
-- [ ] Done
+- [x] Done
 
 #### 2.2.2 — Add `region` param for cropped shots
 

@@ -575,6 +575,15 @@ const screenshot: ToolDef = {
       quality: { type: "integer", minimum: 0, maximum: 100 },
       max_dimension: { type: "integer", minimum: 1, maximum: 8192 },
       full_quality: { type: "boolean" },
+      dimensions: {
+        type: "object",
+        additionalProperties: false,
+        description:
+          "Action-grade dimensions hint. `longest_edge` (default 768) caps the longer image side; the other axis preserves aspect ratio. Wins over `max_dimension` when both are set.",
+        properties: {
+          longest_edge: { type: "integer", minimum: 1, maximum: 8192 },
+        },
+      },
     },
   },
   outputSchema: {

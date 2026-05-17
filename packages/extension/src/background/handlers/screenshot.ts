@@ -24,7 +24,13 @@ interface ScreenshotParams {
   quality?: number;
   max_dimension?: number;
   full_quality?: boolean;
+  dimensions?: { longest_edge?: number };
 }
+
+// Default longest-edge for the action-grade screenshot path introduced by the
+// observation-architecture plan. Hits the Anthropic image-token budget at
+// ~800 tokens — markedly cheaper than the legacy 1024px verify-intent default.
+const DEFAULT_LONGEST_EDGE = 768;
 
 const INTENT_PRESETS: Record<ScreenshotIntent, { quality: number; max_dimension: number; full_quality: boolean }> = {
   glance:         { quality: 20,  max_dimension: 512,  full_quality: false },
@@ -93,6 +99,21 @@ function parseParams(raw: Record<string, unknown>): ScreenshotParams {
       throw codedError("INVALID_PARAMS", "intent must be one of: glance, verify, read_text, user_requested");
     }
     out.intent = intent;
+  }
+  const dims = raw["dimensions"];
+  if (dims !== undefined) {
+    if (typeof dims !== "object" || dims === null || Array.isArray(dims)) {
+      throw codedError("INVALID_PARAMS", "dimensions must be an object");
+    }
+    const longest = (dims as Record<string, unknown>)["longest_edge"];
+    if (longest !== undefined) {
+      if (typeof longest !== "number" || !Number.isInteger(longest) || longest < 1 || longest > 8192) {
+        throw codedError("INVALID_PARAMS", "dimensions.longest_edge must be integer in [1,8192]");
+      }
+      out.dimensions = { longest_edge: longest };
+    } else {
+      out.dimensions = {};
+    }
   }
   return out;
 }
@@ -223,7 +244,15 @@ export function registerScreenshotHandler(
     const explicitFormat = params.format;
     const format: "png" | "jpeg" = explicitFormat ?? "jpeg";
     const quality: number = params.quality ?? preset?.quality ?? (fullQuality ? 95 : 40);
-    const maxDimension = params.max_dimension ?? preset?.max_dimension ?? 1024;
+    // dimensions.longest_edge wins over max_dimension when both are set —
+    // the observation-architecture plan's action-grade default (768px) is
+    // the new preferred knob; max_dimension stays for back-compat callers.
+    const longestEdge =
+      params.dimensions?.longest_edge ??
+      params.max_dimension ??
+      preset?.max_dimension ??
+      DEFAULT_LONGEST_EDGE;
+    const maxDimension = longestEdge;
 
     if (fullQuality) {
       // Bypass: capture at the requested format/quality and skip downscale.
