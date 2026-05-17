@@ -413,7 +413,7 @@ assert the field is present and well-formed.
 
 - **Files**: `packages/extension/src/background/handlers/hover.ts`
 - **Commit**: `feat(extension): return page_effect envelope from browser_hover`
-- [ ] Done
+- [x] Done
 
 #### 1.4.7 — Wrap `browser_navigate`
 

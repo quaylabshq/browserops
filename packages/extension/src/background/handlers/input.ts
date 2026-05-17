@@ -2538,29 +2538,31 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
     return { scrolled: true };
   });
 
-  router.register("browser_hover", async (raw): Promise<{ hovered: true }> => {
+  router.register("browser_hover", async (raw): Promise<{ hovered: true; effect: Effect }> => {
     const params = parseHover(raw);
     const chromeId = resolveChromeId(tabIdMap, params.tab_id);
     const selector = resolveSelector(refCache, params.tab_id, params.ref);
 
-    // Persistent CDP path: trusted hover via Input.dispatchMouseEvent.
-    // Synthetic mouseover/mouseenter is silently ignored by hover-gated UIs
-    // (Slack message-action toolbar, GitHub tooltip stacks) — only a real
-    // mouse move surfaces them.
-    if (cdp.isPersistent(chromeId)) {
-      const center = await execInTab(chromeId, injectedElementCenter, [selector] as const);
-      if (center === null) {
+    const { result, effect } = await captureEffect(chromeId, async () => {
+      // Persistent CDP path: trusted hover via Input.dispatchMouseEvent.
+      // Synthetic mouseover/mouseenter is silently ignored by hover-gated UIs
+      // (Slack message-action toolbar, GitHub tooltip stacks) — only a real
+      // mouse move surfaces them.
+      if (cdp.isPersistent(chromeId)) {
+        const center = await execInTab(chromeId, injectedElementCenter, [selector] as const);
+        if (center === null) {
+          throw codedError("REF_STALE", `ref ${params.ref} no longer resolves in tab ${params.tab_id}`);
+        }
+        await cdpHover(cdp, chromeId, center.x, center.y);
+        return { hovered: true as const };
+      }
+      const res = await execInTab(chromeId, injectedHover, [selector] as const);
+      if (res.found === false) {
         throw codedError("REF_STALE", `ref ${params.ref} no longer resolves in tab ${params.tab_id}`);
       }
-      await cdpHover(cdp, chromeId, center.x, center.y);
-      return { hovered: true };
-    }
-
-    const res = await execInTab(chromeId, injectedHover, [selector] as const);
-    if (res.found === false) {
-      throw codedError("REF_STALE", `ref ${params.ref} no longer resolves in tab ${params.tab_id}`);
-    }
-    return { hovered: true };
+      return { hovered: true as const };
+    });
+    return { ...result, effect };
   });
 
   router.register("browser_find_and_replace", async (raw) => {
