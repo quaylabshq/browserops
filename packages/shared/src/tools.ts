@@ -467,6 +467,7 @@ const navigate: ToolDef = {
       wait_for_load: { type: "boolean", default: true },
       observe_effects: observeEffectsInputSchema,
       expect_effect: expectEffectInputSchema,
+      expected: actionExpectationSchema,
     },
   },
   outputSchema: {
@@ -477,6 +478,7 @@ const navigate: ToolDef = {
       final_url: { type: "string" },
       page_effect: pageEffectSchema,
       effect: effectSchema,
+      ...expectationOutputSchema,
       warnings: warningsOutputSchema,
     },
   },
