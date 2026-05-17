@@ -312,6 +312,92 @@ async function cdpType(cdp: CdpManager, chromeId: number, text: string): Promise
   await cdp.send(chromeId, "Input.insertText", { text });
 }
 
+/**
+ * US-layout character -> (code, shift, vkCode). Built once; covers the
+ * ASCII printables we can dispatch as real keystrokes. Used by
+ * `cdpTypeKeystroke` so canvas-backed editors (Sheets cells, Docs,
+ * Figma) and keypress-gated rich editors actually receive character
+ * input — Input.insertText alone leaves canvas grids untouched, which
+ * is why typing into a Sheets formula cell silently fails on this path.
+ */
+const CHAR_TO_KEY: Readonly<Record<string, { code: string; shift: boolean; vkCode: number }>> = (() => {
+  const m: Record<string, { code: string; shift: boolean; vkCode: number }> = {};
+  for (let i = 0; i < 26; i += 1) {
+    const lower = String.fromCharCode(97 + i);
+    const upper = String.fromCharCode(65 + i);
+    m[lower] = { code: `Key${upper}`, shift: false, vkCode: 65 + i };
+    m[upper] = { code: `Key${upper}`, shift: true,  vkCode: 65 + i };
+  }
+  for (let i = 0; i < 10; i += 1) {
+    const d = String.fromCharCode(48 + i);
+    m[d] = { code: `Digit${d}`, shift: false, vkCode: 48 + i };
+  }
+  const shiftedDigits: Array<[string, string]> = [
+    ["!", "Digit1"], ["@", "Digit2"], ["#", "Digit3"], ["$", "Digit4"],
+    ["%", "Digit5"], ["^", "Digit6"], ["&", "Digit7"], ["*", "Digit8"],
+    ["(", "Digit9"], [")", "Digit0"],
+  ];
+  for (const [ch, code] of shiftedDigits) {
+    const d = code.charAt(code.length - 1);
+    m[ch] = { code, shift: true, vkCode: d.charCodeAt(0) };
+  }
+  const puncts: Array<[string, string, string, number]> = [
+    ["/", "?", "Slash",        191],
+    [".", ">", "Period",       190],
+    [",", "<", "Comma",        188],
+    [";", ":", "Semicolon",    186],
+    ["'", "\"", "Quote",       222],
+    ["`", "~", "Backquote",    192],
+    ["-", "_", "Minus",        189],
+    ["=", "+", "Equal",        187],
+    ["[", "{", "BracketLeft",  219],
+    ["]", "}", "BracketRight", 221],
+    ["\\", "|", "Backslash",   220],
+  ];
+  for (const [base, shifted, code, vk] of puncts) {
+    m[base]    = { code, shift: false, vkCode: vk };
+    m[shifted] = { code, shift: true,  vkCode: vk };
+  }
+  m[" "]  = { code: "Space", shift: false, vkCode: 32 };
+  m["\n"] = { code: "Enter", shift: false, vkCode: 13 };
+  m["\t"] = { code: "Tab",   shift: false, vkCode:  9 };
+  return m;
+})();
+
+async function cdpTypeKeystroke(cdp: CdpManager, chromeId: number, text: string): Promise<void> {
+  // Per-character keyDown + keyUp via Input.dispatchKeyEvent so canvas
+  // editors and keydown-gated rich editors receive real character input.
+  // Falls back to Input.insertText for any character we cannot represent
+  // as a US-layout keystroke (extended Unicode, accented chars, emoji)
+  // so non-ASCII typing still works on normal contenteditable surfaces.
+  for (const ch of text) {
+    const mapping = CHAR_TO_KEY[ch];
+    if (mapping === undefined) {
+      await cdp.send(chromeId, "Input.insertText", { text: ch });
+      continue;
+    }
+    const modifiers = mapping.shift ? 8 : 0; // CDP bit: shift=8
+    const downParams: Record<string, unknown> = {
+      type: "keyDown",
+      key: ch,
+      code: mapping.code,
+      windowsVirtualKeyCode: mapping.vkCode,
+      nativeVirtualKeyCode: mapping.vkCode,
+      modifiers,
+      text: ch,
+    };
+    await cdp.send(chromeId, "Input.dispatchKeyEvent", downParams);
+    await cdp.send(chromeId, "Input.dispatchKeyEvent", {
+      type: "keyUp",
+      key: ch,
+      code: mapping.code,
+      windowsVirtualKeyCode: mapping.vkCode,
+      nativeVirtualKeyCode: mapping.vkCode,
+      modifiers,
+    });
+  }
+}
+
 async function cdpPress(
   cdp: CdpManager, chromeId: number,
   token: string,
