@@ -1144,7 +1144,7 @@ and spatial filters.
   `~/.claude/skills/browserops/SKILL.md` if accessible; otherwise note
   that the user must run `browserops sync skills` after merge).
 - **Commit**: `feat(skills): teach observe, effect envelope, and predict-then-verify`
-- [ ] Done
+- [x] Done
 
 #### 5.1.2 — Update `skills/browserops-teach.md`
 
