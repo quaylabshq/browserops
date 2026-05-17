@@ -848,7 +848,7 @@ representation given page characteristics and intent.
   Add each cell's ref in a final column.
 - **Files**: same.
 - **Commit**: `feat(bridge): render ARIA tables as ASCII tables`
-- [ ] Done
+- [x] Done
 
 ### 3.3 — `browser_observe` tool
 
