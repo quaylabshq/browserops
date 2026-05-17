@@ -330,7 +330,7 @@ viewport scope.
 - **Verify**: trigger an action that fires a network request (e.g. type
   in a search box that has autocomplete); `effect.network.requests > 0`.
 - **Commit**: `feat(extension): collect network activity during action window`
-- [ ] Done
+- [x] Done
 
 #### 1.3.5 — Wire pre/post viewport pHash
 
