@@ -85,12 +85,68 @@ const NAMED_KEYS: Readonly<Record<string, NamedKey>> = (() => {
   return t;
 })();
 
-export function resolveKey(token: string): KeyTuple {
+/**
+ * US-layout shifted-character table, keyed by `event.code`. Used by
+ * `resolveKey` when the caller passes `mods.shift === true` so that
+ * chords like ["Shift","Digit3"] resolve to text:"#" instead of text:"3",
+ * and ["Shift","Slash"] resolves to text:"?" instead of text:"/".
+ *
+ * Without this, CDP `Input.dispatchKeyEvent` emits keydown with the
+ * unshifted character — Notion / Google Docs / contenteditable editors
+ * then insert the unshifted glyph and ignore the Shift bit, so markdown
+ * triggers (#, *, _) and slash menus stop working under Shift chords.
+ */
+const SHIFTED_TEXT: Readonly<Record<string, string>> = {
+  Digit1: "!", Digit2: "@", Digit3: "#", Digit4: "$", Digit5: "%",
+  Digit6: "^", Digit7: "&", Digit8: "*", Digit9: "(", Digit0: ")",
+  Slash: "?", Period: ">", Comma: "<", Semicolon: ":", Quote: "\"",
+  Backquote: "~", Minus: "_", Equal: "+",
+  BracketLeft: "{", BracketRight: "}", Backslash: "|",
+};
+
+export interface ResolveMods {
+  ctrl?: boolean;
+  alt?: boolean;
+  shift?: boolean;
+  meta?: boolean;
+}
+
+function applyShift(tuple: KeyTuple, mods: ResolveMods | undefined): KeyTuple {
+  // Shift only mutates text. key/code/vkCode stay at their base values —
+  // that's how real browsers report Shift+3 (key:"#", code:"Digit3").
+  if (mods === undefined) return tuple;
+  if (mods.shift !== true) {
+    // For Caps-style letter casing the agent can pass shifted text via
+    // an uppercase single-char token (e.g. "A"). Without Shift held we
+    // do not rewrite the casing here.
+    return tuple;
+  }
+  if (mods.ctrl === true || mods.meta === true || mods.alt === true) {
+    // Modifier chord — text is suppressed downstream anyway. Leave the
+    // tuple alone so the caller can decide.
+    return tuple;
+  }
+  const shifted = SHIFTED_TEXT[tuple.code];
+  if (shifted !== undefined) {
+    const next: KeyTuple = { key: shifted, code: tuple.code, text: shifted, vkCode: tuple.vkCode };
+    return next;
+  }
+  // Letter codes: produce the uppercase character.
+  if (tuple.code.length === 4 && tuple.code.startsWith("Key")) {
+    const upper = tuple.code.charAt(3);
+    if (upper >= "A" && upper <= "Z") {
+      return { key: upper, code: tuple.code, text: upper, vkCode: tuple.vkCode };
+    }
+  }
+  return tuple;
+}
+
+export function resolveKey(token: string, mods?: ResolveMods): KeyTuple {
   const named = NAMED_KEYS[token];
   if (named !== undefined) {
     const out: KeyTuple = { key: named.key, code: named.code, vkCode: named.vkCode };
     if (named.text !== undefined) out.text = named.text;
-    return out;
+    return applyShift(out, mods);
   }
 
   // event.code-style letter: "KeyA".."KeyZ".
@@ -98,7 +154,10 @@ export function resolveKey(token: string): KeyTuple {
     const upper = token.charAt(3);
     if (upper >= "A" && upper <= "Z") {
       const lower = upper.toLowerCase();
-      return { key: lower, code: token, text: lower, vkCode: upper.charCodeAt(0) };
+      return applyShift(
+        { key: lower, code: token, text: lower, vkCode: upper.charCodeAt(0) },
+        mods,
+      );
     }
   }
 
@@ -106,7 +165,10 @@ export function resolveKey(token: string): KeyTuple {
   if (token.length === 6 && token.startsWith("Digit")) {
     const d = token.charAt(5);
     if (d >= "0" && d <= "9") {
-      return { key: d, code: token, text: d, vkCode: d.charCodeAt(0) };
+      return applyShift(
+        { key: d, code: token, text: d, vkCode: d.charCodeAt(0) },
+        mods,
+      );
     }
   }
 
@@ -114,13 +176,20 @@ export function resolveKey(token: string): KeyTuple {
   if (token.length === 1) {
     const c = token;
     if (c >= "a" && c <= "z") {
-      return { key: c, code: `Key${c.toUpperCase()}`, text: c, vkCode: c.toUpperCase().charCodeAt(0) };
+      return applyShift(
+        { key: c, code: `Key${c.toUpperCase()}`, text: c, vkCode: c.toUpperCase().charCodeAt(0) },
+        mods,
+      );
     }
     if (c >= "A" && c <= "Z") {
+      // Already shifted form — return as-is; do not re-apply shift.
       return { key: c, code: `Key${c}`, text: c, vkCode: c.charCodeAt(0) };
     }
     if (c >= "0" && c <= "9") {
-      return { key: c, code: `Digit${c}`, text: c, vkCode: c.charCodeAt(0) };
+      return applyShift(
+        { key: c, code: `Digit${c}`, text: c, vkCode: c.charCodeAt(0) },
+        mods,
+      );
     }
     if (c === " ") {
       return { key: " ", code: "Space", text: " ", vkCode: 32 };
