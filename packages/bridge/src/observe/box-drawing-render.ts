@@ -106,6 +106,37 @@ function renderLandmarkFooter(): string {
   return `└${"─".repeat(64)}┘`;
 }
 
+const INTERACTIVE_ROLES = new Set([
+  "button",
+  "link",
+  "textbox",
+  "searchbox",
+  "checkbox",
+  "combobox",
+  "listbox",
+  "option",
+  "menuitem",
+  "menuitemcheckbox",
+  "menuitemradio",
+  "tab",
+  "switch",
+  "radio",
+  "slider",
+  "spinbutton",
+  "treeitem",
+]);
+
+function renderLeafLine(n: BoxDrawingNode): string {
+  const label = n.name !== "" ? n.name : `<${n.role}>`;
+  const flags: string[] = [];
+  if (!n.visible) flags.push("hidden");
+  else if (!n.in_viewport) flags.push("offscreen");
+  if (n.occluded_by !== null) flags.push("occluded");
+  if (n.disabled_visual) flags.push("disabled");
+  const tail = flags.length > 0 ? ` (${flags.join(", ")})` : "";
+  return `│  [${label} r${n.ref}]${tail}`;
+}
+
 export function renderBoxDrawing(
   nodes: readonly BoxDrawingNode[],
   _viewport: { w: number; h: number },
@@ -116,6 +147,12 @@ export function renderBoxDrawing(
   const lines: string[] = [];
   for (const g of groups) {
     lines.push(renderLandmarkHeader(g));
+    for (const n of g.nodes) {
+      if (LANDMARK_ROLES.has(n.role)) continue; // skip the landmark itself
+      if (INTERACTIVE_ROLES.has(n.role) || n.role === "heading") {
+        lines.push(renderLeafLine(n));
+      }
+    }
     lines.push(renderLandmarkFooter());
   }
   return { text: lines.join("\n"), ref_map };
