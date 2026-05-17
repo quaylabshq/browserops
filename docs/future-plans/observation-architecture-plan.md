@@ -235,7 +235,7 @@ viewport scope.
 - **Files**: `packages/extension/src/lib/phash.test.ts`
 - **Verify**: `pnpm -F @browserops/extension test phash` passes.
 - **Commit**: `test(extension): cover dHash distance behavior`
-- [ ] Done
+- [x] Done
 
 ### 1.3 — Effect type + capture wrapper
 
