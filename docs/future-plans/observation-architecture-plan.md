@@ -584,7 +584,7 @@ translation.
   When present, crop server-side before resize.
 - **Files**: same as 2.2.1.
 - **Commit**: `feat(extension): support region-cropped browser_screenshot`
-- [ ] Done
+- [x] Done
 
 #### 2.2.3 — Return enriched bundle with coord metadata
 
