@@ -237,6 +237,42 @@ const pageEffectSchema: JSONSchemaObject = {
   additionalProperties: true, // forward-compat for Phase 2+
 } as const;
 
+const actionExpectationSchema: JSONSchemaObject = {
+  type: "object",
+  additionalProperties: false,
+  description:
+    "Predicate the agent expects to hold after the action. The handler polls the page until it matches or `timeout_ms` elapses, then returns `expectation_met` and (if false) `mismatch_reason`. Soft signal — never throws.",
+  properties: {
+    url_matches: { type: "string", description: "Regex matched against window.location.href." },
+    new_dialog: {
+      oneOf: [{ type: "boolean" }, { type: "string" }],
+      description:
+        "true requires any dialog to appear; a string is a regex against the dialog's accessible name.",
+    },
+    value_contains: {
+      type: "object",
+      additionalProperties: false,
+      required: ["ref", "substring"] as const,
+      properties: {
+        ref: { type: "string" },
+        substring: { type: "string" },
+      },
+    },
+    mutations_at_least: { type: "integer", minimum: 0 },
+    network_endpoint: { type: "string", description: "Regex matched against any captured endpoint." },
+    focus_to: { type: "string", description: "CSS selector / ref expected to hold focus." },
+    visual_delta_at_least: { type: "number", minimum: 0, maximum: 1 },
+    title_matches: { type: "string" },
+    timeout_ms: { type: "integer", minimum: 100, maximum: 30000, default: 3000 },
+    poll_interval_ms: { type: "integer", minimum: 50, maximum: 5000, default: 100 },
+  },
+} as const;
+
+const expectationOutputSchema = {
+  expectation_met: { type: "boolean" } as const,
+  mismatch_reason: { type: "string" } as const,
+};
+
 const observeEffectsInputSchema: JSONSchemaObject = {
   type: "boolean",
   default: true,
@@ -867,6 +903,7 @@ const click: ToolDef = {
       },
       observe_effects: observeEffectsInputSchema,
       expect_effect: expectEffectInputSchema,
+      expected: actionExpectationSchema,
     },
   },
   outputSchema: {
@@ -876,6 +913,7 @@ const click: ToolDef = {
     properties: {
       clicked: { const: true },
       navigated: { type: "boolean" },
+      ...expectationOutputSchema,
       // Set when overlay:'simple'|'smart' was on and the initial click was
       // occluded; indicates the overlay was dismissed and the click retried.
       dismissed_overlay: { type: "boolean" },
