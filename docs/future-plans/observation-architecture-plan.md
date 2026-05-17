@@ -389,7 +389,7 @@ assert the field is present and well-formed.
 
 - **Files**: `packages/extension/src/background/handlers/click-at.ts`
 - **Commit**: `feat(extension): return page_effect envelope from browser_click_at`
-- [ ] Done
+- [x] Done
 
 #### 1.4.3 — Wrap `browser_click_by_text`
 
