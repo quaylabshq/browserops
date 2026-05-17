@@ -1,5 +1,6 @@
-import { NAVIGATE_TIMEOUT_MS, WAIT_FOR_TIMEOUT_CAP_MS, type ErrorCode, type PageEffect } from "@browserops/shared";
+import { NAVIGATE_TIMEOUT_MS, WAIT_FOR_TIMEOUT_CAP_MS, type Effect, type ErrorCode, type PageEffect } from "@browserops/shared";
 import { checkEffectExpectation } from "./effects.js";
+import { captureEffect } from "../effect.js";
 import type { Router } from "../router.js";
 import type { RefCache } from "../ref-cache.js";
 import type { NetworkTracker } from "../network-tracker.js";
@@ -92,12 +93,13 @@ export function registerNavigationHandlers(router: Router, opts: NavigationOpts)
 
   router.register(
     "browser_navigate",
-    async (params): Promise<{ final_url: string; page_effect?: PageEffect; warnings?: string[] }> => {
+    async (params): Promise<{ final_url: string; page_effect?: PageEffect; effect?: Effect; warnings?: string[] }> => {
       const chromeId = resolveChromeId(tabIdMap, params["tab_id"]);
       const url = params["url"];
       if (typeof url !== "string") {
         throw makeError("INVALID_PARAMS", "url must be a string");
       }
+      const { result: handlerResult, effect: navEffect } = await captureEffect(chromeId, async () => {
       const waitForLoadRaw = params["wait_for_load"];
       const shouldWait = waitForLoadRaw !== false;
       // observe_effects defaults to true; only explicit false opts out.
@@ -176,6 +178,8 @@ export function registerNavigationHandlers(router: Router, opts: NavigationOpts)
       };
       if (warning !== null) out.warnings = [warning];
       return out;
+      });
+      return { ...handlerResult, effect: navEffect };
     },
   );
 
