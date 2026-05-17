@@ -458,7 +458,7 @@ assert the field is present and well-formed.
 - **Verify**: `pnpm -F @browserops/shared build` succeeds; the catalogue
   snapshot test (if any) passes after update.
 - **Commit**: `feat(shared): document page_effect envelope in tool descriptions`
-- [ ] Done
+- [x] Done
 
 ### 1.6 — Viewport-scoped read default
 
