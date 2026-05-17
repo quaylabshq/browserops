@@ -879,7 +879,7 @@ representation given page characteristics and intent.
   }
   ```
 - **Commit**: `feat(shared): register browser_observe tool`
-- [ ] Done
+- [x] Done
 
 #### 3.3.2 — Handler skeleton
 
