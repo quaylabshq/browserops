@@ -796,6 +796,12 @@ const quickRead: ToolDef = {
         pattern: "^(viewport|document|ref:.+)$",
         default: "viewport",
       },
+      augment: {
+        type: "boolean",
+        default: true,
+        description:
+          "When true (default), each match carries visual fields (visible, in_viewport, occluded_by, bg/fg colors, opacity, disabled_visual, display, flex_direction) sourced from a one-shot DOM lookup. Set false to skip the augmentation cost when only structural data is needed.",
+      },
       max_results: { type: "integer", minimum: 1, maximum: 50, default: 10 },
     },
   },
