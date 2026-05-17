@@ -29,7 +29,7 @@ function installCanvasMock(getPixels: () => Uint8ClampedArray) {
 function grayToRGBA(gray: number[]): Uint8ClampedArray {
   const out = new Uint8ClampedArray(9 * 8 * 4);
   for (let i = 0; i < gray.length; i++) {
-    const v = gray[i];
+    const v = gray[i] ?? 0;
     out[i * 4] = v;
     out[i * 4 + 1] = v;
     out[i * 4 + 2] = v;
