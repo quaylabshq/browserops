@@ -407,7 +407,7 @@ assert the field is present and well-formed.
 
 - **Files**: `packages/extension/src/background/handlers/press.ts`
 - **Commit**: `feat(extension): return page_effect envelope from browser_press`
-- [ ] Done
+- [x] Done
 
 #### 1.4.6 — Wrap `browser_hover`
 
