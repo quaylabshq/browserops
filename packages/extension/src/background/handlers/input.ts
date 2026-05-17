@@ -1937,11 +1937,17 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       }
 
       // Synthetic path.
-      const dismissOverlay = raw["dismiss_overlay"] === true;
-      const autoDismiss = raw["auto_dismiss"] === true;
-      if (dismissOverlay && autoDismiss) {
-        throw codedError("INVALID_PARAMS", "dismiss_overlay and auto_dismiss are mutually exclusive");
+      const overlayRaw = raw["overlay"];
+      if (
+        overlayRaw !== undefined &&
+        overlayRaw !== "none" &&
+        overlayRaw !== "simple" &&
+        overlayRaw !== "smart"
+      ) {
+        throw codedError("INVALID_PARAMS", "overlay must be none|simple|smart");
       }
+      const overlay: "none" | "simple" | "smart" =
+        overlayRaw === "simple" || overlayRaw === "smart" ? overlayRaw : "none";
       let res = await execInTab(chromeId, injectedClick, [selector, button, mods] as const);
       if (res.found === false) {
         throw codedError(
@@ -1951,31 +1957,21 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       }
       let dismissedOverlay = false;
       let dismissStrategy: string | undefined;
-      if ((dismissOverlay || autoDismiss) && res.occluded === true) {
-        if (autoDismiss) {
-          const dismiss = await execInTab(chromeId, injectedAutoDismiss, [selector] as const);
-          if (dismiss.dismissed) {
-            dismissedOverlay = true;
-            dismissStrategy = dismiss.strategy;
-            res = await execInTab(chromeId, injectedClick, [selector, button, mods] as const);
-            if (res.found === false) {
-              throw codedError(
-                "REF_STALE",
-                `ref ${params.ref} became stale after overlay dismissal in tab ${params.tab_id}`,
-              );
-            }
-          }
-        } else {
-          const dismiss = await execInTab(chromeId, injectedDismissOverlay, [selector] as const);
-          if (dismiss.dismissed) {
-            dismissedOverlay = true;
-            res = await execInTab(chromeId, injectedClick, [selector, button, mods] as const);
-            if (res.found === false) {
-              throw codedError(
-                "REF_STALE",
-                `ref ${params.ref} became stale after overlay dismissal in tab ${params.tab_id}`,
-              );
-            }
+      if (overlay !== "none" && res.occluded === true) {
+        const injected = overlay === "smart" ? injectedAutoDismiss : injectedDismissOverlay;
+        const dismiss = await execInTab(chromeId, injected, [selector] as const) as {
+          dismissed: boolean;
+          strategy?: string;
+        };
+        if (dismiss.dismissed) {
+          dismissedOverlay = true;
+          if (overlay === "smart") dismissStrategy = dismiss.strategy;
+          res = await execInTab(chromeId, injectedClick, [selector, button, mods] as const);
+          if (res.found === false) {
+            throw codedError(
+              "REF_STALE",
+              `ref ${params.ref} became stale after overlay dismissal in tab ${params.tab_id}`,
+            );
           }
         }
       }
@@ -2000,15 +1996,14 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
           r.occluded = true;
           r.occluder = res.occluder ?? null;
           r.clicked = false;
-          if (!dismissOverlay && !autoDismiss) {
-            // Provide actionable suggestion based on occluder text.
+          if (overlay === "none") {
             const occText = (res.occluder?.text ?? "").toLowerCase();
             if (/cookie|consent|gdpr|accept/.test(occText)) {
-              r.suggestion = "cookie/consent overlay detected — retry with auto_dismiss: true";
+              r.suggestion = "cookie/consent overlay detected — retry with overlay: 'smart'";
             } else if (res.occluder?.role === "dialog" || res.occluder?.role === "alertdialog") {
-              r.suggestion = "dialog overlay detected — retry with auto_dismiss: true";
+              r.suggestion = "dialog overlay detected — retry with overlay: 'smart'";
             } else {
-              r.suggestion = "retry with dismiss_overlay: true or auto_dismiss: true";
+              r.suggestion = "retry with overlay: 'simple' or overlay: 'smart'";
             }
           } else {
             r.suggestion =
