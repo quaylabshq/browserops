@@ -1024,7 +1024,7 @@ and spatial filters.
     — **soft signal**, not error, so the agent can pivot.
 - **Files**: same.
 - **Commit**: `feat(extension): add polling loop for ExpectedEffect verification`
-- [ ] Done
+- [x] Done
 
 #### 4.1.4 — Wire into `browser_click`
 
