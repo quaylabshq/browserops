@@ -6,7 +6,39 @@ import type { CdpManager } from "../cdp.js";
 import type { NetworkTracker } from "../network-tracker.js";
 import { withEffectObservation, checkEffectExpectation } from "./effects.js";
 import { captureEffect } from "../effect.js";
+import { get as getObservation } from "../observation-cache.js";
 import { resolveKey } from "./key-resolver.js";
+
+interface ResolvedCoords {
+  cssX: number;
+  cssY: number;
+}
+
+function resolveCoords(
+  coordSpace: "css" | { kind: "screenshot"; token: string } | undefined,
+  x: number,
+  y: number,
+): ResolvedCoords {
+  if (coordSpace === undefined || coordSpace === "css") {
+    return { cssX: x, cssY: y };
+  }
+  const meta = getObservation(coordSpace.token);
+  if (meta === null) {
+    throw codedError(
+      "OBSERVATION_TOKEN_INVALID",
+      `observation_token "${coordSpace.token}" not found or expired (30s TTL); re-screenshot before issuing screenshot-coord clicks`,
+    );
+  }
+  if (x > meta.screenshot_dims.w || y > meta.screenshot_dims.h) {
+    throw codedError(
+      "COORDS_OUT_OF_SCREENSHOT_BOUNDS",
+      `(${x}, ${y}) is outside screenshot bounds ${meta.screenshot_dims.w}x${meta.screenshot_dims.h}`,
+    );
+  }
+  const cssX = x / meta.scale + meta.scroll.x;
+  const cssY = y / meta.scale + meta.scroll.y;
+  return { cssX, cssY };
+}
 
 type ExpectEffect = "any" | "dom" | "navigation" | "none";
 
@@ -2063,17 +2095,18 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       const buttonName = params.button ?? "left";
       const button = BUTTON_INDEX[buttonName];
       const modifiers = params.modifiers ?? [];
+      const { cssX, cssY } = resolveCoords(params.coord_space, params.x, params.y);
       const { result, effect } = await captureEffect(chromeId, async () => {
         if (cdp.isPersistent(chromeId)) {
-          await cdpClick(cdp, chromeId, params.x, params.y, buttonName, modifierFlags(modifiers));
-          return { clicked: true as const, x: params.x, y: params.y };
+          await cdpClick(cdp, chromeId, cssX, cssY, buttonName, modifierFlags(modifiers));
+          return { clicked: true as const, x: cssX, y: cssY };
         }
         await execInTab(
           chromeId,
           injectedClickAtPoint,
-          [params.x, params.y, button, modifierFlags(modifiers)] as const,
+          [cssX, cssY, button, modifierFlags(modifiers)] as const,
         );
-        return { clicked: true as const, x: params.x, y: params.y };
+        return { clicked: true as const, x: cssX, y: cssY };
       });
       return { ...result, effect };
     },

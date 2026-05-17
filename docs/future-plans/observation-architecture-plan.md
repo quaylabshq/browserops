@@ -659,7 +659,7 @@ translation.
 - **Verify**: screenshot a page, click_at with screenshot coords on a
   visible button; click lands.
 - **Commit**: `feat(extension): translate screenshot coords to CSS pixels in click_at`
-- [ ] Done
+- [x] Done
 
 #### 2.3.3 — Post-click `elementFromPoint` hit capture
 
