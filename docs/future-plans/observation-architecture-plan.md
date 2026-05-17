@@ -479,7 +479,7 @@ assert the field is present and well-formed.
 - **Verify**: `browser_read` on a long article returns markedly fewer
   nodes when `scope=viewport` than `scope=document`.
 - **Commit**: `feat(extension): honor scope param in browser_read`
-- [ ] Done
+- [x] Done
 
 #### 1.6.3 — Add `scope` param to `browser_quick_read`
 
