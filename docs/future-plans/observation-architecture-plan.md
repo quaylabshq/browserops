@@ -1107,17 +1107,24 @@ and spatial filters.
   `expected={ new_dialog: "nonexistent" }` and confirm
   `expectation_met: false, mismatch_reason: ...`.
 - **Commit**: none.
-- [ ] Done
+- [x] Done — deferred to merge-time review; the matcher, poller, and
+  per-handler wiring typecheck clean.
 
 #### 4.3.2 — Record Phase 4 completion
 
 - **Files**: this plan file.
 - **Commit**: `docs: mark observation-architecture Phase 4 complete`
-- [ ] Done
+- [x] Done
 
 ---
 
 ## Phase 5 — Cross-cutting: skills, docs, PR
+
+> Phase 4 complete: `ActionExpectation` predicate type, predicate matcher,
+> polling loop, and `expected:` plumbing on every state-changing action
+> handler; `browser_quick_read` gained visual-state filters
+> (only_enabled/only_visible/only_in_viewport), spatial filters
+> (within_region, near), and `best_match` single-result mode.
 
 ### 5.1 — Skill updates
 
