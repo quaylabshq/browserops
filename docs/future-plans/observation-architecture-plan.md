@@ -930,7 +930,7 @@ representation given page characteristics and intent.
   export async function canvasPixelRatio(tabId: number): Promise<number>;
   ```
 - **Commit**: `feat(extension): implement auto mode heuristic in browser_observe`
-- [ ] Done
+- [x] Done
 
 #### 3.3.7 — Mode: diff (against cached observation_token)
 

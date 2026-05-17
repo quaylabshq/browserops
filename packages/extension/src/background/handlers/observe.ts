@@ -8,6 +8,7 @@ import type { RefCache } from "../ref-cache.js";
 import { augment } from "../../lib/a11y-augment.js";
 import { execInTab } from "./input.js";
 import { put as cacheObservation } from "../observation-cache.js";
+import { estimateA11ySize, canvasPixelRatio } from "../../lib/observe-heuristic.js";
 
 type ObserveMode = "auto" | "text" | "visual" | "structure" | "diff";
 
@@ -309,7 +310,81 @@ export function registerObserveHandler(router: Router, opts: ObserveOpts): void 
       };
     }
 
-    // Other modes wired in subsequent substeps. For now route to text.
+    if (mode === "auto") {
+      // 1. Canvas ratio
+      const ratio = await canvasPixelRatio(chromeTabId).catch(() => 0);
+      if (ratio > 0.3) {
+        const v = await modeVisual(chromeTabId, page_meta);
+        const observation_token = cacheObservation({
+          tab_id: chromeTabId,
+          css_pixel_dims: page_meta.viewport_dims,
+          screenshot_dims: { w: v.ssW, h: v.ssH },
+          scale: v.payload.scale,
+          scroll: page_meta.scroll,
+          dpr: page_meta.dpr,
+          representation: v.representation,
+        });
+        return {
+          representation: v.representation,
+          observation_token,
+          payload: v.payload,
+          page_meta,
+        };
+      }
+      // 2. A11y size
+      const docSize = await estimateA11ySize(chromeTabId, "document").catch(() => 0);
+      if (docSize < 2000) {
+        const { representation, payload } = await modeText(chromeTabId, "document");
+        const observation_token = cacheObservation({
+          tab_id: chromeTabId,
+          css_pixel_dims: page_meta.viewport_dims,
+          screenshot_dims: page_meta.viewport_dims,
+          scale: 1,
+          scroll: page_meta.scroll,
+          dpr: page_meta.dpr,
+          representation,
+        });
+        return { representation, observation_token, payload, page_meta };
+      }
+      if (docSize <= 6000) {
+        const { representation, payload } = await modeText(chromeTabId, "viewport");
+        const observation_token = cacheObservation({
+          tab_id: chromeTabId,
+          css_pixel_dims: page_meta.viewport_dims,
+          screenshot_dims: page_meta.viewport_dims,
+          scale: 1,
+          scroll: page_meta.scroll,
+          dpr: page_meta.dpr,
+          representation,
+        });
+        return { representation, observation_token, payload, page_meta };
+      }
+      // > 6000 tokens: box-drawing structure + low-res screenshot.
+      const { payload: textPayload } = await modeText(chromeTabId, "viewport");
+      const v = await modeVisual(chromeTabId, page_meta);
+      const taggedPayload = {
+        _render: "box_drawing",
+        ...(textPayload as Record<string, unknown>),
+        image: v.payload,
+      };
+      const observation_token = cacheObservation({
+        tab_id: chromeTabId,
+        css_pixel_dims: page_meta.viewport_dims,
+        screenshot_dims: { w: v.ssW, h: v.ssH },
+        scale: v.payload.scale,
+        scroll: page_meta.scroll,
+        dpr: page_meta.dpr,
+        representation: "box_drawing+screenshot",
+      });
+      return {
+        representation: "box_drawing+screenshot" as const,
+        observation_token,
+        payload: taggedPayload,
+        page_meta,
+      };
+    }
+
+    // mode === "diff" — wired in 3.3.7. For now route to text.
     const { representation, payload } = await modeText(chromeTabId, scopeMode);
     const observation_token = cacheObservation({
       tab_id: chromeTabId,
@@ -320,7 +395,6 @@ export function registerObserveHandler(router: Router, opts: ObserveOpts): void 
       dpr: page_meta.dpr,
       representation,
     });
-    // Touch unused params so the linter is happy until 3.3.7 implements diff.
     void opts.refCache;
     return { representation, observation_token, payload, page_meta };
   });
