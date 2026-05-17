@@ -1495,6 +1495,50 @@ export function registerReadHandler(
       }) as typeof matches;
     }
 
+    const near = rawParams["near"];
+    if (typeof near === "object" && near !== null && !Array.isArray(near)) {
+      const nr = near as { ref: string; radius_px: number };
+      if (typeof nr.ref === "string" && typeof nr.radius_px === "number") {
+        const refNum = Number.parseInt(nr.ref, 10);
+        const entry = !Number.isNaN(refNum) ? opts.refCache.get(tabId)?.entries.get(refNum) : undefined;
+        if (entry !== undefined) {
+          let centerBounds: { x: number; y: number } | null = null;
+          try {
+            const probed = await execInTabWithArgs<readonly [string], { x: number; y: number; w: number; h: number } | null>(
+              chromeTabId,
+              (sel: string) => {
+                const el = document.querySelector(sel);
+                if (el === null) return null;
+                const r = el.getBoundingClientRect();
+                return { x: r.x, y: r.y, w: r.width, h: r.height };
+              },
+              [entry.selector],
+              "ISOLATED",
+            );
+            if (probed !== null) {
+              centerBounds = { x: probed.x + probed.w / 2, y: probed.y + probed.h / 2 };
+            }
+          } catch (err) {
+            console.warn("[browserops] near ref bounds lookup failed:", err);
+          }
+          if (centerBounds !== null) {
+            const cx = centerBounds.x;
+            const cy = centerBounds.y;
+            const r2 = nr.radius_px * nr.radius_px;
+            matches = (matches as Array<{
+              rect: { x: number; y: number; width: number; height: number };
+            }>).filter((m) => {
+              const mx = m.rect.x + m.rect.width / 2;
+              const my = m.rect.y + m.rect.height / 2;
+              const dx = mx - cx;
+              const dy = my - cy;
+              return dx * dx + dy * dy <= r2;
+            }) as typeof matches;
+          }
+        }
+      }
+    }
+
     const region = rawParams["within_region"];
     if (
       typeof region === "object" &&
