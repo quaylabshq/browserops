@@ -767,7 +767,7 @@ representation given page characteristics and intent.
 - **Performance note**: only run on `in_viewport && visible` nodes; cap
   total occlusion checks at 200 per call.
 - **Commit**: `feat(extension): detect occlusion via elementFromPoint sampling`
-- [ ] Done
+- [x] Done
 
 #### 3.1.5 — Visual style fields (bg/fg/opacity/disabled_visual)
 
