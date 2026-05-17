@@ -5,6 +5,7 @@ import {
 } from "../content/mutation-window.js";
 import { execInTab } from "./handlers/input.js";
 import type { CdpManager } from "./cdp.js";
+import { dhash, normalizedDistance, type DHash } from "../lib/phash.js";
 
 // Higher-order helper used by the observation-architecture plan's
 // page_effect envelope path. Wraps any action handler with the pre/post
@@ -138,6 +139,49 @@ function newWindowId(): string {
   return `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
 }
 
+const PHASH_W = 256;
+const PHASH_H = 160;
+
+async function captureViewportHash(tabId: number): Promise<DHash | null> {
+  if (cdpRef === null) return null;
+  try {
+    const res = await cdpRef.send<{ data?: string }>(
+      tabId,
+      "Page.captureScreenshot",
+      {
+        format: "png",
+        captureBeyondViewport: false,
+        clip: { x: 0, y: 0, width: PHASH_W, height: PHASH_H, scale: 1 },
+      },
+    );
+    const data = res?.data;
+    if (typeof data !== "string" || data === "") return null;
+    const bytes = base64ToBytes(data);
+    const blob = new Blob([bytes.buffer as ArrayBuffer], { type: "image/png" });
+    const bitmap = await createImageBitmap(blob);
+    const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      bitmap.close();
+      return null;
+    }
+    ctx.drawImage(bitmap, 0, 0);
+    const img = ctx.getImageData(0, 0, bitmap.width, bitmap.height);
+    bitmap.close();
+    return await dhash(img);
+  } catch (err) {
+    console.warn("[browserops] viewport hash failed:", err);
+    return null;
+  }
+}
+
+function base64ToBytes(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
 export async function captureEffect<T>(
   tabId: number,
   fn: () => Promise<T>,
@@ -155,6 +199,8 @@ export async function captureEffect<T>(
 
   await ensureNetworkEnabled(tabId);
   startNetworkCapture(tabId, windowId);
+
+  const preHash = await captureViewportHash(tabId);
 
   let result: T;
   try {
@@ -180,10 +226,14 @@ export async function captureEffect<T>(
     }
   }
   const network = readNetworkCapture(tabId, windowId);
+  const postHash = await captureViewportHash(tabId);
 
   const effect = zeroEffect();
   effect.mutations = mutations;
   effect.network = network;
+  if (preHash !== null && postHash !== null) {
+    effect.visual_hash_delta = normalizedDistance(preHash, postHash);
+  }
   effect.duration_ms = Date.now() - start;
   return { result, effect };
 }

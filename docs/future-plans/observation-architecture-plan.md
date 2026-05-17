@@ -343,7 +343,7 @@ viewport scope.
 - **Verify**: action that visibly changes the page yields
   `visual_hash_delta > 0.05`; no-op action yields `< 0.02`.
 - **Commit**: `feat(extension): wire visual hash diff into effect capture`
-- [ ] Done
+- [x] Done
 
 #### 1.3.6 — Wire focus + new-dialog detection
 
