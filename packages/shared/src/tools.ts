@@ -918,6 +918,17 @@ const clickAt: ToolDef = {
       x: { type: "number" },
       y: { type: "number" },
       effect: effectSchema,
+      hit_element: {
+        type: "object",
+        additionalProperties: false,
+        required: ["tag", "role", "name", "ref"] as const,
+        properties: {
+          tag: { type: "string" },
+          role: { type: "string" },
+          name: { type: "string" },
+          ref: { type: "string" },
+        },
+      },
     },
   },
   action_weight: 1,
