@@ -1078,7 +1078,7 @@ and spatial filters.
 - **What**: New param `within_region: { x, y, w, h }` in CSS pixels.
   Filter to nodes whose bounds intersect the region.
 - **Commit**: `feat(extension): add within_region filter to browser_quick_read`
-- [ ] Done
+- [x] Done
 
 #### 4.2.3 — Spatial filter `near`
 
