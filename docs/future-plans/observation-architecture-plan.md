@@ -1012,7 +1012,7 @@ and spatial filters.
   expected: ExpectedEffect): { ok: boolean; mismatch_reason?: string }`.
 - **Files**: create `packages/extension/src/background/expectation-poller.ts`
 - **Commit**: `feat(extension): implement ExpectedEffect predicate matcher`
-- [ ] Done
+- [x] Done
 
 #### 4.1.3 — Polling loop
 
