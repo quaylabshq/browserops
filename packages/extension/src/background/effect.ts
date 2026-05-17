@@ -2,7 +2,9 @@ import type { Effect, MutationCounts, NetworkActivity } from "@browserops/shared
 import {
   installMutationObserver,
   readMutationObserver,
+  snapshotFocusAndDialogs,
 } from "../content/mutation-window.js";
+import type { DialogSnapshot, FocusSnapshot } from "../content/mutation-window.js";
 import { execInTab } from "./handlers/input.js";
 import type { CdpManager } from "./cdp.js";
 import { dhash, normalizedDistance, type DHash } from "../lib/phash.js";
@@ -202,6 +204,16 @@ export async function captureEffect<T>(
 
   const preHash = await captureViewportHash(tabId);
 
+  let preSnapshot: { focus: FocusSnapshot; dialogs: DialogSnapshot[] } = {
+    focus: { selector: null },
+    dialogs: [],
+  };
+  try {
+    preSnapshot = await execInTab(tabId, snapshotFocusAndDialogs, [] as const);
+  } catch (err) {
+    console.warn("[browserops] pre snapshot failed:", err);
+  }
+
   let result: T;
   try {
     result = await fn();
@@ -228,12 +240,29 @@ export async function captureEffect<T>(
   const network = readNetworkCapture(tabId, windowId);
   const postHash = await captureViewportHash(tabId);
 
+  let postSnapshot: { focus: FocusSnapshot; dialogs: DialogSnapshot[] } = {
+    focus: { selector: null },
+    dialogs: [],
+  };
+  try {
+    postSnapshot = await execInTab(tabId, snapshotFocusAndDialogs, [] as const);
+  } catch (err) {
+    console.warn("[browserops] post snapshot failed:", err);
+  }
+
   const effect = zeroEffect();
   effect.mutations = mutations;
   effect.network = network;
   if (preHash !== null && postHash !== null) {
     effect.visual_hash_delta = normalizedDistance(preHash, postHash);
   }
+  if (preSnapshot.focus.selector !== postSnapshot.focus.selector) {
+    effect.focus_moved_to = postSnapshot.focus.selector;
+  }
+  const preDialogKey = new Set(preSnapshot.dialogs.map((d) => d.name));
+  effect.new_dialogs = postSnapshot.dialogs
+    .filter((d) => !preDialogKey.has(d.name))
+    .map((d) => ({ role: d.role, name: d.name, ref: d.selector }));
   effect.duration_ms = Date.now() - start;
   return { result, effect };
 }
