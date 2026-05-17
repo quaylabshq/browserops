@@ -2073,6 +2073,7 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       matched: { role: string; name: string; tag: string };
       occluded?: boolean;
       occluder?: { tag: string; text: string; role: string | null } | null;
+      effect: Effect;
     }> => {
       const tab_id = raw["tab_id"];
       const text = raw["text"];
@@ -2103,46 +2104,49 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       const mods = parseModifiers(raw["modifiers"]);
       const chromeId = resolveChromeId(tabIdMap, tab_id);
       const buttonName = (button as ClickParams["button"]) ?? "left";
-      const useCdp = cdp.isPersistent(chromeId);
-      const spec: ClickByTextSpec = {
-        text,
-        matchMode: (match as ClickByTextSpec["matchMode"]) ?? "substring",
-        roleFilter: typeof roleRaw === "string" && roleRaw.length > 0 ? roleRaw.toLowerCase() : null,
-        caseSensitive,
-        button: BUTTON_INDEX[buttonName],
-        modifiers: modifierFlags(mods),
-        // Locate-only when CDP is attached so the trusted Input.dispatchMouseEvent
-        // is what actually fires — synthetic dispatch is silently ignored by
-        // Slack/Discord/Linear handlers that gate on event.isTrusted.
-        dryRun: useCdp,
-      };
-      const res = await execInTab(chromeId, injectedClickByText, [spec] as const);
-      if (res.found === false) {
-        throw codedError(
-          "TEXT_NOT_FOUND",
-          `no visible element matched text "${text}" (${spec.matchMode}${spec.roleFilter ? `, role=${spec.roleFilter}` : ""})`,
-        );
-      }
-      if (useCdp) {
-        if (typeof res.x !== "number" || typeof res.y !== "number") {
-          throw codedError("INTERNAL", "click_by_text dry run did not return coordinates");
+      const { result, effect } = await captureEffect(chromeId, async () => {
+        const useCdp = cdp.isPersistent(chromeId);
+        const spec: ClickByTextSpec = {
+          text,
+          matchMode: (match as ClickByTextSpec["matchMode"]) ?? "substring",
+          roleFilter: typeof roleRaw === "string" && roleRaw.length > 0 ? roleRaw.toLowerCase() : null,
+          caseSensitive,
+          button: BUTTON_INDEX[buttonName],
+          modifiers: modifierFlags(mods),
+          // Locate-only when CDP is attached so the trusted Input.dispatchMouseEvent
+          // is what actually fires — synthetic dispatch is silently ignored by
+          // Slack/Discord/Linear handlers that gate on event.isTrusted.
+          dryRun: useCdp,
+        };
+        const res = await execInTab(chromeId, injectedClickByText, [spec] as const);
+        if (res.found === false) {
+          throw codedError(
+            "TEXT_NOT_FOUND",
+            `no visible element matched text "${text}" (${spec.matchMode}${spec.roleFilter ? `, role=${spec.roleFilter}` : ""})`,
+          );
         }
-        await cdpClick(cdp, chromeId, res.x, res.y, buttonName, modifierFlags(mods));
-      }
-      const result: {
-        clicked: true;
-        matched: { role: string; name: string; tag: string };
-        occluded?: boolean;
-        occluder?: { tag: string; text: string; role: string | null } | null;
-      } = {
-        clicked: true,
-        matched: res.matched ?? { role: "", name: "", tag: "" },
-      };
-      if (res.occluded === true) {
-        result.occluded = true;
-        result.occluder = res.occluder ?? null;
-      }
-      return result;
+        if (useCdp) {
+          if (typeof res.x !== "number" || typeof res.y !== "number") {
+            throw codedError("INTERNAL", "click_by_text dry run did not return coordinates");
+          }
+          await cdpClick(cdp, chromeId, res.x, res.y, buttonName, modifierFlags(mods));
+        }
+        const inner: {
+          clicked: true;
+          matched: { role: string; name: string; tag: string };
+          occluded?: boolean;
+          occluder?: { tag: string; text: string; role: string | null } | null;
+        } = {
+          clicked: true,
+          matched: res.matched ?? { role: "", name: "", tag: "" },
+        };
+        if (res.occluded === true) {
+          inner.occluded = true;
+          inner.occluder = res.occluder ?? null;
+        }
+        return inner;
+      });
+      return { ...result, effect };
     },
   );
 
