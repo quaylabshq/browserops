@@ -254,7 +254,7 @@ describe("validateBindings", () => {
         {
           id: "s1",
           action: "browser_type",
-          with: { tab_id: "{{tab_id}}", ref: 42, text: "literal", clear_first: true },
+          with: { tab_id: "{{tab_id}}", ref: 42, text: "literal", submit: true },
         },
       ]),
     );

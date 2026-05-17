@@ -88,8 +88,7 @@ function makeDeps(overrides: Partial<McpBridgeDeps> = {}): McpBridgeDeps {
     // up tab ownership. Session-aware behaviour is exercised end-to-end
     // by the daemon smoke tests.
     sessionId: "",
-    gatedMatcher: { patterns: [], matches: () => false },
-    // Test default: every gated feature on, so existing tool-call tests
+    // Test default: procedures feature on so existing tool-call tests
     // (which call browser_* + procedures_* tools) keep working without
     // needing to reason about the feature gate per case. Gate-specific
     // tests pass an explicit empty / scoped set in their overrides.

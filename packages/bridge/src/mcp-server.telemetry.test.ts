@@ -53,7 +53,6 @@ function makeDeps(overrides: Partial<McpBridgeDeps> = {}): McpBridgeDeps {
     logger,
     version: "0.0.0-test",
     sessionId: "",
-    gatedMatcher: { patterns: [], matches: () => false },
     enabledFeatures: new Set(["procedures"]),
     clientName: "Cursor",
     ...overrides,

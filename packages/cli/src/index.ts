@@ -65,7 +65,7 @@ cli
   .option("--no-mcp", "Skip MCP-client install")
   .option("--no-skill", "Skip Claude skill install")
   .option("--client <list>", "Comma-separated client list (claude-code,cursor,zed,continue,windsurf,codex)")
-  .option("--features <list>", "Comma-separated experimental features to enable (procedures,gated-domains)")
+  .option("--features <list>", "Comma-separated experimental features to enable (procedures,memory)")
   .option("--dry-run", "Print what would change without writing")
   .action((opts) => runInit(opts));
 
@@ -122,7 +122,7 @@ cli
 cli
   .command(
     "feature [action] [name]",
-    "List, enable, or disable gated experimental features (procedures, gated-domains)",
+    "List, enable, or disable gated experimental features (procedures, memory)",
   )
   .action((action: string | undefined, name: string | undefined) => runFeature(action, name));
 
