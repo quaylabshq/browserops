@@ -1,6 +1,7 @@
 import type { ErrorCode } from "@browserops/shared";
 import type { Router } from "../router.js";
 import { execInTab } from "./input.js";
+import { put as cacheObservation } from "../observation-cache.js";
 
 function readPageMetrics(): {
   dpr: number;
@@ -308,14 +309,45 @@ export function registerScreenshotHandler(
       DEFAULT_LONGEST_EDGE;
     const maxDimension = longestEdge;
 
+    let metrics = { dpr: 1, scroll_x: 0, scroll_y: 0, inner_w: 0, inner_h: 0 };
+    try {
+      metrics = await execInTab(chromeTabId, readPageMetrics, [] as const);
+    } catch (err) {
+      console.warn("[browserops] readPageMetrics failed:", err);
+    }
+
     if (fullQuality) {
       // Bypass: capture at the requested format/quality and skip downscale.
       const image_base64 = await captureVisible(tab.windowId, format, quality);
-      const width =
-        typeof tab.width === "number" && tab.width > 0 ? tab.width : 0;
-      const height =
-        typeof tab.height === "number" && tab.height > 0 ? tab.height : 0;
-      return { image_base64, width, height, format };
+      const cssW =
+        typeof tab.width === "number" && tab.width > 0 ? tab.width : metrics.inner_w;
+      const cssH =
+        typeof tab.height === "number" && tab.height > 0 ? tab.height : metrics.inner_h;
+      const ssW = Math.round(cssW * metrics.dpr);
+      const ssH = Math.round(cssH * metrics.dpr);
+      const observation_token = cacheObservation({
+        tab_id: chromeTabId,
+        css_pixel_dims: { w: cssW, h: cssH },
+        screenshot_dims: { w: ssW, h: ssH },
+        scale: cssW > 0 ? ssW / cssW : 1,
+        scroll: { x: metrics.scroll_x, y: metrics.scroll_y },
+        dpr: metrics.dpr,
+        representation: "screenshot",
+      });
+      return {
+        image_base64,
+        image: image_base64,
+        width: cssW,
+        height: cssH,
+        format,
+        observation_token,
+        css_pixel_dims: { w: cssW, h: cssH },
+        screenshot_dims: { w: ssW, h: ssH },
+        scale: cssW > 0 ? ssW / cssW : 1,
+        scroll: { x: metrics.scroll_x, y: metrics.scroll_y },
+        dpr: metrics.dpr,
+        representation: "screenshot" as const,
+      };
     }
 
     // Downscale path always emits JPEG regardless of requested format (that is
@@ -323,20 +355,32 @@ export function registerScreenshotHandler(
     // full_quality:true. The budget-aware downscale enforces a hard ceiling
     // on the returned base64 size so default-intent screenshots stop blowing
     // the agent's context envelope on wide / content-rich pages.
-    let metrics = { dpr: 1, scroll_x: 0, scroll_y: 0, inner_w: 0, inner_h: 0 };
-    try {
-      metrics = await execInTab(chromeTabId, readPageMetrics, [] as const);
-    } catch (err) {
-      console.warn("[browserops] readPageMetrics failed:", err);
-    }
     const captured = await captureVisible(tab.windowId, "png", 100);
     const encoded = await downscaleToBudget(captured, "png", maxDimension, quality, params.region, metrics.dpr);
-    const result: ScreenshotResult = {
+    const cssW = params.region?.w ?? metrics.inner_w;
+    const cssH = params.region?.h ?? metrics.inner_h;
+    const observation_token = cacheObservation({
+      tab_id: chromeTabId,
+      css_pixel_dims: { w: cssW, h: cssH },
+      screenshot_dims: { w: encoded.width, h: encoded.height },
+      scale: cssW > 0 ? encoded.width / cssW : 1,
+      scroll: { x: metrics.scroll_x, y: metrics.scroll_y },
+      dpr: metrics.dpr,
+      representation: "screenshot",
+    });
+    return {
       image_base64: encoded.base64,
+      image: encoded.base64,
       width: encoded.width,
       height: encoded.height,
-      format: "jpeg",
+      format: "jpeg" as const,
+      observation_token,
+      css_pixel_dims: { w: cssW, h: cssH },
+      screenshot_dims: { w: encoded.width, h: encoded.height },
+      scale: cssW > 0 ? encoded.width / cssW : 1,
+      scroll: { x: metrics.scroll_x, y: metrics.scroll_y },
+      dpr: metrics.dpr,
+      representation: "screenshot" as const,
     };
-    return result;
   });
 }
