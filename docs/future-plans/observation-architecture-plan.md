@@ -893,7 +893,7 @@ representation given page characteristics and intent.
 - **What**: Calls into the augmented a11y path. Honors `scope`. Writes
   to observation cache and returns token.
 - **Commit**: `feat(extension): implement text mode in browser_observe`
-- [ ] Done
+- [x] Done
 
 #### 3.3.4 — Mode: visual (forced action-grade screenshot)
 
