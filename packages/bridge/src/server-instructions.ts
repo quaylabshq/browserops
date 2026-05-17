@@ -148,7 +148,7 @@ const dispatch: Lines = [
 const clicking: Lines = [
   "Clicking (escalation ladder — stop when page_effect shows intended effect):",
   "  1. browser_click with a ref (cheapest, most addressable).",
-  "  2. browser_click with dismiss_overlay:true if (1) returns occluded, or",
+  "  2. browser_click with overlay:'smart' if (1) returns occluded, or",
   "     returns clicked:true with zero page_effect.",
   "  3. browser_click_by_text with the visible label — for div-with-onclick",
   "     targets that never surface as a ref.",

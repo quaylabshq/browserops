@@ -155,7 +155,7 @@ Every mutating tool (`browser_click`, `browser_type`, `browser_press`, `browser_
 **Click escalation ladder** (try in order, stop at the first one whose `page_effect` shows the intended effect):
 
 1. **`browser_click` with a ref** from `browser_read`. Default; cheapest; most addressable.
-2. **`browser_click` with `auto_dismiss: true`** (smarter) or **`dismiss_overlay: true`** (simpler) if (1) returns `{clicked:false, occluded:true}`. `auto_dismiss` classifies the occluder (dialog, banner, consent) and tries multiple dismiss strategies (ESC, close button hunt, backdrop click).
+2. **`browser_click` with `overlay: "smart"`** (smarter) or **`overlay: "simple"`** if (1) returns `{clicked:false, occluded:true}`. `smart` classifies the occluder (dialog, banner, consent) and tries multiple dismiss strategies (ESC, close button hunt, backdrop click); `simple` tries ESC + close-button hunt once.
 3. **`browser_click_by_text`** with the visible label, for `div`-with-onclick targets that never surface as a ref.
 4. **`browser_click_at` (coordinate click)** — the last resort, and genuinely useful on complex SPAs (Instagram, TikTok, some retail checkouts) where (1–3) all fail because the clickable surface is a gesture handler on a parent div, shadow DOM, or canvas. Pass viewport coordinates from `browser_read` or a visible-rect query. Do not guess pixels.
 
@@ -163,7 +163,7 @@ Every mutating tool (`browser_click`, `browser_type`, `browser_press`, `browser_
 
 **Other rules**
 
-- `REF_STALE` → `browser_read` the container again, retry with the fresh ref. Do not `dismiss_overlay` for this error.
+- `REF_STALE` → `browser_read` the container again, retry with the fresh ref. Do not use `overlay` for this error.
 - On Slack / Figma / Docs / Sheets / Canva / Miro / Whimsical the registry auto-forces trusted click mode. You don't need to do anything; just don't manually downgrade.
 - If you climb the ladder to step 4 for a given site, consider saving the recipe as a procedure (`procedures_save`) so the next agent doesn't repeat the escalation from scratch.
 
@@ -286,8 +286,8 @@ Keyed by the symptom you observe, not the root cause. Root causes differ; fixes 
 
 | Symptom | First retry | If still failing |
 |---|---|---|
-| `clicked:true` but no page change | `browser_read` + retry with fresh ref | Climb the ladder: `dismiss_overlay:true` → `browser_click_by_text` → `browser_click_at` with coordinates. Verify `page_effect` at each step. |
-| `{clicked:false, occluded:true}` | Retry with `auto_dismiss: true` | `browser_read` to find the occluder, click it first; if the occluder isn't addressable, fall through to `browser_click_at` on the target's coords |
+| `clicked:true` but no page change | `browser_read` + retry with fresh ref | Climb the ladder: `overlay:'smart'` → `browser_click_by_text` → `browser_click_at` with coordinates. Verify `page_effect` at each step. |
+| `{clicked:false, occluded:true}` | Retry with `overlay: 'smart'` | `browser_read` to find the occluder, click it first; if the occluder isn't addressable, fall through to `browser_click_at` on the target's coords |
 | `browser_click_at` returned `clicked:true` but `page_effect` is all zeros | Treat as failure — the click landed on a parent/sibling, not the target | Adjust coordinates (try the visible-rect centre, not the edge); or fall back to `browser_click_by_text` |
 | `REF_STALE` | `browser_read`, retry with new ref | Investigate why the container re-rendered — usually a late-arriving skeleton |
 | `WRITE_NOT_REFLECTED` | `browser_wait_for` the editor is focusable, retry | Confirm the field isn't disabled; check for overlay |
