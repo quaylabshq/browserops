@@ -13,6 +13,7 @@ import { Router, type Context } from "./router.js";
 import { RefCache } from "./ref-cache.js";
 import { CdpManager } from "./cdp.js";
 import { NetworkTracker } from "./network-tracker.js";
+import { setCdpForEffect } from "./effect.js";
 import { registerTabHandlers } from "./handlers/tabs.js";
 import { registerNavigationHandlers } from "./handlers/navigation.js";
 import { registerScreenshotHandler } from "./handlers/screenshot.js";
@@ -39,6 +40,7 @@ const chromeIdToTabId = new Map<number, string>();
 const router = new Router();
 const refCache = new RefCache();
 const cdp = new CdpManager();
+setCdpForEffect(cdp);
 const network = new NetworkTracker();
 let wsClient: WsClient | null = null;
 
