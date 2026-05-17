@@ -166,3 +166,26 @@ export function snapshotFocusAndDialogs(): {
   }
   return { focus, dialogs };
 }
+
+/** Cheap "interactive ref set" used to compute Effect.a11y_delta. Returns
+ *  a stable string key per interactive node so the wrapper can diff
+ *  add/remove/change counts pre vs post without round-tripping content. */
+export function snapshotInteractiveKeys(): string[] {
+  const sel =
+    'a, button, input, select, textarea, [role="button"], [role="link"], [role="checkbox"], [role="menuitem"], [role="tab"], [role="textbox"], [contenteditable=""], [contenteditable="true"]';
+  const out: string[] = [];
+  const nodes = document.querySelectorAll<HTMLElement>(sel);
+  let i = 0;
+  for (const el of nodes) {
+    if (i++ >= 1000) break;
+    const tag = el.tagName.toLowerCase();
+    const id = el.id ? `#${el.id}` : "";
+    const role = el.getAttribute("role") ?? "";
+    const name =
+      el.getAttribute("aria-label") ??
+      el.getAttribute("title") ??
+      (el.textContent ?? "").trim().slice(0, 40);
+    out.push(`${tag}${id}|${role}|${name}`);
+  }
+  return out;
+}
