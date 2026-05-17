@@ -1205,6 +1205,7 @@ const press: ToolDef = {
       repeat: { type: "integer", minimum: 1, maximum: 20, default: 1 },
       observe_effects: observeEffectsInputSchema,
       expect_effect: expectEffectInputSchema,
+      expected: actionExpectationSchema,
     },
   },
   outputSchema: {
@@ -1215,6 +1216,7 @@ const press: ToolDef = {
       pressed: { const: true },
       page_effect: pageEffectSchema,
       effect: effectSchema,
+      ...expectationOutputSchema,
       warnings: warningsOutputSchema,
     },
   },

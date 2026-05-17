@@ -166,6 +166,7 @@ interface PressParams {
   keys: readonly string[];
   observe_effects?: boolean;
   expect_effect?: ExpectEffect;
+  expected?: ActionExpectation;
 }
 
 interface ScrollParams {
@@ -1608,6 +1609,8 @@ function parsePress(raw: Record<string, unknown>): PressParams {
   if (raw["observe_effects"] === false) result.observe_effects = false;
   const expectEffect = parseExpectEffect(raw["expect_effect"]);
   if (expectEffect !== undefined) result.expect_effect = expectEffect;
+  const expected = parseExpected(raw["expected"]);
+  if (expected !== undefined) result.expected = expected;
   return result;
 }
 
@@ -2639,6 +2642,8 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
     pressed: true;
     page_effect?: PageEffect;
     effect?: Effect;
+    expectation_met?: boolean;
+    mismatch_reason?: string;
     warnings?: string[];
   }> => {
     const params = parsePress(raw);
@@ -2711,7 +2716,13 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
     }
     return dispatchPress();
     });
-    return { ...handlerResult, effect: pressEffect };
+    let verification: { expectation_met?: boolean; mismatch_reason?: string } = {};
+    if (params.expected !== undefined) {
+      const v = await pollUntilMet(chromeId, pressEffect, params.expected);
+      verification.expectation_met = v.expectation_met;
+      if (v.mismatch_reason !== undefined) verification.mismatch_reason = v.mismatch_reason;
+    }
+    return { ...handlerResult, effect: pressEffect, ...verification };
   });
 
   router.register("browser_scroll", async (raw): Promise<{ scrolled: true }> => {
