@@ -6,8 +6,8 @@ description: >
   clicking, typing, reading, navigating, or scripting a real browser tab,
   or authoring/debugging a browserops procedure. Covers the full `browser_*`
   and `procedures_*` tool surface, the observation-centric execution model
-  (page_effect), trusted vs synthetic dispatch, sub-agent delegation rules,
-  and the common failure modes that produce silent successes. TRIGGER when:
+  (page_effect), sub-agent delegation rules, and the common failure modes
+  that produce silent successes. TRIGGER when:
   the user asks to "open slack / gmail / notion / <website>", "fill in /
   click / submit <something in the browser>", "navigate to <url>", "run /
   save / edit a procedure", "why did <browser action> silently fail", or
@@ -35,9 +35,9 @@ This file is the index. Read it top-to-bottom the first time you're about to cal
 - Dispatch fields (`clicked:true`, `typed:N`) are **self-reports**. They say "the event was sent", not "the page did the thing."
 - `page_effect` is the **ground truth**. Treat an action with zero effect (`dom.added=0, removed=0, text_changes=0, network.requests_started=0`) on something that should have changed state as a silent-success bug. Retry, escalate, or fail loud — don't assume.
 
-You cannot know from inside the agent how any given site will react to a synthetic event. You *can* read what actually happened. Lead with observation, not assumption.
+You cannot know from inside the agent how any given site will react to an event. You *can* read what actually happened. Lead with observation, not assumption.
 
-**Trusted vs synthetic.** The extension defaults to synthetic events (`dispatchEvent`). Some sites (Slack, Figma, Gmail composer, Google Docs canvas, WhatsApp Web, ChatGPT, Claude, Discord, etc.) ignore non-`isTrusted` events. The SITE_REGISTRY at `packages/shared/src/editors.ts` forces trusted-mode dispatch (via CDP) for known hostnames. Bridge-side observation hints can *also* escalate a host to trusted based on empirical effect rates. You don't configure this — just know that you get it for free on known sites, and that unknown sites may need one retry with `mode:"trusted"` if the first attempt has zero effect.
+**Dispatch is always CDP-trusted.** Every `http(s)` tab gets `chrome.debugger` attached on navigation, so `browser_click` / `click_at` / `click_by_text` / `type` / `press` / `hover` fire trusted `Input.*` events that traverse iframes, shadow DOM, and `isTrusted`-gated handlers (Slack, Figma, Gmail composer, Docs, Discord, …). The "controlled by automated test software" banner appearing on driven tabs is expected, not a failure signal. Per-tab opt-out: `browser_set_cdp(tab_id, false)`.
 
 ---
 
@@ -131,7 +131,7 @@ Every mutating tool (`browser_click`, `browser_type`, `browser_press`, `browser_
 
 ### How to use it
 
-- **Confirm state changes.** If you clicked "Send" and expected a network call, require `network.requests_started ≥ 1`. If the effect is all zeros, the click was absorbed — the common culprits are occlusion, the element being off-screen, or a synthetic event on a site that requires trusted.
+- **Confirm state changes.** If you clicked "Send" and expected a network call, require `network.requests_started ≥ 1`. If the effect is all zeros, the click was absorbed — the common culprits are occlusion, the element being off-screen, or the click landing on a non-interactive parent.
 - **Confirm typing.** If you typed 8 chars and `dom.text_changes = 0`, the field didn't receive your input. The extension itself will usually throw `WRITE_NOT_REFLECTED` for this, but when it doesn't, `page_effect` is how you catch it.
 - **Navigation settled.** After `browser_navigate`, a `url.changed:true` + non-zero `dom.added` is the minimum signal the page actually moved. An SPA that swaps history without mounting new DOM may return `url.changed:true` with `dom.added=0` — that means you're early; follow with `browser_wait_for` on a stable element, not URL alone.
 - **Pass `observe_effects: false`** on a hot loop of known-no-effect calls (rare) to shave ~330 ms per call.
@@ -292,8 +292,8 @@ Keyed by the symptom you observe, not the root cause. Root causes differ; fixes 
 | `REF_STALE` | `browser_read`, retry with new ref | Investigate why the container re-rendered — usually a late-arriving skeleton |
 | `WRITE_NOT_REFLECTED` | `browser_wait_for` the editor is focusable, retry | Confirm the field isn't disabled; check for overlay |
 | `WRITE_AMPLIFIED` | Do NOT retry | Report the bug with host + framework. Registry needs fixing. |
-| Typing produced "DDoouubblleedd" text | Do NOT retry with same params | Remove any manually-forced `mode:"trusted"`; let the registry handle it |
-| `Enter` on chat composer does nothing | Retry once (trusted path often takes one warm-up on unknown sites) | Verify focus is actually on the composer with `page_effect.focus.after_selector`; re-focus if not |
+| Typing produced "DDoouubblleedd" text | Do NOT retry with same params | A stacked `beforeinput` handler is double-inserting. Switch to `browser_execute_js` with `execCommand('insertText', …)` or report the bug. |
+| `Enter` on chat composer does nothing | Retry once after `browser_quick_read` to confirm focus | Verify focus is actually on the composer with `page_effect.focus.after_selector`; re-focus if not |
 | `browser_navigate` "succeeds" but page shows old content | Follow with `browser_wait_for` on a new-route element | SPA may have dropped your navigation; try a hard reload once |
 | `USER_DECLINED` on risky action | Do not silently retry | Surface the decline to the user; they chose for a reason |
 | Procedure fails at step N | Read the procedure YAML; diagnose the specific leaf | Do not "fix" by skipping the step or inlining a workaround — file the procedure bug |
@@ -342,7 +342,6 @@ If you're writing a YAML procedure (as opposed to just calling primitives ad-hoc
 - **Prefer addressable actions.** `browser_read` + `browser_click` / `browser_type` on a real element > `browser_execute_js` for everything it can express. Reserve JS for cases where the UI genuinely isn't addressable.
 - **Leaf → composite.** Verify each leaf in isolation on the live site before assembling the composite that depends on it.
 - **Known landmines.**
-  - `gmail.send_email` v2 intentionally removed `mode: trusted` from `fill_body` — Gmail's Quill-like composer doubled characters with trusted. Don't re-add it.
   - `meta.clear_field` is the cross-editor clear primitive. Use it when a `browser_type` with `clear_mode:"auto"` isn't the right fit (e.g. clearing without a follow-up type).
 
 ---
@@ -354,9 +353,8 @@ When a flow intermittently fails:
 1. **Rerun the bridge with tracing.** `BROWSEROPS_TRACE=1 pnpm start` (bridge package). Every tool call, params, result, and `page_effect` is written to `~/browserops/traces/<session>.jsonl`.
 2. **Reproduce once under trace.** Even if it passes this time, you now have a baseline.
 3. **Diff traces** between a pass and a fail. Look first at `page_effect` divergences — that's usually where the flakiness lives. Dispatch fields are usually identical across both runs.
-4. **Observed facts store.** The bridge maintains `~/browserops/observed/facts.json` — per-host rolling stats on synthetic-effect-rate vs trusted-effect-rate. A host that's sub-20% on synthetic and >50% on trusted is auto-escalated by the bridge for future calls. Read this file to sanity-check which hosts the bridge thinks are flaky.
-5. **`procedures_execute` for replay.** Point it at the failing procedure and watch it halt on the first diverging step. The divergence is the bug.
-6. **Do NOT** "fix" flakiness by adding `browser_wait_for` with longer timeouts unless you can name the specific thing you're waiting for. Longer waits hide races; they don't fix them.
+4. **`procedures_execute` for replay.** Point it at the failing procedure and watch it halt on the first diverging step. The divergence is the bug.
+5. **Do NOT** "fix" flakiness by adding `browser_wait_for` with longer timeouts unless you can name the specific thing you're waiting for. Longer waits hide races; they don't fix them.
 
 ---
 
@@ -393,11 +391,10 @@ If you're editing browserops itself (not just using it):
 
 1. Never start a compound task without decomposing it into a tracked subtask list and delegating each subtask to its own sub-agent (§2 step 3).
 2. Never treat a dispatch self-report (`clicked:true`, `typed:N`) as proof of state change. Check `page_effect`.
-3. Never manually force `mode:"trusted"` on `browser_type` for Quill/ProseMirror/Slate.
-4. Never save an untested procedure.
-5. Never inline procedure steps into a sub-agent brief. Never batch two subtasks into one brief.
-6. Never use `browser_reload` as a polling primitive.
-7. Never screenshot to verify a step that has a `wait_for` condition.
+3. Never save an untested procedure.
+4. Never inline procedure steps into a sub-agent brief. Never batch two subtasks into one brief.
+5. Never use `browser_reload` as a polling primitive.
+6. Never screenshot to verify a step that has a `wait_for` condition.
 8. Never bypass `USER_DECLINED` by retrying silently.
 9. Never use `Meta`/`Control` in chords — use `Primary`.
 10. Never route around a refused destructive chord. Ask instead.
