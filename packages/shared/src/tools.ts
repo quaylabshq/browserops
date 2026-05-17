@@ -611,6 +611,13 @@ const read: ToolDef = {
       mode: { enum: ["a11y_tree", "markdown", "sanitized_html", "text"] as const },
       max_length: { type: "integer", minimum: 1024, maximum: 1048576, default: 131072 },
       viewport_only: { type: "boolean", default: false },
+      scope: {
+        description:
+          "Restrict the read to a slice of the page. 'viewport' (default) filters a11y nodes to those intersecting the viewport rect — cheaper than reading the whole document on long pages. 'document' is the legacy full-page scope. 'ref:<id>' filters to the subtree rooted at the named ref.",
+        type: "string",
+        pattern: "^(viewport|document|ref:.+)$",
+        default: "viewport",
+      },
       verbose: { type: "boolean", default: false },
       selector: { type: "string", minLength: 1, maxLength: 1024 },
       start: { type: "integer", minimum: 0, default: 0 },

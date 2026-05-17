@@ -468,7 +468,7 @@ assert the field is present and well-formed.
   "ref:<id>"`, default `"viewport"`.
 - **Files**: `packages/shared/src/tools.ts`
 - **Commit**: `feat(shared): add scope param to browser_read with viewport default`
-- [ ] Done
+- [x] Done
 
 #### 1.6.2 — Implement scope in `browser_read` handler
 
