@@ -260,8 +260,6 @@ const currentTab: ToolDef = {
       url: { type: "string" },
       title: { type: "string" },
       active: { const: true },
-      gated_domain: { type: "boolean", const: true, description: "Set to true when the destination URL matches a gated domain. Indicates the agent should prefer browser_execute_js for follow-up interactions on this tab." },
-      gated_domain_directive: { type: "string", description: "Human-readable rule the agent should honor when `gated_domain` is true." },
     },
   },
   action_weight: 0,
@@ -364,13 +362,8 @@ const navigate: ToolDef = {
     required: ["final_url"] as const,
     properties: {
       final_url: { type: "string" },
-      // status_code is not populated in the DOM-only v1 path: without a CDP
-      // attach we cannot observe the HTTP response code for the navigation.
-      // Deferred to v2.
       page_effect: pageEffectSchema,
       warnings: warningsOutputSchema,
-      gated_domain: { type: "boolean", const: true, description: "Set to true when the destination URL matches a gated domain. Indicates the agent should prefer browser_execute_js for follow-up interactions on this tab." },
-      gated_domain_directive: { type: "string", description: "Human-readable rule the agent should honor when `gated_domain` is true." },
     },
   },
   action_weight: 1,
@@ -662,7 +655,7 @@ const quickRead: ToolDef = {
 const click: ToolDef = {
   name: "browser_click",
   description:
-    "Click an element identified by ref. Fires pointer/mouse events on the element. Returns `{clicked, page_effect?, warnings?}`. On gated domains (`gated_domain: true` on navigate / current_tab — Gmail, Slack, Notion, Linear, Discord, …), prefer `browser_execute_js`. Synthetic dispatch on these sites frequently no-ops on rich editors and virtualized DOM; the bridge will warn or escalate to an error when no `page_effect` is observed.",
+    "Click an element identified by ref. Fires pointer/mouse events on the element. Returns `{clicked, page_effect?, warnings?}`.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -776,7 +769,7 @@ const clickAt: ToolDef = {
 const clickByText: ToolDef = {
   name: "browser_click_by_text",
   description:
-    "Click the visible element whose accessible name matches the given text. Bypasses the a11y-tree ref mechanism — use this when browser_read didn't surface the element as a ref (common on SPA sites with div-wrapped click handlers), or when the agent knows the exact button label and doesn't want to pay for a full read first. Typically called from an operator sub-agent. On gated domains (`gated_domain: true` on navigate / current_tab — Gmail, Slack, Notion, Linear, Discord, …), prefer `browser_execute_js`. Synthetic dispatch on these sites frequently no-ops on rich editors and virtualized DOM; the bridge will warn or escalate to an error when no `page_effect` is observed.",
+    "Click the visible element whose accessible name matches the given text. Bypasses the a11y-tree ref mechanism — use this when browser_read didn't surface the element as a ref (common on SPA sites with div-wrapped click handlers), or when the agent knows the exact button label and doesn't want to pay for a full read first. Typically called from an operator sub-agent.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -842,7 +835,7 @@ const clickByText: ToolDef = {
 const typeTool: ToolDef = {
   name: "browser_type",
   description:
-    "Type text into an element identified by ref. Two dispatch modes: 'keystroke' (default for short text, fires per-character keydown/beforeinput/input/keyup — what autocompletes and per-keystroke validators need), 'paste' (bulk-assign the value in one shot, use for long text where per-char events are wasteful). Default resolves to 'keystroke' for text <=64 chars, 'paste' otherwise. Returns `{typed, mode, page_effect?, warnings?}`. On gated domains (`gated_domain: true` on navigate / current_tab — Gmail, Slack, Notion, Linear, Discord, …), prefer `browser_execute_js`. Synthetic dispatch on these sites frequently no-ops on rich editors and virtualized DOM; the bridge will warn or escalate to an error when no `page_effect` is observed.",
+    "Type text into an element identified by ref. Two dispatch modes: 'keystroke' (default for short text, fires per-character keydown/beforeinput/input/keyup — what autocompletes and per-keystroke validators need), 'paste' (bulk-assign the value in one shot, use for long text where per-char events are wasteful). Default resolves to 'keystroke' for text <=64 chars, 'paste' otherwise. Returns `{typed, mode, page_effect?, warnings?}`.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -942,7 +935,7 @@ const findAndReplace: ToolDef = {
 const press: ToolDef = {
   name: "browser_press",
   description:
-    "Send a keyboard-only chord to the tab (CDP key names). Does not target a specific ref. Leading entries are treated as modifiers and the final entry as the key — e.g. [\"Primary\",\"KeyA\"] sends select-all. Use `Primary` instead of Meta/Control for portable chords; the extension resolves it to Meta on macOS and Control elsewhere at dispatch time. Returns `{pressed, page_effect?, warnings?}`. On gated domains (`gated_domain: true` on navigate / current_tab — Gmail, Slack, Notion, Linear, Discord, …), prefer `browser_execute_js`. Synthetic dispatch on these sites frequently no-ops on rich editors and virtualized DOM; the bridge will warn or escalate to an error when no `page_effect` is observed.",
+    "Send a keyboard-only chord to the tab (CDP key names). Does not target a specific ref. Leading entries are treated as modifiers and the final entry as the key — e.g. [\"Primary\",\"KeyA\"] sends select-all. Use `Primary` instead of Meta/Control for portable chords; the extension resolves it to Meta on macOS and Control elsewhere at dispatch time. Returns `{pressed, page_effect?, warnings?}`.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -1275,7 +1268,7 @@ const waitForIdle: ToolDef = {
 const executeJs: ToolDef = {
   name: "browser_execute_js",
   description:
-    "Execute JavaScript inside the tab's main world. Always risky; gated on every invocation. Preferred path on gated domains where synthetic dispatch is unreliable. CDP is auto-attached on those domains so trusted-input semantics apply.",
+    "Execute JavaScript inside the tab's main world. Always risky; gated on every invocation. Use when the input/click/read tools can't address the target (custom event filters, deeply virtualized DOM). CDP is auto-attached on every http(s) tab so trusted-input semantics apply.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -1318,10 +1311,11 @@ const setCdp: ToolDef = {
   name: "browser_set_cdp",
   description:
     "Enable or disable persistent CDP (Chrome DevTools Protocol) attachment for a tab. " +
-    "When enabled, all input dispatch (click, type, press) routes through trusted CDP " +
-    "events instead of synthetic DOM events. Required for canvas apps (Figma, Google Docs, " +
-    "Sheets, Canva, Miro) that ignore untrusted events. Call after navigating to the site. " +
-    "Shows a 'controlled by automated software' banner while active. CDP is auto-attached on canvas domains and on gated domains (when the `gated-domains` feature is enabled). This tool is for manual override on other sites.",
+    "CDP is auto-attached on every http(s) navigation so input dispatch is trusted by default; " +
+    "the only reason to call this tool is to opt a specific tab OUT (enabled:false) when the " +
+    "'controlled by automated software' banner is unacceptable for the current task. " +
+    "Synthetic-DOM dispatch resumes for that tab — faster, no banner, but silently fails on " +
+    "isTrusted-gated UIs (canvas apps, rich editors). Re-enable with enabled:true.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
