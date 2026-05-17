@@ -832,7 +832,7 @@ representation given page characteristics and intent.
   fixup here (extend `VisualFields` accordingly and update prior
   augmentation step) — note the fixup in the commit message.
 - **Commit**: `feat(bridge): label flex and grid containers in box-drawing renderer`
-- [ ] Done
+- [x] Done
 
 #### 3.2.4 — Render text + inline refs
 
