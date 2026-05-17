@@ -675,6 +675,12 @@ const read: ToolDef = {
       mode: { enum: ["a11y_tree", "markdown", "sanitized_html", "text"] as const },
       max_length: { type: "integer", minimum: 1024, maximum: 1048576, default: 131072 },
       viewport_only: { type: "boolean", default: false },
+      augment: {
+        type: "boolean",
+        default: true,
+        description:
+          "When true (default), each ref in the response carries visual fields (bounds, visible, in_viewport, occluded_by, bg/fg colors, opacity, disabled_visual, display, flex_direction) sourced from a one-shot DOM lookup. Set false to skip the augmentation cost when only structural data is needed.",
+      },
       scope: {
         description:
           "Restrict the read to a slice of the page. 'viewport' (default) filters a11y nodes to those intersecting the viewport rect — cheaper than reading the whole document on long pages. 'document' is the legacy full-page scope. 'ref:<id>' filters to the subtree rooted at the named ref.",
@@ -705,7 +711,7 @@ const read: ToolDef = {
       length: { type: "integer", minimum: 0 },
       refs: {
         description:
-          "Map from ref integer (as string key) to a minimal element summary. Populated only when mode == 'a11y_tree'.",
+          "Map from ref integer (as string key) to a minimal element summary. Populated only when mode == 'a11y_tree'. Each entry carries augmented visual fields (bounds, visible, etc.) when augment != false.",
         type: "object",
         additionalProperties: {
           type: "object",
@@ -717,6 +723,25 @@ const read: ToolDef = {
             value: { type: "string" },
             tag: { type: "string" },
             input_type: { type: "string" },
+            bounds: {
+              type: ["object", "null"],
+              additionalProperties: false,
+              properties: {
+                x: { type: "number" },
+                y: { type: "number" },
+                w: { type: "number" },
+                h: { type: "number" },
+              },
+            },
+            visible: { type: "boolean" },
+            in_viewport: { type: "boolean" },
+            occluded_by: { type: ["string", "null"] },
+            bg_color: { type: ["string", "null"] },
+            fg_color: { type: ["string", "null"] },
+            opacity: { type: "number" },
+            disabled_visual: { type: "boolean" },
+            display: { type: "string" },
+            flex_direction: { type: "string" },
           },
         },
       },
