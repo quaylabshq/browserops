@@ -21,8 +21,8 @@ export async function dhash(pixels: ImageData): Promise<DHash> {
   let bit = 0;
   for (let y = 0; y < HASH_H; y++) {
     for (let x = 0; x < HASH_W - 1; x++) {
-      const left = small[y * HASH_W + x];
-      const right = small[y * HASH_W + x + 1];
+      const left = small[y * HASH_W + x] ?? 0;
+      const right = small[y * HASH_W + x + 1] ?? 0;
       if (left > right) {
         bits |= 1n << BigInt(bit);
       }
@@ -68,9 +68,9 @@ async function resizeToGray(
   const data = ctx.getImageData(0, 0, w, h).data;
   const out = new Uint8Array(w * h);
   for (let i = 0; i < w * h; i++) {
-    const r = data[i * 4];
-    const g = data[i * 4 + 1];
-    const b = data[i * 4 + 2];
+    const r = data[i * 4] ?? 0;
+    const g = data[i * 4 + 1] ?? 0;
+    const b = data[i * 4 + 2] ?? 0;
     // Rec. 601 luma — cheap, good enough for hashing.
     out[i] = (r * 299 + g * 587 + b * 114) / 1000;
   }
