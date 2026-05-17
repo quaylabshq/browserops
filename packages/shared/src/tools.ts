@@ -700,6 +700,13 @@ const quickRead: ToolDef = {
         description: "Filter results to elements with this ARIA role (e.g. 'button', 'textbox', 'link').",
       },
       viewport_only: { type: "boolean", default: false },
+      scope: {
+        description:
+          "Restrict the search to a slice of the page. 'viewport' (default) is faster than the legacy full-document walk on long pages. 'document' is the legacy full-page scope. 'ref:<id>' filters to the subtree rooted at the named ref.",
+        type: "string",
+        pattern: "^(viewport|document|ref:.+)$",
+        default: "viewport",
+      },
       max_results: { type: "integer", minimum: 1, maximum: 50, default: 10 },
     },
   },
