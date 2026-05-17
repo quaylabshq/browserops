@@ -2,6 +2,7 @@ import type { ErrorCode } from "@browserops/shared";
 import type { Router } from "../router.js";
 import { execInTab } from "./input.js";
 import { put as cacheObservation } from "../observation-cache.js";
+import { renderSom, collectSomCandidates } from "../../lib/som-overlay.js";
 
 function readPageMetrics(): {
   dpr: number;
@@ -44,6 +45,7 @@ interface ScreenshotParams {
   full_quality?: boolean;
   dimensions?: { longest_edge?: number };
   region?: { x: number; y: number; w: number; h: number };
+  annotate?: "som" | "none";
 }
 
 // Default longest-edge for the action-grade screenshot path introduced by the
@@ -118,6 +120,13 @@ function parseParams(raw: Record<string, unknown>): ScreenshotParams {
       throw codedError("INVALID_PARAMS", "intent must be one of: glance, verify, read_text, user_requested");
     }
     out.intent = intent;
+  }
+  const annotate = raw["annotate"];
+  if (annotate !== undefined) {
+    if (annotate !== "som" && annotate !== "none") {
+      throw codedError("INVALID_PARAMS", "annotate must be 'som' or 'none'");
+    }
+    out.annotate = annotate;
   }
   const region = raw["region"];
   if (region !== undefined) {
@@ -359,28 +368,63 @@ export function registerScreenshotHandler(
     const encoded = await downscaleToBudget(captured, "png", maxDimension, quality, params.region, metrics.dpr);
     const cssW = params.region?.w ?? metrics.inner_w;
     const cssH = params.region?.h ?? metrics.inner_h;
+    const scaleVal = cssW > 0 ? encoded.width / cssW : 1;
+
+    let finalBase64 = encoded.base64;
+    let finalW = encoded.width;
+    let finalH = encoded.height;
+    let som_map: Record<string, { ref: string; role: string; name: string }> | undefined;
+    let representation: "screenshot" | "screenshot_som" = "screenshot";
+
+    if (params.annotate === "som") {
+      let candidates: ReturnType<typeof collectSomCandidates> = [];
+      try {
+        candidates = await execInTab(chromeTabId, collectSomCandidates, [] as const);
+      } catch (err) {
+        console.warn("[browserops] SoM candidate collection failed:", err);
+      }
+      try {
+        const annotated = await renderSom(
+          encoded.base64,
+          "image/jpeg",
+          candidates,
+          scaleVal,
+          params.region ? { x: params.region.x, y: params.region.y } : undefined,
+          quality,
+        );
+        finalBase64 = annotated.base64;
+        finalW = annotated.width;
+        finalH = annotated.height;
+        som_map = annotated.som_map;
+        representation = "screenshot_som";
+      } catch (err) {
+        console.warn("[browserops] SoM render failed; returning unannotated:", err);
+      }
+    }
+
     const observation_token = cacheObservation({
       tab_id: chromeTabId,
       css_pixel_dims: { w: cssW, h: cssH },
-      screenshot_dims: { w: encoded.width, h: encoded.height },
-      scale: cssW > 0 ? encoded.width / cssW : 1,
+      screenshot_dims: { w: finalW, h: finalH },
+      scale: cssW > 0 ? finalW / cssW : 1,
       scroll: { x: metrics.scroll_x, y: metrics.scroll_y },
       dpr: metrics.dpr,
-      representation: "screenshot",
+      representation,
     });
     return {
-      image_base64: encoded.base64,
-      image: encoded.base64,
-      width: encoded.width,
-      height: encoded.height,
+      image_base64: finalBase64,
+      image: finalBase64,
+      width: finalW,
+      height: finalH,
       format: "jpeg" as const,
       observation_token,
       css_pixel_dims: { w: cssW, h: cssH },
-      screenshot_dims: { w: encoded.width, h: encoded.height },
-      scale: cssW > 0 ? encoded.width / cssW : 1,
+      screenshot_dims: { w: finalW, h: finalH },
+      scale: cssW > 0 ? finalW / cssW : 1,
       scroll: { x: metrics.scroll_x, y: metrics.scroll_y },
       dpr: metrics.dpr,
-      representation: "screenshot" as const,
+      representation,
+      ...(som_map !== undefined ? { som_map } : {}),
     };
   });
 }
