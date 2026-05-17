@@ -211,6 +211,168 @@ Slot into the existing roadmap between #1 (augmented a11y) and #4 (SoM).
 Most valuable on form/checkout/dashboard flows where positional reasoning
 currently forces a screenshot.
 
+## Verification and adaptive observation — the architecture move
+
+The vision-cost question and the "did the action do anything?" question
+collapse into one design problem: **how does the agent maintain a cheap,
+continuous model of page state across actions?** The options above all
+answer "how do I read the page once?"; this section is about the per-step
+loop that the agent runs hundreds of times in a session.
+
+Three pieces, in increasing scope.
+
+### Piece 1 — the page_effect envelope (per-action, ~100 tokens, free)
+
+Every state-changing action (`browser_click`, `browser_type`,
+`browser_press`, `browser_navigate`, …) automatically returns a structured
+delta of what measurably changed during the action window. All signals are
+already available inside the extension at near-zero cost:
+
+```json
+{
+  "ok": true,
+  "effect": {
+    "url_changed": false,
+    "title_changed": false,
+    "mutations": { "added": 3, "removed": 1, "attr": 12, "char": 0 },
+    "network": { "requests": 2, "failed": 0, "endpoints": ["/api/submit"] },
+    "visual_hash_delta": 0.12,
+    "a11y_delta": { "added": 4, "removed": 0, "changed": 7 },
+    "focus_moved_to": "r42",
+    "new_dialogs": ["Error: invalid email"],
+    "console_errors": 0
+  }
+}
+```
+
+The four signals that catch nearly every real change, all browser-native:
+
+- **MutationObserver counts** during the action window.
+- **Network activity counter** via `chrome.webRequest` / CDP `Network.*`.
+- **Perceptual hash diff** of viewport before/after — compute locally, ship
+  one float, never send pixels.
+- **Focus + new-modal detection** via one a11y subtree check post-action.
+
+This is what `page_effect` was supposed to be all along. The current
+implementation only captures URL + focus; the trusted-input-and-
+architecture-followups doc explicitly calls out that the signal is too
+weak. This is the fix.
+
+In ~100 tokens per action the agent learns: "I clicked submit, 2 network
+requests fired, a new dialog appeared saying invalid email" — strictly
+more decision-useful than `ok: true`, and removes the need for a
+follow-up read in ~95% of action steps.
+
+### Piece 2 — `browser_read` can cost more than a screenshot
+
+Screenshot tokens are bounded by viewport dimensions (~258 at low detail,
+~1500 at high). a11y tree tokens grow with *page content*, unbounded.
+
+Cases where a full `browser_read` exceeds a low-detail screenshot today:
+
+- HN front page with comments expanded (~8k tokens of a11y)
+- Gmail inbox view, 50 conversations (~6–10k)
+- Slack channel with 200 messages loaded (~12k+)
+- Wikipedia article (~15–30k)
+- Google Sheets / Airtable with a few hundred cells (~20k+)
+- Twitter timeline (~10k+)
+- Any iframe-heavy page (Stripe checkout, embedded Disqus, YouTube)
+
+The implication: **`browser_read` should default to viewport-scoped, not
+full document.** Add a `scope: "viewport" | "document" | "ref:<id>"`
+parameter with `viewport` as default. Cuts typical read cost 3–5× on
+content-heavy pages with no information loss for the common case where
+the agent only acts on what's visible.
+
+### Piece 3 — `browser_observe` as a single adaptive read tool
+
+One tool, automatic representation selection. Subsumes `browser_read`,
+`browser_quick_read`, and `browser_screenshot` behind one surface for the
+common case; the specific tools stay alongside for explicit overrides.
+
+```ts
+browser_observe(tab_id, {
+  mode: "auto" | "text" | "visual" | "diff" | "structure",
+  scope: "viewport" | "document" | "ref:r42",
+  budget_tokens?: number,
+  since?: observation_token   // for diff mode
+})
+```
+
+`mode: "auto"` heuristic:
+
+1. **Canvas-dominant page** (`canvas` pixel area > ~30% of viewport, or
+   gated_domain in {Figma, Maps, canvas-game}) → low-detail screenshot.
+   Pixels are the only signal.
+2. **Estimate a11y size cheaply** (count visible interactive nodes +
+   visible text length):
+   - `< ~2k tokens` → augmented a11y tree, full.
+   - `2–6k tokens` → augmented a11y, viewport-scoped + landmarks summary.
+   - `> 6k tokens` → box-drawing layout summary + low-detail screenshot.
+     Pixels are now cheaper than text.
+3. **If `since:` is provided** → return only the diff against that
+   observation_token. Massive win on iterative flows where the agent has
+   already seen the page and is now confirming a change.
+
+Each return includes an `observation_token` the agent passes back next
+call to enable cheap diffs, and a `representation:` field naming which
+mode was chosen — so the agent knows what kind of reasoning to apply.
+
+### Piece 4 — predict-then-verify on every action
+
+Actions take an optional `expected_effect` parameter; the tool internally
+polls page_effect signals until the predicate matches or times out.
+
+```
+browser_click(ref="r42", expected={ new_dialog: true, timeout: 3000 })
+browser_type(ref="r17", text="hello", expected={ value_contains: "hello" })
+browser_navigate(url="...", expected={ url_matches: "/dashboard" })
+```
+
+Replaces blind retry loops with structural verification. The agent
+declares what it expects; the tool either confirms or returns a precise
+mismatch description. The browser-harness "screenshot after every action"
+approach worked because each step was implicitly verified by visual
+re-grounding; this gives browserops the same property structurally for ~1%
+of the token cost.
+
+### Why these four pieces are one architecture
+
+The normal action loop becomes:
+
+```
+act(expected) → effect envelope (free, ~100 tok) → act(expected) → …
+```
+
+Full `observe` calls only happen when the agent crosses a significant
+state boundary (new page, new modal, branching decision). The current
+"act blindly, then full `browser_read` to see what happened" pattern —
+which is what the long-tail evals expose as too slow — gets replaced by
+"act with expectations, verify cheaply per step, observe deeply only on
+state transitions."
+
+This is the single highest-leverage change in this doc. It subsumes the
+ranked recommendations earlier (augmented a11y, mandatory-crop
+screenshots, differential reads, SoM, box-drawing summary) by giving them
+a coherent home: `browser_observe` is where they all live as
+representation modes, and the page_effect envelope is the cheap default
+that means most of them are never invoked.
+
+### Implementation order
+
+1. **Page_effect envelope** in every action handler in
+   `packages/extension/src/background/handlers/`. Wire MutationObserver,
+   webRequest counter, pHash diff, and post-action a11y subtree check
+   around each action's dispatch. Returned as a standard `effect` field
+   on every tool response. This alone closes most of the long-tail gap.
+2. **`scope: "viewport"` default** for `browser_read` /
+   `browser_quick_read`. One-day change.
+3. **`browser_observe` tool** with `mode: "auto"` and `since:` support.
+   Builds on (1) for the diff path and on the augmented a11y from earlier
+   sections for the text path.
+4. **`expected_effect` on actions** once the page_effect envelope is
+   reliable enough to drive synchronous polling.
+
 ## The escape hatch nothing fixes
 
 **Canvas / WebGL apps** (Figma, Maps, charts, games) have empty DOMs. No
