@@ -737,7 +737,7 @@ representation given page characteristics and intent.
   ): Promise<(A11yNode & VisualFields)[]>;
   ```
 - **Commit**: `feat(extension): scaffold a11y augmentation module`
-- [ ] Done
+- [x] Done
 
 #### 3.1.2 — Bounds via batched `DOM.getBoxModel`
 
