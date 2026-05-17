@@ -141,6 +141,7 @@ interface ClickAtParams {
   button?: "left" | "middle" | "right";
   modifiers?: readonly Modifier[];
   coord_space?: "css" | { kind: "screenshot"; token: string };
+  expected?: ActionExpectation;
 }
 
 type TypeMode = "keystroke" | "paste";
@@ -1521,7 +1522,7 @@ function parseClickAt(raw: Record<string, unknown>): ClickAtParams {
       throw codedError("INVALID_PARAMS", "coord_space must be 'css' or 'screenshot:<token>'");
     }
   }
-  return {
+  const out: ClickAtParams = {
     tab_id,
     x,
     y,
@@ -1529,6 +1530,9 @@ function parseClickAt(raw: Record<string, unknown>): ClickAtParams {
     modifiers: mods,
     coord_space,
   };
+  const expected = parseExpected(raw["expected"]);
+  if (expected !== undefined) out.expected = expected;
+  return out;
 }
 
 function parseType(raw: Record<string, unknown>): TypeParams {
@@ -2188,6 +2192,8 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       y: number;
       effect: Effect;
       hit_element?: { tag: string; role: string; name: string; ref: string };
+      expectation_met?: boolean;
+      mismatch_reason?: string;
     }> => {
       const params = parseClickAt(raw);
       const chromeId = resolveChromeId(tabIdMap, params.tab_id);
@@ -2224,7 +2230,13 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
         if (hit !== null) inner.hit_element = hit;
         return inner;
       });
-      return { ...result, effect };
+      let verification: { expectation_met?: boolean; mismatch_reason?: string } = {};
+      if (params.expected !== undefined) {
+        const v = await pollUntilMet(chromeId, effect, params.expected);
+        verification.expectation_met = v.expectation_met;
+        if (v.mismatch_reason !== undefined) verification.mismatch_reason = v.mismatch_reason;
+      }
+      return { ...result, effect, ...verification };
     },
   );
 

@@ -976,6 +976,7 @@ const clickAt: ToolDef = {
         pattern: "^(css|screenshot:.+)$",
         default: "css",
       },
+      expected: actionExpectationSchema,
     },
   },
   outputSchema: {
@@ -987,6 +988,7 @@ const clickAt: ToolDef = {
       x: { type: "number" },
       y: { type: "number" },
       effect: effectSchema,
+      ...expectationOutputSchema,
       hit_element: {
         type: "object",
         additionalProperties: false,
