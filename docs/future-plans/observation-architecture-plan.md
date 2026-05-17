@@ -1176,7 +1176,10 @@ and spatial filters.
   TODOs. Tick all remaining checkboxes in this plan.
 - **Files**: any cleanup needed.
 - **Commit**: `chore: final cleanup for observation architecture`
-- [ ] Done
+- [x] Done — `pnpm build` and `pnpm test` (290 bridge tests + 27 cli + 11
+  extension) green. `pnpm lint` reports 24 pre-existing errors (none in
+  any file this branch added or modified) plus a sprinkle of
+  `no-console` warnings that follow the project's existing pattern.
 
 #### 5.2.2 — Open the PR
 
