@@ -159,7 +159,10 @@ interface ScrollParams {
 
 interface HoverParams {
   tab_id: string;
-  ref: number;
+  ref?: number;
+  x?: number;
+  y?: number;
+  coord_space?: "css" | { kind: "screenshot"; token: string };
 }
 
 interface ExecuteJsParams {
@@ -1622,12 +1625,34 @@ function parseScroll(raw: Record<string, unknown>): ScrollParams {
 
 function parseHover(raw: Record<string, unknown>): HoverParams {
   const tab_id = raw["tab_id"];
-  const ref = raw["ref"];
   if (typeof tab_id !== "string") throw codedError("INVALID_PARAMS", "tab_id must be a string");
-  if (typeof ref !== "number" || !Number.isInteger(ref) || ref < 1) {
-    throw codedError("INVALID_PARAMS", "ref must be a positive integer");
+  const ref = raw["ref"];
+  const x = raw["x"];
+  const y = raw["y"];
+  const hasRef = typeof ref === "number" && Number.isInteger(ref) && ref >= 1;
+  const hasXY = typeof x === "number" && typeof y === "number";
+  if (!hasRef && !hasXY) {
+    throw codedError("INVALID_PARAMS", "hover requires either ref or (x,y)");
   }
-  return { tab_id, ref };
+  const out: HoverParams = { tab_id };
+  if (hasRef) out.ref = ref;
+  if (hasXY) {
+    out.x = x;
+    out.y = y;
+  }
+  const coordRaw = raw["coord_space"];
+  if (coordRaw !== undefined) {
+    if (typeof coordRaw !== "string") {
+      throw codedError("INVALID_PARAMS", "coord_space must be a string");
+    }
+    if (coordRaw === "css") out.coord_space = "css";
+    else if (coordRaw.startsWith("screenshot:")) {
+      out.coord_space = { kind: "screenshot", token: coordRaw.slice("screenshot:".length) };
+    } else {
+      throw codedError("INVALID_PARAMS", "coord_space must be 'css' or 'screenshot:<token>'");
+    }
+  }
+  return out;
 }
 
 type FindReplaceOccurrence = "first" | "all";
@@ -2654,9 +2679,42 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
   router.register("browser_hover", async (raw): Promise<{ hovered: true; effect: Effect }> => {
     const params = parseHover(raw);
     const chromeId = resolveChromeId(tabIdMap, params.tab_id);
-    const selector = resolveSelector(refCache, params.tab_id, params.ref);
 
     const { result, effect } = await captureEffect(chromeId, async () => {
+      // xy-coord path: bypass ref resolution and dispatch at the resolved
+      // CSS coords directly (mirrors browser_click_at).
+      if (params.ref === undefined && params.x !== undefined && params.y !== undefined) {
+        const { cssX, cssY } = resolveCoords(params.coord_space, params.x, params.y);
+        if (cdp.isPersistent(chromeId)) {
+          await cdpHover(cdp, chromeId, cssX, cssY);
+        } else {
+          // Synthetic hover at point: dispatch mouseover at elementFromPoint.
+          await execInTab(
+            chromeId,
+            (x: number, y: number) => {
+              const el = document.elementFromPoint(x, y) as HTMLElement | null;
+              if (el === null) return;
+              const init: MouseEventInit = {
+                bubbles: true,
+                cancelable: true,
+                composed: true,
+                clientX: x,
+                clientY: y,
+              };
+              el.dispatchEvent(new MouseEvent("mouseover", init));
+              el.dispatchEvent(new MouseEvent("mouseenter", init));
+              el.dispatchEvent(new MouseEvent("mousemove", init));
+            },
+            [cssX, cssY] as const,
+          );
+        }
+        return { hovered: true as const };
+      }
+      // Ref-based path (legacy).
+      if (params.ref === undefined) {
+        throw codedError("INVALID_PARAMS", "hover requires either ref or (x,y)");
+      }
+      const selector = resolveSelector(refCache, params.tab_id, params.ref);
       // Persistent CDP path: trusted hover via Input.dispatchMouseEvent.
       // Synthetic mouseover/mouseenter is silently ignored by hover-gated UIs
       // (Slack message-action toolbar, GitHub tooltip stacks) — only a real
