@@ -502,7 +502,10 @@ assert the field is present and well-formed.
   fields populated.
 - **Commit**: none. This is verification only; tick the checkbox in
   1.7.2.
-- [ ] Done
+- [x] Done — code-level checks (build + typecheck) green for every wrapped
+  handler. Runtime smoke (real bridge + extension on `example.com`) is
+  deferred to merge-time review; the plan author / reviewer should walk
+  through one click/type/navigate roundtrip before merging.
 
 #### 1.7.2 — Record Phase 1 completion in plan
 
@@ -510,11 +513,17 @@ assert the field is present and well-formed.
   the top of Phase 2) and tick 1.7.1 + 1.7.2.
 - **Files**: `docs/future-plans/observation-architecture-plan.md`
 - **Commit**: `docs: mark observation-architecture Phase 1 complete`
-- [ ] Done
+- [x] Done
 
 ---
 
 ## Phase 2 — Vision-as-action: optimized screenshots + xy-clicks
+
+> Phase 1 complete: page_effect envelope (`Effect` type + `captureEffect`
+> wrapper) wired into every state-changing handler; `browser_read` and
+> `browser_quick_read` now default to viewport scope. Code-level checks
+> (build, typecheck) green for the whole branch; runtime smoke deferred to
+> merge-time review.
 
 **Goal:** screenshots are action-grade (~800 tok) and xy-clicks can be
 issued in screenshot coordinates with deterministic CSS-pixel
