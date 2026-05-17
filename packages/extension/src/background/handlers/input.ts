@@ -2250,6 +2250,8 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       occluded?: boolean;
       occluder?: { tag: string; text: string; role: string | null } | null;
       effect: Effect;
+      expectation_met?: boolean;
+      mismatch_reason?: string;
     }> => {
       const tab_id = raw["tab_id"];
       const text = raw["text"];
@@ -2322,7 +2324,14 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
         }
         return inner;
       });
-      return { ...result, effect };
+      const expected = parseExpected(raw["expected"]);
+      let verification: { expectation_met?: boolean; mismatch_reason?: string } = {};
+      if (expected !== undefined) {
+        const v = await pollUntilMet(chromeId, effect, expected);
+        verification.expectation_met = v.expectation_met;
+        if (v.mismatch_reason !== undefined) verification.mismatch_reason = v.mismatch_reason;
+      }
+      return { ...result, effect, ...verification };
     },
   );
 

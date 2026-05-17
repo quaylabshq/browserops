@@ -1039,6 +1039,7 @@ const clickByText: ToolDef = {
       case_sensitive: { type: "boolean", default: false },
       button: { enum: ["left", "middle", "right"] as const, default: "left" },
       modifiers: modifiersSchema,
+      expected: actionExpectationSchema,
     },
   },
   outputSchema: {
@@ -1067,6 +1068,7 @@ const clickByText: ToolDef = {
         },
       },
       effect: effectSchema,
+      ...expectationOutputSchema,
     },
   },
   action_weight: 1,

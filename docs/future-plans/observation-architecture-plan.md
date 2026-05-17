@@ -1044,7 +1044,7 @@ and spatial filters.
 #### 4.1.6 — Wire into `browser_click_by_text`
 
 - **Commit**: `feat(extension): support expected predicate in browser_click_by_text`
-- [ ] Done
+- [x] Done
 
 #### 4.1.7 — Wire into `browser_type`
 
