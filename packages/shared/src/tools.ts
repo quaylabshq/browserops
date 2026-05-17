@@ -666,17 +666,11 @@ const click: ToolDef = {
       button: { enum: ["left", "middle", "right"] as const, default: "left" },
       click_count: { type: "integer", minimum: 1, maximum: 3, default: 1 },
       modifiers: modifiersSchema,
-      dismiss_overlay: {
+      overlay: {
         description:
-          "If the click is occluded (an overlay/scrim intercepted it), try to dismiss the overlay (ESC, then a close-button hunt) and retry once. Off by default — on sites where the overlay IS the content, auto-dismiss would be wrong. Mutually exclusive with auto_dismiss.",
-        type: "boolean",
-        default: false,
-      },
-      auto_dismiss: {
-        description:
-          "Smarter overlay dismissal: classifies the occluder (dialog, banner, toast, consent) and tries multiple strategies in order (ESC, close button hunt up to 5 ancestor levels, backdrop click). Reports what was dismissed. Mutually exclusive with dismiss_overlay.",
-        type: "boolean",
-        default: false,
+          "How to handle the case where the click is occluded by an overlay (modal, scrim, consent banner). 'none' (default) reports occluded:true and a suggestion. 'simple' tries ESC + close-button hunt and retries the click once. 'smart' classifies the occluder (dialog/banner/toast/consent) and tries multiple strategies (ESC, close-button hunt up to 5 ancestor levels, backdrop click); reports which strategy worked.",
+        enum: ["none", "simple", "smart"] as const,
+        default: "none",
       },
       observe_effects: observeEffectsInputSchema,
       expect_effect: expectEffectInputSchema,
@@ -689,8 +683,8 @@ const click: ToolDef = {
     properties: {
       clicked: { const: true },
       navigated: { type: "boolean" },
-      // Set when dismiss_overlay was on and the initial click was occluded;
-      // indicates the overlay was dismissed and the click retried.
+      // Set when overlay:'simple'|'smart' was on and the initial click was
+      // occluded; indicates the overlay was dismissed and the click retried.
       dismissed_overlay: { type: "boolean" },
       // Present when the click coordinate hit-tested to a different element
       // (overlay, modal scrim, etc.). Caller should consider re-reading and
