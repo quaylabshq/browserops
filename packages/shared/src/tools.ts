@@ -855,6 +855,18 @@ const quickRead: ToolDef = {
         default: false,
         description: "Filter to matches whose bounding box intersects the viewport.",
       },
+      within_region: {
+        type: "object",
+        additionalProperties: false,
+        required: ["x", "y", "w", "h"] as const,
+        description: "Filter to matches whose bounding box intersects this CSS-pixel region (relative to the viewport).",
+        properties: {
+          x: { type: "number" },
+          y: { type: "number" },
+          w: { type: "number" },
+          h: { type: "number" },
+        },
+      },
       max_results: { type: "integer", minimum: 1, maximum: 50, default: 10 },
     },
   },
