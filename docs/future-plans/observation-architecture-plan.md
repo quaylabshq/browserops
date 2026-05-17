@@ -819,7 +819,7 @@ representation given page characteristics and intent.
   Render each landmark as a labeled box.
 - **Files**: same.
 - **Commit**: `feat(bridge): group elements by ARIA landmark in box-drawing renderer`
-- [ ] Done
+- [x] Done
 
 #### 3.2.3 — Flex/grid container detection
 
