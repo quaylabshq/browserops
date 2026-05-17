@@ -679,7 +679,7 @@ translation.
 - **Files**: `packages/shared/src/tools.ts`,
   `packages/extension/src/background/handlers/hover.ts`
 - **Commit**: `feat(extension): support coord_space in browser_hover`
-- [ ] Done
+- [x] Done
 
 ### 2.4 — Phase 2 verification gate
 
