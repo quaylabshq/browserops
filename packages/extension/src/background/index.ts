@@ -18,6 +18,7 @@ import { registerTabHandlers } from "./handlers/tabs.js";
 import { registerNavigationHandlers } from "./handlers/navigation.js";
 import { registerScreenshotHandler } from "./handlers/screenshot.js";
 import { registerReadHandler } from "./handlers/read.js";
+import { registerObserveHandler } from "./handlers/observe.js";
 import { registerInputHandlers } from "./handlers/input.js";
 import { registerSafetyHandler, resolveSafetyDecision } from "./handlers/safety.js";
 import { registerSessionGroupHandlers } from "./handlers/session-groups.js";
@@ -88,6 +89,7 @@ registerTabHandlers(router, {
 registerNavigationHandlers(router, { tabIdMap: tabIdToChromeId, refCache, network, cdp });
 registerScreenshotHandler(router, { tabIdMap: tabIdToChromeId });
 registerReadHandler(router, { tabIdMap: tabIdToChromeId, refCache });
+registerObserveHandler(router, { tabIdMap: tabIdToChromeId });
 registerInputHandlers(router, { tabIdMap: tabIdToChromeId, refCache, cdp, network });
 registerSafetyHandler(router, { restoreBadge: () => setBadge(currentConnected) });
 
