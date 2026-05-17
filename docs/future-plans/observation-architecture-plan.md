@@ -940,7 +940,7 @@ representation given page characteristics and intent.
   don't match, fall back to full auto and emit a warning field.
 - **Files**: handler + `packages/extension/src/lib/a11y-diff.ts`
 - **Commit**: `feat(extension): implement diff mode in browser_observe`
-- [ ] Done
+- [x] Done
 
 #### 3.3.8 — Bridge MCP wiring
 

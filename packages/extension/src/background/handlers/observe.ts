@@ -7,8 +7,9 @@ import type { Router } from "../router.js";
 import type { RefCache } from "../ref-cache.js";
 import { augment } from "../../lib/a11y-augment.js";
 import { execInTab } from "./input.js";
-import { put as cacheObservation } from "../observation-cache.js";
+import { put as cacheObservation, get as getObservation } from "../observation-cache.js";
 import { estimateA11ySize, canvasPixelRatio } from "../../lib/observe-heuristic.js";
+import { diffA11y } from "../../lib/a11y-diff.js";
 
 type ObserveMode = "auto" | "text" | "visual" | "structure" | "diff";
 
@@ -263,8 +264,66 @@ export function registerObserveHandler(router: Router, opts: ObserveOpts): void 
         scroll: page_meta.scroll,
         dpr: page_meta.dpr,
         representation,
+        diff_payload: payload,
       });
       return { representation, observation_token, payload, page_meta };
+    }
+
+    if (mode === "diff") {
+      const sinceRaw = raw["since"];
+      if (typeof sinceRaw !== "string" || sinceRaw === "") {
+        throw makeError("INVALID_PARAMS", "diff mode requires `since: <observation_token>`");
+      }
+      const prior = getObservation(sinceRaw);
+      const { representation, payload } = await modeText(chromeTabId, scopeMode);
+      const warnings: string[] = [];
+      let diffPayload: unknown = payload;
+      let outRepresentation: "diff" | "augmented_a11y" = "diff";
+      if (prior === null) {
+        warnings.push(`since="${sinceRaw}" not found in observation cache; returning full augmented a11y`);
+        outRepresentation = "augmented_a11y";
+      } else if (prior.representation !== "augmented_a11y") {
+        warnings.push(
+          `since token's representation was "${prior.representation}", not augmented_a11y; returning full augmented a11y`,
+        );
+        outRepresentation = "augmented_a11y";
+      } else {
+        const beforeNodes =
+          (prior.diff_payload as { nodes?: unknown[] } | null)?.nodes;
+        const afterNodes = (payload as { nodes?: unknown[] }).nodes;
+        if (Array.isArray(beforeNodes) && Array.isArray(afterNodes)) {
+          diffPayload = diffA11y(
+            beforeNodes as Parameters<typeof diffA11y>[0],
+            afterNodes as Parameters<typeof diffA11y>[1],
+          );
+        }
+      }
+      const observation_token = cacheObservation({
+        tab_id: chromeTabId,
+        css_pixel_dims: page_meta.viewport_dims,
+        screenshot_dims: page_meta.viewport_dims,
+        scale: 1,
+        scroll: page_meta.scroll,
+        dpr: page_meta.dpr,
+        representation: outRepresentation === "diff" ? "augmented_a11y" : "augmented_a11y",
+        diff_payload: payload,
+      });
+      const out: {
+        representation: "diff" | "augmented_a11y";
+        observation_token: string;
+        payload: unknown;
+        page_meta: PageMeta;
+        warnings?: string[];
+      } = {
+        representation: outRepresentation,
+        observation_token,
+        payload: diffPayload,
+        page_meta,
+      };
+      if (warnings.length > 0) out.warnings = warnings;
+      // Touch representation to keep TS aware it's used.
+      void representation;
+      return out;
     }
 
     if (mode === "structure") {
