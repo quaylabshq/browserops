@@ -355,7 +355,7 @@ viewport scope.
 - **Verify**: click a button that opens a modal; `effect.new_dialogs`
   contains one entry.
 - **Commit**: `feat(extension): detect focus changes and new dialogs in effect`
-- [ ] Done
+- [x] Done
 
 #### 1.3.7 — Wire a11y delta counts + console errors
 

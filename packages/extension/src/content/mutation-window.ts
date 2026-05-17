@@ -73,3 +73,96 @@ export function readMutationObserver(windowId: string): MutationCounts {
     char: state.char,
   };
 }
+
+export interface DialogSnapshot {
+  role: string;
+  name: string;
+  selector: string;
+}
+
+export interface FocusSnapshot {
+  selector: string | null;
+}
+
+/** Read current document.activeElement and visible dialog/alertdialog nodes.
+ *  Returns a structurally-stable snapshot consumed by captureEffect to diff
+ *  focus changes and detect newly-appeared dialogs. */
+export function snapshotFocusAndDialogs(): {
+  focus: FocusSnapshot;
+  dialogs: DialogSnapshot[];
+} {
+  function selectorFor(el: Element): string {
+    const parts: string[] = [];
+    let node: Element | null = el;
+    while (node !== null && node !== document.documentElement && node !== document.body) {
+      const id = node.id;
+      if (id) {
+        parts.unshift(`#${CSS.escape(id)}`);
+        break;
+      }
+      const tag = node.tagName.toLowerCase();
+      const parent: Element | null = node.parentElement;
+      if (parent !== null) {
+        const siblings = Array.from(parent.children).filter(
+          (c) => c.tagName === (node as Element).tagName,
+        );
+        if (siblings.length > 1) {
+          const idx = siblings.indexOf(node) + 1;
+          parts.unshift(`${tag}:nth-child(${idx})`);
+        } else {
+          parts.unshift(tag);
+        }
+      } else {
+        parts.unshift(tag);
+      }
+      node = node.parentElement;
+    }
+    return parts.length > 0 ? parts.join(" > ") : "";
+  }
+
+  function accessibleName(el: Element): string {
+    const aria = el.getAttribute("aria-label");
+    if (aria !== null && aria.trim() !== "") return aria.trim();
+    const labelledby = el.getAttribute("aria-labelledby");
+    if (labelledby !== null) {
+      const ids = labelledby.split(/\s+/).filter(Boolean);
+      const text = ids
+        .map((id) => document.getElementById(id)?.textContent ?? "")
+        .join(" ")
+        .trim();
+      if (text !== "") return text;
+    }
+    const title = el.getAttribute("title");
+    if (title !== null && title.trim() !== "") return title.trim();
+    const text = (el.textContent ?? "").trim();
+    return text.slice(0, 80);
+  }
+
+  const active = document.activeElement;
+  const focus: FocusSnapshot = {
+    selector:
+      active !== null && active !== document.body && active !== document.documentElement
+        ? selectorFor(active)
+        : null,
+  };
+
+  const dialogs: DialogSnapshot[] = [];
+  const nodes = document.querySelectorAll<HTMLElement>(
+    '[role="dialog"], [role="alertdialog"]',
+  );
+  let scanned = 0;
+  for (const el of nodes) {
+    if (scanned++ >= 200) break;
+    // Skip clearly-hidden dialogs.
+    const style = window.getComputedStyle(el);
+    if (style.display === "none" || style.visibility === "hidden") continue;
+    const rect = el.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) continue;
+    dialogs.push({
+      role: el.getAttribute("role") ?? "dialog",
+      name: accessibleName(el),
+      selector: selectorFor(el),
+    });
+  }
+  return { focus, dialogs };
+}
