@@ -15,7 +15,6 @@
 
 export const FEATURES = [
   "procedures",
-  "gated-domains",
   "lore",
 ] as const;
 
@@ -33,12 +32,9 @@ export interface FeatureMetadata {
 /**
  * Default state per feature is set explicitly below. `procedures` ships
  * off so the agent's tools/list catalogue stays minimal for users who
- * only want basic browser automation. `gated-domains` ships on so the
- * in-band advisor surfaces on the curated list of rich-editor / SPA
- * domains — the auto-CDP-attach piece is now universal (every http(s)
- * navigation attaches CDP by default), so this flag only controls the
- * `gated_domain: true` hint surfaced in browser_navigate /
- * browser_current_tab responses.
+ * only want basic browser automation. CDP-trusted input is universal —
+ * every http(s) navigation attaches CDP by default — so there is no
+ * dispatch-mode feature flag.
  */
 export const FEATURE_METADATA: Record<FeatureName, FeatureMetadata> = {
   procedures: {
@@ -46,12 +42,6 @@ export const FEATURE_METADATA: Record<FeatureName, FeatureMetadata> = {
       "Procedure runtime — search/save/run named, parameterised action graphs from ~/browserops/procedures/. Also gates the browserops-teach skill, which authors new procedures autonomously.",
     stability: "experimental",
     default: false,
-  },
-  "gated-domains": {
-    description:
-      "Surface a `gated_domain: true` advisor hint on a curated list of rich-editor / SPA domains (Gmail, Slack, Notion, Linear, Discord, …). CDP-trusted input is universal regardless of this flag — see browser_set_cdp for per-tab opt-out. Extend the advisor list via ~/.browserops/gated-domains.json.",
-    stability: "experimental",
-    default: true,
   },
   lore: {
     description:
