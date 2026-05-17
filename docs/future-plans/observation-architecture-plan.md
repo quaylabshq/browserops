@@ -776,7 +776,7 @@ representation given page characteristics and intent.
   `cursor: not-allowed`".
 - **Files**: same module.
 - **Commit**: `feat(extension): attach visual style fields to a11y nodes`
-- [ ] Done
+- [x] Done
 
 #### 3.1.6 — Hook augmentation into `browser_read`
 
