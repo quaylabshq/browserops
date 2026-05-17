@@ -1333,11 +1333,25 @@ export function registerReadHandler(
     }
     const roleRaw = rawParams["role"];
     const roleFilter = typeof roleRaw === "string" ? roleRaw.toLowerCase() : null;
-    const viewportOnly = rawParams["viewport_only"] === true;
+    let viewportOnly = rawParams["viewport_only"] === true;
     const maxResultsRaw = rawParams["max_results"];
     const maxResults = typeof maxResultsRaw === "number" && Number.isInteger(maxResultsRaw)
       ? Math.min(Math.max(maxResultsRaw, 1), 50)
       : 10;
+
+    // scope is the new viewport/document/ref discriminant. Default 'viewport'
+    // matches the observation-architecture plan; legacy viewport_only is
+    // preserved for callers that already opt into the same behavior.
+    const scopeRaw = rawParams["scope"];
+    let scope: "viewport" | "document" | { kind: "ref"; ref: string } = "viewport";
+    if (typeof scopeRaw === "string") {
+      if (scopeRaw === "viewport") scope = "viewport";
+      else if (scopeRaw === "document") scope = "document";
+      else if (scopeRaw.startsWith("ref:")) scope = { kind: "ref", ref: scopeRaw.slice(4) };
+      else throw codedError("INVALID_PARAMS", `scope must be 'viewport'|'document'|'ref:<id>', got ${scopeRaw}`);
+    }
+    if (scope === "viewport") viewportOnly = true;
+    else if (scope === "document") viewportOnly = false;
 
     let tab: chrome.tabs.Tab;
     try {
