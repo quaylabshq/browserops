@@ -428,7 +428,7 @@ assert the field is present and well-formed.
   `packages/extension/src/background/handlers/`.
 - **Note**: three handlers, one commit (they share shape).
 - **Commit**: `feat(extension): return page_effect envelope from history navigation handlers`
-- [ ] Done
+- [x] Done
 
 #### 1.4.9 — Wrap `browser_find_and_replace`
 
