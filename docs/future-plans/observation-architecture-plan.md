@@ -226,7 +226,7 @@ viewport scope.
   right neighbor, set bit if left > right. 64 comparisons → 64 bits.
 - **Verify**: `pnpm -F @browserops/extension build` succeeds.
 - **Commit**: `feat(extension): add dHash perceptual hash utility`
-- [ ] Done
+- [x] Done
 
 #### 1.2.2 — Add phash tests
 
