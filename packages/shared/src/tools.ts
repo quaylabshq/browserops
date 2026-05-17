@@ -878,19 +878,25 @@ const quickRead: ToolDef = {
           radius_px: { type: "number", minimum: 0 },
         },
       },
+      best_match: {
+        type: "boolean",
+        default: false,
+        description:
+          "When true, return only the highest-confidence single match in `match` (not `matches`). Confidence is exact > prefix > substring with smaller-bounds tiebreaker.",
+      },
       max_results: { type: "integer", minimum: 1, maximum: 50, default: 10 },
     },
   },
   outputSchema: {
     type: "object",
     additionalProperties: false,
-    required: ["matches", "total", "query"] as const,
+    required: ["total", "query"] as const,
     properties: {
       matches: {
         type: "array",
         items: {
           type: "object",
-          additionalProperties: false,
+          additionalProperties: true,
           required: ["ref", "role", "name"] as const,
           properties: {
             ref: refSchema,
@@ -911,6 +917,11 @@ const quickRead: ToolDef = {
             },
           },
         },
+      },
+      match: {
+        description: "Set when best_match: true. The single highest-confidence match (or null when no matches found).",
+        type: ["object", "null"],
+        additionalProperties: true,
       },
       total: { type: "integer", minimum: 0 },
       query: { type: "string" },

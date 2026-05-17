@@ -1095,7 +1095,7 @@ and spatial filters.
   Confidence = label exact match > label prefix match > label substring;
   ties broken by smaller bounds (more specific element).
 - **Commit**: `feat(extension): add best_match mode to browser_quick_read`
-- [ ] Done
+- [x] Done
 
 ### 4.3 — Phase 4 verification gate
 
