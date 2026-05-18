@@ -314,7 +314,7 @@ viewport scope.
 - **Verify**: smoke test: trigger a `browser_click` on any test page;
   `effect.mutations` reflects non-zero on a page that updates the DOM.
 - **Commit**: `feat(extension): collect mutation counts during action window`
-- [ ] Done
+- [x] Done
 
 #### 1.3.4 — Wire network counter via CDP
 
