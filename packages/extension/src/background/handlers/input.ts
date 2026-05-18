@@ -381,20 +381,20 @@ async function cdpTypeKeystroke(cdp: CdpManager, chromeId: number, text: string)
       continue;
     }
     const modifiers = mapping.shift ? 8 : 0; // CDP bit: shift=8
-    const downParams: Record<string, unknown> = {
-      type: "keyDown",
+    // Canonical Chrome DevTools recipe for typing one printable character:
+    //   rawKeyDown (no text) -> char (text) -> keyUp
+    // The down event fires the keydown JS listener without inserting; the
+    // char event performs the single insertion via the IME/beforeinput
+    // pipeline. Sending keyDown WITH text plus a char event would cause
+    // contenteditable editors to receive two insertions per character.
+    await cdp.send(chromeId, "Input.dispatchKeyEvent", {
+      type: "rawKeyDown",
       key: ch,
       code: mapping.code,
       windowsVirtualKeyCode: mapping.vkCode,
       nativeVirtualKeyCode: mapping.vkCode,
       modifiers,
-      text: ch,
-    };
-    await cdp.send(chromeId, "Input.dispatchKeyEvent", downParams);
-    // Emit the `char` event so Chrome's text-input pipeline delivers the
-    // character into canvas editors (Google Docs body, Sheets formula bar,
-    // Figma). Without this the renderer fires keydown listeners but never
-    // produces visible text on Docs' .docs-texteventtarget-iframe.
+    });
     await cdp.send(chromeId, "Input.dispatchKeyEvent", {
       type: "char",
       text: ch,
@@ -431,26 +431,38 @@ async function cdpPress(
   // `event.keyCode === 13` would see 0 and bail. text is emitted on
   // keyDown only for printables, and only when no chord modifier is set
   // so Cmd+A doesn't accidentally also insert the character "a".
+  // Decide upfront whether this press will produce a printable character.
+  // When it does, we follow Chrome DevTools' canonical recipe:
+  //   rawKeyDown (no text) -> char (text) -> keyUp
+  // rawKeyDown fires the keydown JS event without triggering the renderer's
+  // built-in character-insertion path. char then performs the single
+  // insertion via the IME/beforeinput pipeline that contenteditable, canvas,
+  // and OOPIF editors all listen to. If we instead sent keyDown WITH text
+  // followed by a char event, editors that listen on both paths (most
+  // contenteditable surfaces) would receive two insertions per keypress
+  // and double-type every character.
+  //
+  // Non-printable presses (Enter, Tab, Backspace, modifier chords like
+  // Cmd+A) keep the regular keyDown — no char event follows and the
+  // keyDown listener is the only signal those editors expect.
+  const emitText = k.text !== undefined && !mods.ctrl && !mods.meta;
+  const willEmitChar = emitText && k.text !== undefined && k.text.length === 1;
   const downParams: Record<string, unknown> = {
-    type: "keyDown",
+    type: willEmitChar ? "rawKeyDown" : "keyDown",
     key: k.key,
     code: k.code,
     windowsVirtualKeyCode: k.vkCode,
     nativeVirtualKeyCode: k.vkCode,
     modifiers: m,
   };
-  const emitText = k.text !== undefined && !mods.ctrl && !mods.meta;
-  if (emitText) {
+  // Only attach `text` to the down event when we are NOT going to emit a
+  // separate char event afterwards. Otherwise the renderer inserts once
+  // from the down event and once from the char event.
+  if (emitText && !willEmitChar) {
     downParams["text"] = k.text;
   }
   await cdp.send(chromeId, "Input.dispatchKeyEvent", downParams);
-  // Emit the standalone `char` event between keyDown and keyUp for single
-  // printable characters. This is what Chrome's renderer hands to the
-  // text-input pipeline that backs canvas editors with offscreen iframes
-  // (Google Docs body, Sheets formula bar, Figma text). The keyDown listener
-  // alone is enough for contenteditable / hidden-input targets, but Docs'
-  // .docs-texteventtarget-iframe waits for `char` to actually insert text.
-  if (emitText && k.text !== undefined && k.text.length === 1) {
+  if (willEmitChar && k.text !== undefined) {
     await cdp.send(chromeId, "Input.dispatchKeyEvent", {
       type: "char",
       text: k.text,
