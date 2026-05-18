@@ -282,7 +282,7 @@ viewport scope.
   ```
 - **Verify**: `pnpm -F @browserops/shared build` succeeds.
 - **Commit**: `feat(shared): add Effect type for page_effect envelope`
-- [ ] Done
+- [x] Done
 
 #### 1.3.2 — Effect capture wrapper skeleton
 

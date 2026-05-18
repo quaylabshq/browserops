@@ -82,6 +82,50 @@ export interface Event<TPayload = Record<string, unknown>> {
 
 export type Envelope = Hello | HelloAck | Request | Response | Event;
 
+/**
+ * Per-action page_effect envelope. Every state-changing browser_* handler
+ * returns one of these alongside its result, so the agent can verify
+ * structurally what happened during the action window without re-reading
+ * the page. ~100 tokens when serialized.
+ */
+export interface MutationCounts {
+  added: number;
+  removed: number;
+  attr: number;
+  char: number;
+}
+
+export interface NetworkActivity {
+  requests: number;
+  failed: number;
+  endpoints: string[];
+}
+
+export interface A11yDelta {
+  added: number;
+  removed: number;
+  changed: number;
+}
+
+export interface NewDialog {
+  role: string;
+  name: string;
+  ref: string;
+}
+
+export interface Effect {
+  url_changed: boolean;
+  title_changed: boolean;
+  mutations: MutationCounts;
+  network: NetworkActivity;
+  visual_hash_delta: number;
+  a11y_delta: A11yDelta;
+  focus_moved_to: string | null;
+  new_dialogs: NewDialog[];
+  console_errors: number;
+  duration_ms: number;
+}
+
 export function isHello(e: unknown): e is Hello {
   return isObj(e) && e.type === "hello";
 }
