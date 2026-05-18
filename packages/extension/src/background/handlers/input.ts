@@ -1723,9 +1723,21 @@ function resolveClearMode(params: TypeParams): ClearMode | undefined {
   return params.clear_mode;
 }
 
-function resolveTypeMode(text: string, explicit: TypeMode | undefined): TypeMode {
+function resolveTypeMode(_text: string, explicit: TypeMode | undefined): TypeMode {
   if (explicit !== undefined) return explicit;
-  return text.length <= KEYSTROKE_AUTO_THRESHOLD ? "keystroke" : "paste";
+  // Default to paste (Input.insertText). It sets the focused field's value
+  // without firing per-character keydown events, so SPA shortcut handlers
+  // (Notion's space-for-AI trigger, Linear's slash menus, Slack's draft
+  // formatters) don't intercept the typed text mid-stream. The agent saw
+  // this as a ~30-turn recovery loop in h07: typing into an empty Notion
+  // block triggered the AI prompt overlay which captured every subsequent
+  // keystroke into the wrong input. Default-paste prevents that whole
+  // class of failure.
+  //
+  // Canvas-backed editors that need real key events (Google Sheets cell
+  // editor) are detected separately in the browser_type handler and
+  // routed to keystroke mode without the caller having to ask.
+  return "paste";
 }
 
 function parsePress(raw: Record<string, unknown>): PressParams {
@@ -2501,15 +2513,25 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       const expectEffect = params.expect_effect;
       let cleared: boolean | undefined;
 
-      // Infer mode from the ref metadata when agent didn't specify one.
-      // Contenteditable / rich-editor targets (role=textbox with editor
-      // class selectors, or any contenteditable) use paste mode — one-shot
-      // execCommand("insertText") that avoids focus-stealing between chars.
-      const RICH_SELECTOR_HINTS = [".ql-editor", ".ProseMirror", "[data-slate-editor", ".public-DraftEditor", "contenteditable", ".cm-content"];
-      const looksRichEditor = ref.role === "textbox" && RICH_SELECTOR_HINTS.some(h => selector.includes(h));
+      // Mode selection. Default is paste (Input.insertText) because it sets
+      // the focused field's value atomically without firing per-character
+      // keydown events — SPA shortcut handlers (Notion's space-for-AI
+      // overlay, Linear's slash menus) can't intercept the typed text. The
+      // only callers that need real per-key dispatch are canvas-backed
+      // editors that listen for keydown on a hidden input (Google Sheets'
+      // cell editor). Detect those by selector and switch automatically.
+      // Rich editors like ProseMirror / Quill / CodeMirror also prefer
+      // paste, which is now the default — so the prior RICH_SELECTOR_HINTS
+      // gate is no longer needed.
+      const CANVAS_SELECTOR_HINTS = [
+        "#waffle-rich-text-editor",       // Google Sheets cell editor
+        "#docs-texteventtarget-iframe",   // Google Docs body (canvas)
+      ];
+      const looksCanvasEditor = CANVAS_SELECTOR_HINTS.some(h => selector.includes(h));
+      const looksRichEditor = false;       // retained as a binding for diagnostic code below
       const mode: TypeMode = params.mode !== undefined
-        ? resolveTypeMode(params.text, params.mode)
-        : looksRichEditor ? "paste" : resolveTypeMode(params.text, undefined);
+        ? params.mode
+        : looksCanvasEditor ? "keystroke" : "paste";
 
       // Persistent CDP path: trusted type via Input.insertText.
       if (cdp.isPersistent(chromeId)) {

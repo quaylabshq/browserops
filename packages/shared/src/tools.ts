@@ -1135,7 +1135,7 @@ const clickByText: ToolDef = {
 const typeTool: ToolDef = {
   name: "browser_type",
   description:
-    "Type text into an element identified by ref. Two dispatch modes: 'keystroke' (default for short text, fires per-character keydown/beforeinput/input/keyup — what autocompletes and per-keystroke validators need), 'paste' (bulk-assign the value in one shot, use for long text where per-char events are wasteful). Default resolves to 'keystroke' for text <=64 chars, 'paste' otherwise. Returns `{typed, mode, page_effect?, effect, warnings?}` — `effect` is the page_effect envelope (mutations, network, visual hash diff, focus, new dialogs, a11y diff, console errors).",
+    "Type text into an element identified by ref. Two dispatch modes: 'paste' (default, bulk Input.insertText — atomic, no per-character keydown events, so SPA shortcut handlers like Notion's space-for-AI overlay don't intercept the typed text mid-stream), 'keystroke' (fires per-character rawKeyDown/char/keyUp — needed for canvas-backed editors like Google Sheets cells that listen for real key events on a hidden input; also for autocompletes / per-keystroke validators). Default is 'paste' except when the ref's selector matches a known canvas editor (auto-routed to 'keystroke'). Returns `{typed, mode, page_effect?, effect, warnings?}` — `effect` is the page_effect envelope.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -1146,7 +1146,7 @@ const typeTool: ToolDef = {
       text: { type: "string", maxLength: 32768 },
       mode: {
         description:
-          "Dispatch mode — see tool description. Omit to auto-select by text length.",
+          "Dispatch mode. Omit for auto: 'paste' for most targets, 'keystroke' when the ref's selector matches a known canvas editor (e.g. Google Sheets cell). Force 'keystroke' when you need per-character keydown events (autocompletes, validators). Force 'paste' to skip key events entirely.",
         enum: ["keystroke", "paste"] as const,
       },
       submit: { type: "boolean", default: false },
