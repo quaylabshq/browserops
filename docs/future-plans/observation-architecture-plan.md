@@ -300,7 +300,7 @@ viewport scope.
   return a zeroed `Effect` and the action result.
 - **Verify**: `pnpm -F @browserops/extension build` succeeds.
 - **Commit**: `feat(extension): scaffold captureEffect wrapper`
-- [ ] Done
+- [x] Done
 
 #### 1.3.3 — Wire MutationObserver counts
 
