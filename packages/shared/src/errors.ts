@@ -20,6 +20,7 @@ export const ERROR_CODES = [
   "INVALID_PARAMS",
   "INVALID_STATE",
   "FEATURE_DISABLED",
+  "TOOL_DISABLED",
   "INTERNAL",
   // Procedures errors (plan 06)
   "PROC_NOT_FOUND",

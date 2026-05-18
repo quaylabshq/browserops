@@ -275,6 +275,20 @@ async function attachMcpSession(
   );
   const rateLimiter = new RateLimiter(RATE_LIMIT_PER_TAB_PER_MIN, globalCap);
 
+  // BROWSEROPS_DISABLED_TOOLS: comma-separated tool names hidden from
+  // tools/list and rejected at tools/call. Use to expose a minimal,
+  // screenshot-first surface that mirrors browser-harness — set to e.g.
+  // "browser_observe,browser_quick_read,browser_read,browser_query_selector,
+  //  browser_describe_ref,browser_click_by_text,browser_find_and_replace".
+  // Empty / unset means no extra hiding (default behaviour).
+  const disabledToolsRaw = process.env["BROWSEROPS_DISABLED_TOOLS"] ?? "";
+  const disabledTools = new Set(
+    disabledToolsRaw
+      .split(",")
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0),
+  );
+
   const transport = new SocketServerTransport(conn, session.id);
   const mcp = new McpBridgeServer({
     wsBridge: runtime.wsBridge,
@@ -285,6 +299,7 @@ async function attachMcpSession(
     version: runtime.version,
     sessionId: session.id,
     enabledFeatures: runtime.enabledFeatures.current,
+    disabledTools,
     traceWriter: runtime.traceWriter,
     renameSession,
     clientName: session.client_info.name,
