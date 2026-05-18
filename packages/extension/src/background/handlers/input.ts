@@ -150,7 +150,7 @@ const KEYSTROKE_AUTO_THRESHOLD = 64;
 
 interface TypeParams {
   tab_id: string;
-  ref: number;
+  ref?: number;
   text: string;
   mode?: TypeMode;
   submit?: boolean;
@@ -1678,8 +1678,9 @@ function parseType(raw: Record<string, unknown>): TypeParams {
   const ref = raw["ref"];
   const text = raw["text"];
   if (typeof tab_id !== "string") throw codedError("INVALID_PARAMS", "tab_id must be a string");
-  if (typeof ref !== "number" || !Number.isInteger(ref) || ref < 1) {
-    throw codedError("INVALID_PARAMS", "ref must be a positive integer");
+  // ref is optional: when omitted, the handler types into document.activeElement.
+  if (ref !== undefined && (typeof ref !== "number" || !Number.isInteger(ref) || ref < 1)) {
+    throw codedError("INVALID_PARAMS", "ref must be a positive integer when provided");
   }
   if (typeof text !== "string") throw codedError("INVALID_PARAMS", "text must be a string");
   const mode = raw["mode"];
@@ -1702,11 +1703,11 @@ function parseType(raw: Record<string, unknown>): TypeParams {
   }
   const result: TypeParams = {
     tab_id,
-    ref,
     text,
     submit: typeof submit === "boolean" ? submit : false,
     mode: mode !== undefined ? (mode as TypeMode) : undefined,
   };
+  if (typeof ref === "number") result.ref = ref;
   if (clearMode !== undefined) result.clear_mode = clearMode as ClearMode;
   if (typeof delay === "number") result.delay_ms = delay;
   // observe_effects defaults to true; only false explicitly disables observation.
@@ -2505,6 +2506,41 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       const params = parseType(raw);
       const chromeId = resolveChromeId(tabIdMap, params.tab_id);
       const { result: handlerResult, effect } = await captureEffect(chromeId, async () => {
+      // Ref-less typing path (browser-harness-style type_text): inject into
+      // document.activeElement via Input.insertText. The agent is expected
+      // to have called browser_click_at first to focus the target. Skips
+      // the selector lookup, the focus-click, and the clear step — none of
+      // which mean anything without a ref. Useful when no a11y refs are
+      // available (e.g. screenshot-first profiles with browser_read /
+      // browser_quick_read disabled).
+      if (params.ref === undefined) {
+        if (cdp.isPersistent(chromeId)) {
+          await cdpType(cdp, chromeId, params.text);
+          if (params.submit === true) {
+            await cdpPress(cdp, chromeId, "Enter", { ctrl: false, alt: false, shift: false, meta: false });
+          }
+        } else {
+          // Synthetic fallback: dispatch insertText via execCommand on the
+          // active element. Works on contenteditable; form inputs need the
+          // CDP path for trusted events.
+          await execInTab(chromeId, ((text: string) => {
+            const el = document.activeElement as HTMLElement | null;
+            if (el === null) return;
+            try {
+              document.execCommand("insertText", false, text);
+            } catch {
+              if (typeof (el as HTMLInputElement).value === "string") {
+                const cur = (el as HTMLInputElement).value;
+                (el as HTMLInputElement).value = cur + text;
+                el.dispatchEvent(new Event("input", { bubbles: true }));
+              }
+            }
+          }) as (text: string) => void, [params.text] as const);
+        }
+        const r: { typed: number; mode: TypeMode } = { typed: params.text.length, mode: "paste" };
+        return r;
+      }
+
       const ref = resolveRef(refCache, params.tab_id, params.ref);
       const selector = ref.selector;
       const submit = params.submit ?? false;

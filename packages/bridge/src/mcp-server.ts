@@ -149,6 +149,14 @@ export interface McpBridgeDeps {
    * tools/call with FEATURE_DISABLED.
    */
   enabledFeatures: ReadonlySet<FeatureName>;
+  /**
+   * Tool names that should be hidden from tools/list and rejected at
+   * tools/call. Populated from the BROWSEROPS_DISABLED_TOOLS env var
+   * (comma-separated). Use to enforce a minimal surface — e.g. a
+   * screenshot-first profile that hides browser_observe / quick_read /
+   * read / query_selector / describe_ref to mirror a simpler harness.
+   */
+  disabledTools?: ReadonlySet<string>;
   /** Optional trace writer. When provided, the router will emit a TraceEvent after each tool result. */
   traceWriter?: TraceWriter;
   /**
@@ -237,7 +245,9 @@ export class McpBridgeServer {
 
     this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
       tools: TOOL_DEFS.filter(
-        (d) => d.feature === undefined || this.deps.enabledFeatures.has(d.feature),
+        (d) =>
+          (d.feature === undefined || this.deps.enabledFeatures.has(d.feature)) &&
+          !(this.deps.disabledTools?.has(d.name) ?? false),
       ).map((d) => ({
         name: d.name,
         description: d.description,
@@ -309,6 +319,26 @@ export class McpBridgeServer {
     const def = TOOL_DEF_MAP[name];
     if (!def) {
       throw new McpError(McpErrorCode.MethodNotFound, `unknown tool: ${name}`);
+    }
+
+    // 2a. Disabled-tools gate (BROWSEROPS_DISABLED_TOOLS env). Tools listed
+    // there are hidden from tools/list; reject calls if the client cached
+    // the catalogue or names a tool we never advertised.
+    if (this.deps.disabledTools?.has(name) ?? false) {
+      const result = await this.reply(
+        id,
+        name,
+        toolError({
+          code: "TOOL_DISABLED",
+          message:
+            `tool "${name}" is disabled in this connector profile ` +
+            `(BROWSEROPS_DISABLED_TOOLS). Use the screenshot-first ` +
+            `equivalents instead.`,
+          details: { tool: name },
+        }),
+      );
+      this.record(id, name, params, originalParamKeys, startMs, result, undefined);
+      return result;
     }
 
     // 2b. Feature gate. Tools whose feature flag is set but disabled are
