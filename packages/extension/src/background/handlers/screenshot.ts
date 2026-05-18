@@ -1,5 +1,6 @@
 import type { ErrorCode } from "@browserops/shared";
 import type { Router } from "../router.js";
+import type { CdpManager } from "../cdp.js";
 import { execInTab } from "./input.js";
 import { put as cacheObservation } from "../observation-cache.js";
 import { renderSom, collectSomCandidates } from "../../lib/som-overlay.js";
@@ -186,6 +187,48 @@ async function captureVisible(
   return stripDataUrlPrefix(dataUrl);
 }
 
+/**
+ * Capture a viewport screenshot, preferring raw CDP Page.captureScreenshot
+ * when the tab has a persistent CDP attachment, falling back to
+ * chrome.tabs.captureVisibleTab otherwise.
+ *
+ * Why CDP-first: chrome.tabs.captureVisibleTab shares a quota across the
+ * entire extension and silently times out / returns blank payloads under
+ * load (~46% failure rate observed during h07 Notion runs). CDP's
+ * Page.captureScreenshot is per-target, has no quota, and is what
+ * browser-harness uses with consistent reliability.
+ *
+ * The `chrome.tabs.captureVisibleTab` fallback is kept so that tabs
+ * without CDP attached (e.g. user-released tabs, chrome-internal pages)
+ * still work.
+ */
+async function captureViewport(
+  cdp: CdpManager,
+  chromeTabId: number,
+  windowId: number,
+  format: "png" | "jpeg",
+  quality: number,
+): Promise<string> {
+  if (cdp.isPersistent(chromeTabId)) {
+    try {
+      // Page.captureScreenshot quality applies to jpeg only. Format names
+      // here are the CDP wire format ("png" | "jpeg" — lowercase, matches
+      // chrome.tabs API by coincidence).
+      const params: Record<string, unknown> = { format, captureBeyondViewport: false };
+      if (format === "jpeg") params["quality"] = quality;
+      const res = await cdp.send<{ data?: string }>(chromeTabId, "Page.captureScreenshot", params);
+      if (typeof res?.data !== "string" || res.data.length === 0) {
+        throw codedError("INTERNAL", "Page.captureScreenshot returned empty payload");
+      }
+      return res.data;
+    } catch (err) {
+      // Fall through to the extension-API path on any CDP error.
+      console.warn("[browserops] CDP Page.captureScreenshot failed, falling back:", err);
+    }
+  }
+  return captureVisible(windowId, format, quality);
+}
+
 function arrayBufferToBase64(buf: ArrayBuffer): string {
   // btoa(String.fromCharCode(...)) blows the call stack past ~100KB inputs,
   // so encode in 32KB chunks.
@@ -279,7 +322,7 @@ async function downscaleToBudget(
 
 export function registerScreenshotHandler(
   router: Router,
-  opts: { tabIdMap: Map<string, number> },
+  opts: { tabIdMap: Map<string, number>; cdp: CdpManager },
 ): void {
   router.register("browser_screenshot", async (rawParams) => {
     const params = parseParams(rawParams);
@@ -324,7 +367,7 @@ export function registerScreenshotHandler(
 
     if (fullQuality) {
       // Bypass: capture at the requested format/quality and skip downscale.
-      const image_base64 = await captureVisible(tab.windowId, format, quality);
+      const image_base64 = await captureViewport(opts.cdp, chromeTabId, tab.windowId, format, quality);
       const cssW =
         typeof tab.width === "number" && tab.width > 0 ? tab.width : metrics.inner_w;
       const cssH =
@@ -360,7 +403,7 @@ export function registerScreenshotHandler(
     // full_quality:true. The budget-aware downscale enforces a hard ceiling
     // on the returned base64 size so default-intent screenshots stop blowing
     // the agent's context envelope on wide / content-rich pages.
-    const captured = await captureVisible(tab.windowId, "png", 100);
+    const captured = await captureViewport(opts.cdp, chromeTabId, tab.windowId, "png", 100);
     const encoded = await downscaleToBudget(captured, "png", maxDimension, quality, params.region, metrics.dpr);
     const cssW = params.region?.w ?? metrics.inner_w;
     const cssH = params.region?.h ?? metrics.inner_h;
