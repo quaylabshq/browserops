@@ -3,6 +3,7 @@ import {
   installMutationObserver,
   readMutationObserver,
   snapshotFocusAndDialogs,
+  snapshotInteractiveKeys,
 } from "../content/mutation-window.js";
 import type { DialogSnapshot, FocusSnapshot } from "../content/mutation-window.js";
 import { execInTab } from "./handlers/input.js";
@@ -50,21 +51,18 @@ function stripQuery(url: string): string {
   }
 }
 
+// Console-error captures keyed by tab id → windowId → count.
+const activeConsoleCaptures = new Map<number, Map<string, { count: number }>>();
+const runtimeEnabledTabs = new Set<number>();
+
 function onCdpEvent(
   tabId: number,
   method: string,
   params: Record<string, unknown>,
 ): void {
-  if (
-    method !== "Network.requestWillBeSent" &&
-    method !== "Network.loadingFailed" &&
-    method !== "Network.responseReceived"
-  ) {
-    return;
-  }
-  const perWindow = activeNetworkCaptures.get(tabId);
-  if (perWindow === undefined || perWindow.size === 0) return;
   if (method === "Network.requestWillBeSent") {
+    const perWindow = activeNetworkCaptures.get(tabId);
+    if (perWindow === undefined || perWindow.size === 0) return;
     const req = params["request"] as { url?: string } | undefined;
     const url = typeof req?.url === "string" ? req.url : "";
     if (url === "") return;
@@ -74,10 +72,29 @@ function onCdpEvent(
         cap.endpoints.add(stripQuery(url));
       }
     }
-  } else if (method === "Network.loadingFailed") {
+    return;
+  }
+  if (method === "Network.loadingFailed") {
+    const perWindow = activeNetworkCaptures.get(tabId);
+    if (perWindow === undefined || perWindow.size === 0) return;
     for (const cap of perWindow.values()) {
       cap.failed++;
     }
+    return;
+  }
+  if (method === "Runtime.consoleAPICalled") {
+    const type = params["type"];
+    if (type !== "error") return;
+    const perWindow = activeConsoleCaptures.get(tabId);
+    if (perWindow === undefined || perWindow.size === 0) return;
+    for (const cap of perWindow.values()) cap.count++;
+    return;
+  }
+  if (method === "Runtime.exceptionThrown") {
+    const perWindow = activeConsoleCaptures.get(tabId);
+    if (perWindow === undefined || perWindow.size === 0) return;
+    for (const cap of perWindow.values()) cap.count++;
+    return;
   }
 }
 
@@ -90,6 +107,35 @@ async function ensureNetworkEnabled(tabId: number): Promise<void> {
   } catch (err) {
     console.warn("[browserops] Network.enable failed:", err);
   }
+}
+
+async function ensureRuntimeEnabled(tabId: number): Promise<void> {
+  if (cdpRef === null) return;
+  if (runtimeEnabledTabs.has(tabId)) return;
+  try {
+    await cdpRef.send(tabId, "Runtime.enable");
+    runtimeEnabledTabs.add(tabId);
+  } catch (err) {
+    console.warn("[browserops] Runtime.enable failed:", err);
+  }
+}
+
+function startConsoleCapture(tabId: number, windowId: string): void {
+  let perWindow = activeConsoleCaptures.get(tabId);
+  if (perWindow === undefined) {
+    perWindow = new Map();
+    activeConsoleCaptures.set(tabId, perWindow);
+  }
+  perWindow.set(windowId, { count: 0 });
+}
+
+function readConsoleCapture(tabId: number, windowId: string): number {
+  const perWindow = activeConsoleCaptures.get(tabId);
+  if (perWindow === undefined) return 0;
+  const cap = perWindow.get(windowId);
+  perWindow.delete(windowId);
+  if (perWindow.size === 0) activeConsoleCaptures.delete(tabId);
+  return cap?.count ?? 0;
 }
 
 function startNetworkCapture(tabId: number, windowId: string): void {
@@ -200,7 +246,9 @@ export async function captureEffect<T>(
   }
 
   await ensureNetworkEnabled(tabId);
+  await ensureRuntimeEnabled(tabId);
   startNetworkCapture(tabId, windowId);
+  startConsoleCapture(tabId, windowId);
 
   const preHash = await captureViewportHash(tabId);
 
@@ -208,10 +256,16 @@ export async function captureEffect<T>(
     focus: { selector: null },
     dialogs: [],
   };
+  let preKeys: string[] = [];
   try {
     preSnapshot = await execInTab(tabId, snapshotFocusAndDialogs, [] as const);
   } catch (err) {
     console.warn("[browserops] pre snapshot failed:", err);
+  }
+  try {
+    preKeys = await execInTab(tabId, snapshotInteractiveKeys, [] as const);
+  } catch (err) {
+    console.warn("[browserops] pre interactive snapshot failed:", err);
   }
 
   let result: T;
@@ -226,6 +280,7 @@ export async function captureEffect<T>(
       }
     }
     readNetworkCapture(tabId, windowId);
+    readConsoleCapture(tabId, windowId);
     throw actionErr;
   }
 
@@ -238,21 +293,29 @@ export async function captureEffect<T>(
     }
   }
   const network = readNetworkCapture(tabId, windowId);
+  const consoleErrors = readConsoleCapture(tabId, windowId);
   const postHash = await captureViewportHash(tabId);
 
   let postSnapshot: { focus: FocusSnapshot; dialogs: DialogSnapshot[] } = {
     focus: { selector: null },
     dialogs: [],
   };
+  let postKeys: string[] = [];
   try {
     postSnapshot = await execInTab(tabId, snapshotFocusAndDialogs, [] as const);
   } catch (err) {
     console.warn("[browserops] post snapshot failed:", err);
   }
+  try {
+    postKeys = await execInTab(tabId, snapshotInteractiveKeys, [] as const);
+  } catch (err) {
+    console.warn("[browserops] post interactive snapshot failed:", err);
+  }
 
   const effect = zeroEffect();
   effect.mutations = mutations;
   effect.network = network;
+  effect.console_errors = consoleErrors;
   if (preHash !== null && postHash !== null) {
     effect.visual_hash_delta = normalizedDistance(preHash, postHash);
   }
@@ -263,6 +326,13 @@ export async function captureEffect<T>(
   effect.new_dialogs = postSnapshot.dialogs
     .filter((d) => !preDialogKey.has(d.name))
     .map((d) => ({ role: d.role, name: d.name, ref: d.selector }));
+  const preSet = new Set(preKeys);
+  const postSet = new Set(postKeys);
+  let added = 0;
+  let removed = 0;
+  for (const k of postSet) if (!preSet.has(k)) added++;
+  for (const k of preSet) if (!postSet.has(k)) removed++;
+  effect.a11y_delta = { added, removed, changed: 0 };
   effect.duration_ms = Date.now() - start;
   return { result, effect };
 }
