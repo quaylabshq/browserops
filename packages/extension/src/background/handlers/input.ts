@@ -2442,10 +2442,12 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
   router.register("browser_press", async (raw): Promise<{
     pressed: true;
     page_effect?: PageEffect;
+    effect?: Effect;
     warnings?: string[];
   }> => {
     const params = parsePress(raw);
     const chromeId = resolveChromeId(tabIdMap, params.tab_id);
+    const { result: handlerResult, effect: pressEffect } = await captureEffect(chromeId, async () => {
     const observeEffects = params.observe_effects !== false;
     const expectEffect = params.expect_effect;
     const keys = params.keys;
@@ -2512,6 +2514,8 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       return { ...r, warnings: ["expect_effect set but observe_effects:false — no effect data to verify against"] };
     }
     return dispatchPress();
+    });
+    return { ...handlerResult, effect: pressEffect };
   });
 
   router.register("browser_scroll", async (raw): Promise<{ scrolled: true }> => {
