@@ -383,7 +383,7 @@ assert the field is present and well-formed.
 - **Verify**: invoke `browser_click` via the bridge; response includes
   populated `effect`.
 - **Commit**: `feat(extension): return page_effect envelope from browser_click`
-- [ ] Done
+- [x] Done
 
 #### 1.4.2 — Wrap `browser_click_at`
 
