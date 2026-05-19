@@ -395,7 +395,7 @@ assert the field is present and well-formed.
 
 - **Files**: `packages/extension/src/background/handlers/click-by-text.ts`
 - **Commit**: `feat(extension): return page_effect envelope from browser_click_by_text`
-- [ ] Done
+- [x] Done
 
 #### 1.4.4 — Wrap `browser_type`
 
