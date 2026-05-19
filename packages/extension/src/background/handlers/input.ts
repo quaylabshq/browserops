@@ -2042,22 +2042,25 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
     "browser_click_at",
     async (
       raw,
-    ): Promise<{ clicked: true; x: number; y: number }> => {
+    ): Promise<{ clicked: true; x: number; y: number; effect: Effect }> => {
       const params = parseClickAt(raw);
       const chromeId = resolveChromeId(tabIdMap, params.tab_id);
       const buttonName = params.button ?? "left";
       const button = BUTTON_INDEX[buttonName];
       const modifiers = params.modifiers ?? [];
-      if (cdp.isPersistent(chromeId)) {
-        await cdpClick(cdp, chromeId, params.x, params.y, buttonName, modifierFlags(modifiers));
-        return { clicked: true, x: params.x, y: params.y };
-      }
-      await execInTab(
-        chromeId,
-        injectedClickAtPoint,
-        [params.x, params.y, button, modifierFlags(modifiers)] as const,
-      );
-      return { clicked: true, x: params.x, y: params.y };
+      const { result, effect } = await captureEffect(chromeId, async () => {
+        if (cdp.isPersistent(chromeId)) {
+          await cdpClick(cdp, chromeId, params.x, params.y, buttonName, modifierFlags(modifiers));
+          return { clicked: true as const, x: params.x, y: params.y };
+        }
+        await execInTab(
+          chromeId,
+          injectedClickAtPoint,
+          [params.x, params.y, button, modifierFlags(modifiers)] as const,
+        );
+        return { clicked: true as const, x: params.x, y: params.y };
+      });
+      return { ...result, effect };
     },
   );
 
