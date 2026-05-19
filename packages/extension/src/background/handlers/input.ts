@@ -2158,10 +2158,12 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       cleared?: boolean;
       escalated_to_cdp?: true;
       page_effect?: PageEffect;
+      effect?: Effect;
       warnings?: string[];
     }> => {
       const params = parseType(raw);
       const chromeId = resolveChromeId(tabIdMap, params.tab_id);
+      const { result: handlerResult, effect } = await captureEffect(chromeId, async () => {
       const ref = resolveRef(refCache, params.tab_id, params.ref);
       const selector = ref.selector;
       const submit = params.submit ?? false;
@@ -2432,6 +2434,8 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
         return { ...r, warnings: ["expect_effect set but observe_effects:false — no effect data to verify against"] };
       }
       return dispatchWithRescue();
+      });
+      return { ...handlerResult, effect };
     },
   );
 

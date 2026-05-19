@@ -401,7 +401,7 @@ assert the field is present and well-formed.
 
 - **Files**: `packages/extension/src/background/handlers/type.ts`
 - **Commit**: `feat(extension): return page_effect envelope from browser_type`
-- [ ] Done
+- [x] Done
 
 #### 1.4.5 — Wrap `browser_press`
 
