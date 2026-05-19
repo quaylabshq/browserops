@@ -420,7 +420,7 @@ assert the field is present and well-formed.
 - **Files**: `packages/extension/src/background/handlers/navigate.ts`
 - **Note**: navigation may emit URL change; effect should capture it.
 - **Commit**: `feat(extension): return page_effect envelope from browser_navigate`
-- [ ] Done
+- [x] Done
 
 #### 1.4.8 — Wrap `browser_back` / `browser_forward` / `browser_reload`
 
