@@ -105,6 +105,83 @@ const tabSummarySchema: JSONSchemaObject = {
 // when observe_effects is true / not suppressed).
 // ---------------------------------------------------------------------------
 
+// page_effect envelope produced by captureEffect — a structural delta
+// covering the action window. ~100 tokens; lets the agent skip a re-read
+// after most mutating actions.
+const effectSchema: JSONSchemaObject = {
+  type: "object",
+  description:
+    "Structural delta captured around every state-changing action: " +
+    "mutations, network, visual hash diff, focus, new dialogs, a11y diff, " +
+    "console errors. Returned alongside `page_effect` for forward " +
+    "compatibility with the observation architecture.",
+  properties: {
+    url_changed: { type: "boolean" },
+    title_changed: { type: "boolean" },
+    mutations: {
+      type: "object",
+      properties: {
+        added: { type: "integer", minimum: 0 },
+        removed: { type: "integer", minimum: 0 },
+        attr: { type: "integer", minimum: 0 },
+        char: { type: "integer", minimum: 0 },
+      },
+      required: ["added", "removed", "attr", "char"] as const,
+      additionalProperties: false,
+    },
+    network: {
+      type: "object",
+      properties: {
+        requests: { type: "integer", minimum: 0 },
+        failed: { type: "integer", minimum: 0 },
+        endpoints: { type: "array", items: { type: "string" } },
+      },
+      required: ["requests", "failed", "endpoints"] as const,
+      additionalProperties: false,
+    },
+    visual_hash_delta: { type: "number", minimum: 0, maximum: 1 },
+    a11y_delta: {
+      type: "object",
+      properties: {
+        added: { type: "integer", minimum: 0 },
+        removed: { type: "integer", minimum: 0 },
+        changed: { type: "integer", minimum: 0 },
+      },
+      required: ["added", "removed", "changed"] as const,
+      additionalProperties: false,
+    },
+    focus_moved_to: { type: ["string", "null"] },
+    new_dialogs: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          role: { type: "string" },
+          name: { type: "string" },
+          ref: { type: "string" },
+        },
+        required: ["role", "name", "ref"] as const,
+        additionalProperties: false,
+      },
+    },
+    console_errors: { type: "integer", minimum: 0 },
+    duration_ms: { type: "integer", minimum: 0 },
+  },
+  required: [
+    "url_changed",
+    "title_changed",
+    "mutations",
+    "network",
+    "visual_hash_delta",
+    "a11y_delta",
+    "focus_moved_to",
+    "new_dialogs",
+    "console_errors",
+    "duration_ms",
+  ] as const,
+  additionalProperties: false,
+} as const;
+
 const pageEffectSchema: JSONSchemaObject = {
   type: "object",
   description:
@@ -343,7 +420,7 @@ const switchTab: ToolDef = {
 
 const navigate: ToolDef = {
   name: "browser_navigate",
-  description: "Point the tab at a URL and optionally wait for page load. Returns page_effect when observe_effects is on, warnings? when expect_effect mismatches.",
+  description: "Point the tab at a URL and optionally wait for page load. Returns `page_effect` when observe_effects is on, `warnings?` when expect_effect mismatches, and an `effect` page_effect envelope (mutations, network, visual hash diff, focus, new dialogs, a11y diff, console errors) for the action window.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -363,6 +440,7 @@ const navigate: ToolDef = {
     properties: {
       final_url: { type: "string" },
       page_effect: pageEffectSchema,
+      effect: effectSchema,
       warnings: warningsOutputSchema,
     },
   },
@@ -379,7 +457,8 @@ const navigate: ToolDef = {
 
 const back: ToolDef = {
   name: "browser_back",
-  description: "Go back one step in the tab's history.",
+  description:
+    "Go back one step in the tab's history. Response includes a `page_effect` envelope describing what changed during the action window.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -394,6 +473,7 @@ const back: ToolDef = {
     required: ["final_url"] as const,
     properties: {
       final_url: { type: "string" },
+      effect: effectSchema,
     },
   },
   action_weight: 1,
@@ -408,7 +488,8 @@ const back: ToolDef = {
 
 const forward: ToolDef = {
   name: "browser_forward",
-  description: "Go forward one step in the tab's history.",
+  description:
+    "Go forward one step in the tab's history. Response includes a `page_effect` envelope describing what changed during the action window.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -423,6 +504,7 @@ const forward: ToolDef = {
     required: ["final_url"] as const,
     properties: {
       final_url: { type: "string" },
+      effect: effectSchema,
     },
   },
   action_weight: 1,
@@ -437,7 +519,8 @@ const forward: ToolDef = {
 
 const reload: ToolDef = {
   name: "browser_reload",
-  description: "Reload the current page.",
+  description:
+    "Reload the current page. Response includes a `page_effect` envelope describing what changed during the action window.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -453,6 +536,7 @@ const reload: ToolDef = {
     required: ["final_url"] as const,
     properties: {
       final_url: { type: "string" },
+      effect: effectSchema,
     },
   },
   action_weight: 1,
@@ -655,7 +739,7 @@ const quickRead: ToolDef = {
 const click: ToolDef = {
   name: "browser_click",
   description:
-    "Click an element identified by ref. Fires pointer/mouse events on the element. Returns `{clicked, page_effect?, warnings?}`.",
+    "Click an element identified by ref. Fires pointer/mouse events on the element. Returns `{clicked, page_effect?, effect, warnings?}` — `effect` is the page_effect envelope (mutations, network, visual hash diff, focus, new dialogs, a11y diff, console errors).",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -709,6 +793,7 @@ const click: ToolDef = {
       // we walked up to the nearest interactive ancestor to dispatch on.
       retargeted: { type: "boolean" },
       page_effect: pageEffectSchema,
+      effect: effectSchema,
       warnings: warningsOutputSchema,
     },
   },
@@ -726,7 +811,7 @@ const click: ToolDef = {
 const clickAt: ToolDef = {
   name: "browser_click_at",
   description:
-    "Click at viewport coordinates (x, y) — no ref required. Escape hatch for canvas, maps, games, and anything the a11y walker can't address.",
+    "Click at viewport coordinates (x, y) — no ref required. Escape hatch for canvas, maps, games, and anything the a11y walker can't address. Response includes a `page_effect` envelope describing what changed during the action window.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -747,6 +832,7 @@ const clickAt: ToolDef = {
       clicked: { const: true },
       x: { type: "number" },
       y: { type: "number" },
+      effect: effectSchema,
     },
   },
   action_weight: 1,
@@ -763,7 +849,7 @@ const clickAt: ToolDef = {
 const clickByText: ToolDef = {
   name: "browser_click_by_text",
   description:
-    "Click the visible element whose accessible name matches the given text. Bypasses the a11y-tree ref mechanism — use this when browser_read didn't surface the element as a ref (common on SPA sites with div-wrapped click handlers), or when the agent knows the exact button label and doesn't want to pay for a full read first. Typically called from an operator sub-agent.",
+    "Click the visible element whose accessible name matches the given text. Bypasses the a11y-tree ref mechanism — use this when browser_read didn't surface the element as a ref (common on SPA sites with div-wrapped click handlers), or when the agent knows the exact button label and doesn't want to pay for a full read first. Typically called from an operator sub-agent. Response includes a `page_effect` envelope describing what changed during the action window.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -813,6 +899,7 @@ const clickByText: ToolDef = {
           role: { type: ["string", "null"] },
         },
       },
+      effect: effectSchema,
     },
   },
   action_weight: 1,
@@ -829,7 +916,7 @@ const clickByText: ToolDef = {
 const typeTool: ToolDef = {
   name: "browser_type",
   description:
-    "Type text into an element identified by ref. Two dispatch modes: 'keystroke' (default for short text, fires per-character keydown/beforeinput/input/keyup — what autocompletes and per-keystroke validators need), 'paste' (bulk-assign the value in one shot, use for long text where per-char events are wasteful). Default resolves to 'keystroke' for text <=64 chars, 'paste' otherwise. Returns `{typed, mode, page_effect?, warnings?}`.",
+    "Type text into an element identified by ref. Two dispatch modes: 'keystroke' (default for short text, fires per-character keydown/beforeinput/input/keyup — what autocompletes and per-keystroke validators need), 'paste' (bulk-assign the value in one shot, use for long text where per-char events are wasteful). Default resolves to 'keystroke' for text <=64 chars, 'paste' otherwise. Returns `{typed, mode, page_effect?, effect, warnings?}` — `effect` is the page_effect envelope (mutations, network, visual hash diff, focus, new dialogs, a11y diff, console errors).",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -868,6 +955,7 @@ const typeTool: ToolDef = {
         description: "True when the field was cleared before typing (clear_mode was set).",
       },
       page_effect: pageEffectSchema,
+      effect: effectSchema,
       warnings: warningsOutputSchema,
     },
   },
@@ -885,7 +973,7 @@ const typeTool: ToolDef = {
 const findAndReplace: ToolDef = {
   name: "browser_find_and_replace",
   description:
-    "Replace a substring inside an editable element without clearing the whole field. Works on <input>, <textarea>, and contenteditable. Target resolves to `ref` if given, otherwise document.activeElement. Dispatches via beforeinput + execCommand insertText + Range fallback.",
+    "Replace a substring inside an editable element without clearing the whole field. Works on <input>, <textarea>, and contenteditable. Target resolves to `ref` if given, otherwise document.activeElement. Dispatches via beforeinput + execCommand insertText + Range fallback. Response includes a `page_effect` envelope describing what changed during the action window.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -906,6 +994,7 @@ const findAndReplace: ToolDef = {
     properties: {
       replaced: { type: "integer", minimum: 0 },
       used_fallback: { type: "boolean" },
+      effect: effectSchema,
     },
   },
   action_weight: 1,
@@ -923,7 +1012,7 @@ const findAndReplace: ToolDef = {
 const press: ToolDef = {
   name: "browser_press",
   description:
-    "Send a keyboard-only chord to the tab (CDP key names). Does not target a specific ref. Leading entries are treated as modifiers and the final entry as the key — e.g. [\"Primary\",\"KeyA\"] sends select-all. Use `Primary` instead of Meta/Control for portable chords; the extension resolves it to Meta on macOS and Control elsewhere at dispatch time. Returns `{pressed, page_effect?, warnings?}`.",
+    "Send a keyboard-only chord to the tab (CDP key names). Does not target a specific ref. Leading entries are treated as modifiers and the final entry as the key — e.g. [\"Primary\",\"KeyA\"] sends select-all. Use `Primary` instead of Meta/Control for portable chords; the extension resolves it to Meta on macOS and Control elsewhere at dispatch time. Returns `{pressed, page_effect?, effect, warnings?}` — `effect` is the page_effect envelope (mutations, network, visual hash diff, focus, new dialogs, a11y diff, console errors).",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -954,6 +1043,7 @@ const press: ToolDef = {
     properties: {
       pressed: { const: true },
       page_effect: pageEffectSchema,
+      effect: effectSchema,
       warnings: warningsOutputSchema,
     },
   },
@@ -1014,7 +1104,7 @@ const scroll: ToolDef = {
 const hover: ToolDef = {
   name: "browser_hover",
   description:
-    "Move the synthetic mouse over an element identified by ref (fires CSS :hover and pointer events).",
+    "Move the synthetic mouse over an element identified by ref (fires CSS :hover and pointer events). Response includes a `page_effect` envelope describing what changed during the action window.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -1030,6 +1120,7 @@ const hover: ToolDef = {
     required: ["hovered"] as const,
     properties: {
       hovered: { const: true },
+      effect: effectSchema,
     },
   },
   action_weight: 0.5,
