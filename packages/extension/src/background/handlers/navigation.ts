@@ -183,24 +183,33 @@ export function registerNavigationHandlers(router: Router, opts: NavigationOpts)
     },
   );
 
-  router.register("browser_back", async (params): Promise<{ final_url: string }> => {
+  router.register("browser_back", async (params): Promise<{ final_url: string; effect: Effect }> => {
     const chromeId = resolveChromeId(tabIdMap, params["tab_id"]);
-    await chrome.tabs.goBack(chromeId);
-    return { final_url: await readTabUrl(chromeId) };
+    const { result, effect } = await captureEffect(chromeId, async () => {
+      await chrome.tabs.goBack(chromeId);
+      return { final_url: await readTabUrl(chromeId) };
+    });
+    return { ...result, effect };
   });
 
-  router.register("browser_forward", async (params): Promise<{ final_url: string }> => {
+  router.register("browser_forward", async (params): Promise<{ final_url: string; effect: Effect }> => {
     const chromeId = resolveChromeId(tabIdMap, params["tab_id"]);
-    await chrome.tabs.goForward(chromeId);
-    return { final_url: await readTabUrl(chromeId) };
+    const { result, effect } = await captureEffect(chromeId, async () => {
+      await chrome.tabs.goForward(chromeId);
+      return { final_url: await readTabUrl(chromeId) };
+    });
+    return { ...result, effect };
   });
 
-  router.register("browser_reload", async (params): Promise<{ final_url: string }> => {
+  router.register("browser_reload", async (params): Promise<{ final_url: string; effect: Effect }> => {
     const chromeId = resolveChromeId(tabIdMap, params["tab_id"]);
     const hardRaw = params["hard"];
     const bypassCache = hardRaw === true;
-    await chrome.tabs.reload(chromeId, { bypassCache });
-    return { final_url: await readTabUrl(chromeId) };
+    const { result, effect } = await captureEffect(chromeId, async () => {
+      await chrome.tabs.reload(chromeId, { bypassCache });
+      return { final_url: await readTabUrl(chromeId) };
+    });
+    return { ...result, effect };
   });
 
   router.register(
