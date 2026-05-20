@@ -447,7 +447,7 @@ assert the field is present and well-formed.
 - **Verify**: from an MCP client (e.g. `mcp inspector`), call
   `browser_click` and observe `effect` in the JSON response.
 - **Commit**: `feat(bridge): forward effect envelope on action responses`
-- [ ] Done
+- [x] Done
 
 #### 1.5.2 — Update tool descriptions in shared catalogue
 
