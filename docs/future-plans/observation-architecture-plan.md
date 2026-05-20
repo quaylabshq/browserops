@@ -487,7 +487,7 @@ assert the field is present and well-formed.
 - **Files**: `packages/shared/src/tools.ts`,
   `packages/extension/src/background/handlers/quick-read.ts`
 - **Commit**: `feat(extension): add scope param to browser_quick_read`
-- [ ] Done
+- [x] Done
 
 ### 1.7 — Phase 1 verification gate
 
