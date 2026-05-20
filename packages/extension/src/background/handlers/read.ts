@@ -21,6 +21,11 @@ import type { RefCache, RefEntry, RefSnapshot } from "../ref-cache.js";
 
 type ReadMode = "a11y_tree" | "markdown" | "sanitized_html" | "text";
 
+type ReadScope =
+  | { kind: "viewport" }
+  | { kind: "document" }
+  | { kind: "ref"; ref: string };
+
 interface ReadParams {
   tab_id: string;
   mode: ReadMode;
@@ -29,6 +34,7 @@ interface ReadParams {
   length: number;
   max_length: number;
   selector?: string;
+  scope: ReadScope;
 }
 
 interface ReadResult {
@@ -125,6 +131,17 @@ function parseParams(raw: Record<string, unknown>): ReadParams {
     }
     selector = selectorRaw;
   }
+  let scope: ReadScope = { kind: "viewport" };
+  const scopeRaw = raw["scope"];
+  if (scopeRaw !== undefined) {
+    if (typeof scopeRaw !== "string") {
+      throw codedError("INVALID_PARAMS", "scope must be a string");
+    }
+    if (scopeRaw === "viewport") scope = { kind: "viewport" };
+    else if (scopeRaw === "document") scope = { kind: "document" };
+    else if (scopeRaw.startsWith("ref:")) scope = { kind: "ref", ref: scopeRaw.slice(4) };
+    else throw codedError("INVALID_PARAMS", `scope must be 'viewport'|'document'|'ref:<id>', got ${scopeRaw}`);
+  }
   const out: ReadParams = {
     tab_id: tabId,
     mode: mode as ReadMode,
@@ -132,6 +149,7 @@ function parseParams(raw: Record<string, unknown>): ReadParams {
     start,
     length,
     max_length,
+    scope,
   };
   if (selector !== undefined) out.selector = selector;
   return out;
@@ -263,7 +281,12 @@ function injectedReadMarkdown(selector: string | null): string | null {
  * Pruning: keep interactive or structural elements that are visible.
  * Numbering: 1-based refs assigned in DFS order. Capped at 500.
  */
-function injectedA11yWalk(verbose: boolean, selector: string | null): { entries: Array<{ ref: number; selector: string; role: string; name: string; attrs: Record<string, string> }>; tree: string; matched: boolean } {
+function injectedA11yWalk(
+  verbose: boolean,
+  selector: string | null,
+  scopeMode: "viewport" | "document",
+  rootSelector: string | null,
+): { entries: Array<{ ref: number; selector: string; role: string; name: string; attrs: Record<string, string> }>; tree: string; matched: boolean } {
   const MAX_REFS = 500;
   const MAX_SELECTOR_DEPTH = 6;
   const NAME_MAX = 80;
@@ -298,6 +321,16 @@ function injectedA11yWalk(verbose: boolean, selector: string | null): { entries:
     const style = window.getComputedStyle(el);
     if (style.visibility === "hidden" || style.display === "none") return false;
     if (style.opacity === "0") return false;
+    if (scopeMode === "viewport") {
+      if (
+        rect.bottom < 0 ||
+        rect.top > window.innerHeight ||
+        rect.right < 0 ||
+        rect.left > window.innerWidth
+      ) {
+        return false;
+      }
+    }
     return true;
   };
   const canDescend = (el: Element): boolean => {
@@ -503,9 +536,13 @@ function injectedA11yWalk(verbose: boolean, selector: string | null): { entries:
     }
     return anyChildMarked;
   };
-  const rootEl: Element | null = selector !== null
-    ? document.querySelector(selector)
-    : document.body;
+  // rootSelector (from scope: "ref:<id>") wins over the legacy selector
+  // arg — the ref scope is more specific.
+  const rootEl: Element | null = rootSelector !== null
+    ? document.querySelector(rootSelector)
+    : selector !== null
+      ? document.querySelector(selector)
+      : document.body;
 
   if (!verbose && rootEl !== null) {
     markPass(rootEl);
@@ -867,13 +904,29 @@ export function registerReadHandler(
     const selectorArg = params.selector ?? null;
 
     if (params.mode === "a11y_tree") {
+      // Resolve scope. "ref:<id>" needs to translate the ref id into a CSS
+      // selector via the RefCache so the walker can root its DOM traversal.
+      const scopeMode = params.scope.kind === "viewport" ? "viewport" : "document";
+      let rootSelector: string | null = null;
+      if (params.scope.kind === "ref") {
+        const snapshot = opts.refCache.get(params.tab_id);
+        const refNum = Number.parseInt(params.scope.ref, 10);
+        const entry = snapshot?.entries.get(refNum);
+        if (entry === undefined) {
+          throw codedError(
+            "REF_STALE",
+            `scope=ref:${params.scope.ref} could not be resolved; call browser_read mode:'a11y_tree' first`,
+          );
+        }
+        rootSelector = entry.selector;
+      }
       const raw: unknown = await execInTabWithArgs<
-        readonly [boolean, string | null],
+        readonly [boolean, string | null, "viewport" | "document", string | null],
         unknown
       >(
         chromeTabId,
         injectedA11yWalk,
-        [params.verbose, selectorArg],
+        [params.verbose, selectorArg, scopeMode, rootSelector],
         "ISOLATED",
       );
       const walk = narrowWalkResult(raw);
