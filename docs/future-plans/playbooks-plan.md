@@ -425,20 +425,12 @@ Each substep is one commit. Commit messages are listed verbatim — use them.
   add a focused test for the handler if router tests don't exist yet).
 - **3.7** `chore: phase 3 typecheck + test pass`
 
-### Phase 4 — Auto-wait + locator-aware existing tools (optional this PR)
+### Phase 4 — Deferred to follow-up
 
-> **Scope decision.** The minimum for v1 is to have `browser_locate` available
-> and let `execute.ts` orchestrate (locate → click-by-ref). Extending
-> `browser_click` / `browser_type` / `browser_press` / `browser_hover` to
-> accept `locator:` inline is a future cleanup that's strictly additive. To
-> keep this PR focused, **Phase 4 is deferred** — `execute.ts` performs the
-> locate-then-act dance itself. A single commit notes this:
-
-- **4.1** `docs: defer inline-locator tool surface to follow-up`
-  Add a short note in `docs/future-plans/playbooks-plan.md` under "Open
-  follow-ups" capturing that the inline `locator:` field on
-  click/type/hover/press is deferred to a follow-up PR.
-- **4.2** `chore: phase 4 typecheck pass`
+Extending `browser_click` / `browser_type` / `browser_press` / `browser_hover`
+to accept `locator:` inline is strictly additive. The playbook executor in
+Phase 5 performs the locate-then-act dance itself, which is sufficient for
+v1.
 
 ### Phase 5 — Bridge execute strict mode
 
