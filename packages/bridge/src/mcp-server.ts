@@ -30,6 +30,7 @@ import type { TabRecord, TabRegistry } from "./tab-registry.js";
 import type { Logger } from "./logger.js";
 import type { TraceWriter } from "./trace-writer.js";
 import { buildProcedureHandlers } from "./procedures/handlers.js";
+import { buildPlaybookHandlers } from "./playbooks/handlers.js";
 import { MEMORY_HANDLERS } from "./memory/handlers.js";
 import { buildServerInstructions } from "./server-instructions.js";
 import { createPromptRegistry } from "./prompts.js";
@@ -212,6 +213,7 @@ export class McpBridgeServer {
   private readonly server: Server;
   private readonly validators = new Map<string, ValidateFunction>();
   private readonly procedureHandlers: Record<string, (raw: Record<string, unknown>) => Promise<unknown>>;
+  private readonly playbookHandlers: Record<string, (raw: Record<string, unknown>) => Promise<unknown>>;
   private readonly memoryHandlers: Record<string, (raw: Record<string, unknown>) => Promise<unknown>>;
   private readonly commonProps: CommonProps;
   private transport?: Transport;
@@ -226,6 +228,7 @@ export class McpBridgeServer {
   constructor(deps: McpBridgeDeps) {
     this.deps = deps;
     this.procedureHandlers = buildProcedureHandlers(deps.wsBridge);
+    this.playbookHandlers = buildPlaybookHandlers(deps.wsBridge);
     this.memoryHandlers = MEMORY_HANDLERS;
     this.commonProps = buildCommonProps({ bridgeVersion: deps.version });
 
@@ -470,6 +473,27 @@ export class McpBridgeServer {
         return result;
       }
       // Unknown procedures_* tool — fall through to let MethodNotFound fire below.
+    }
+
+    // 4b'. In-process playbook handlers — same in-process treatment as procedures.
+    if (name.startsWith("playbooks_")) {
+      const handler = this.playbookHandlers[name];
+      if (handler) {
+        let result: ToolCallResult;
+        try {
+          const handlerResult = await handler(params);
+          result = await this.reply(id, name, toolOk(handlerResult));
+        } catch (err) {
+          const code = extractErrorCode(err);
+          const message = err instanceof Error ? err.message : String(err);
+          const details = err instanceof Error && "details" in err
+            ? (err as { details?: unknown }).details
+            : undefined;
+          result = await this.reply(id, name, toolError({ code, message, details }));
+        }
+        this.record(id, name, params, originalParamKeys, startMs, result, undefined);
+        return result;
+      }
     }
 
     // 4c. In-process memory handlers — pure filesystem, no extension round-trip.
