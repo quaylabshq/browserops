@@ -555,7 +555,7 @@ translation.
   ```
 - **Verify**: build passes.
 - **Commit**: `feat(extension): add observation cache for coord-space tokens`
-- [ ] Done
+- [x] Done
 
 #### 2.1.2 — Cache tests
 
