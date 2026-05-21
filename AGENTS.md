@@ -145,6 +145,44 @@ browser_execute_js(tab_id, `
 
 **Dialog overlays are the #1 blocker on chat apps.** Before attempting any interaction, check the `browser_read` a11y tree for modal dialogs, upsell banners, or cookie prompts. Dismiss them first (Escape key or click the close button) before interacting with the editor.
 
+## Playbooks (deterministic-first flows with LLM fallback)
+
+> **Experimental — off by default.** The six playbook tools only appear in your catalogue when the user has run `browserops feature enable playbooks`. With the feature off, the playbook store and execute paths aren't reachable — direct `browser_*` or `procedures_*` orchestration is the only path.
+
+Playbooks layer on top of procedures with three differences that matter for the agent:
+
+- **Semantic locators** — each `click`/`type`/`hover`/`press` step carries a `locator:` descriptor (`role`, `name`, `has_text`, `nth`, ...) instead of a baked ref. The descriptor is re-resolved each step against the live a11y tree, so a small UI change doesn't break the run.
+- **Retrying `expect:` predicates** — instead of one-shot `expected_effect`, playbook steps declare positive success predicates (`url_matches`, `text_visible`, `new_dialog`, `network_endpoint`, ...) that the runtime polls until match or `timeout_ms`.
+- **Explicit fallback ladder per step** — declared via `fallback.strategy`: `strict`, `retry` (same locator with backoff), `relocate` (widen the descriptor), `relocate_then_llm`, or `llm`. The `llm` paths halt with a `needs_assist` envelope; the agent inspects the envelope and resumes via `playbooks_resume` with one of three patches: `resume_with`, `insert_steps`, `give_up`.
+
+### Tools
+
+`playbooks_search`, `playbooks_get`, `playbooks_save`, `playbooks_delete`, `playbooks_execute`, `playbooks_resume`, plus `browser_locate` (the underlying locator resolver, also gated behind the `playbooks` feature).
+
+`playbooks_execute` returns one of:
+- `{completed: true, status: "completed", ...}` — done
+- `{completed: false, status: "halted", divergence, ...}` — strict failure, no LLM fallback available
+- `{completed: false, status: "needs_assist", execution_id, envelope, ...}` — paused, awaiting a `playbooks_resume` call
+- `{completed: false, status: "gave_up", ...}` — terminal after `give_up` patch
+
+The `envelope` carries the step goal, last attempt, the playbook's safety constraints (`forbidden.locators`, `forbidden.actions`), and a preview of the remaining steps. Every patch step still flows through the `forbidden` guard — the LLM cannot bypass author-declared safety bars.
+
+### Composition
+
+Playbooks and procedures compose two ways:
+
+- A playbook step with `do: procedure_call` runs a saved procedure in-process.
+- A playbook step with `do: playbook_call` recurses into another playbook.
+- Procedures can call playbooks via `action: playbooks_execute` in their step's `action:` field.
+
+### Storage
+
+`~/browserops/playbooks/` holds the YAML files plus the `index.json` search manifest. Override the root with `BROWSEROPS_PLAYBOOKS_DIR`. Schema lives in `packages/shared/src/playbooks.ts`; execute loop and handlers in `packages/bridge/src/playbooks/`.
+
+### Strict mode
+
+Pass `strict: true` to `playbooks_execute` to refuse every LLM-fallback path even if a step declares one. Use for CI / batch runs and for the post-authoring verification run that flips `bump_success: true → status: trusted`.
+
 ## Approval mode
 
 browserops runs in **auto-approve mode by default**: risky actions (`browser_execute_js`, click/type on sensitive domains, procedures marked `risky: true`) execute without prompting. Destructive keyboard chords and navigations to `javascript:`, `file://`, or `chrome://` URLs are refused regardless of mode.
