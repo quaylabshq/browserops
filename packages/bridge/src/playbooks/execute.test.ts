@@ -48,6 +48,13 @@ function stubWsBridge(script: Script[]): WSBridgeLike & {
       params: Record<string, unknown>,
     ): Promise<T> => {
       calls.push({ method, params });
+      // Auto-prime browser_read calls are best-effort — when the script
+      // does not explicitly script one, return a benign empty success.
+      // This mirrors the runtime contract: the prime is wrapped in a
+      // try/catch and any failure falls through to the real locate call.
+      if (method === "browser_read" && script[idx]?.method !== "browser_read") {
+        return { refs: [], content: "", url: "", title: "" } as T;
+      }
       const item = script[idx++];
       if (!item) {
         throw new Error(`stub ran out of scripted calls (next was ${method})`);
@@ -98,6 +105,68 @@ describe("playbook execute — strict mode", () => {
     expect(ws.calls[0]?.params["url"]).toBe("https://example.com");
   });
 
+  it("auto-primes the ref-cache via browser_read before every locator step", async () => {
+    // Two-step playbook so we can assert the prime fires twice.
+    await writeYaml("shared/auto_prime/playbook.yaml", {
+      schema_version: 1,
+      name: "auto.prime",
+      description: "auto prime demo",
+      kind: "leaf",
+      steps: [
+        {
+          id: "a",
+          do: "click",
+          locator: { role: "button", name: "First" },
+        },
+        {
+          id: "b",
+          do: "click",
+          locator: { role: "button", name: "Second" },
+        },
+      ],
+    });
+
+    const ws = stubWsBridge([
+      // Step a — explicit browser_read so we can verify it lands first.
+      { method: "browser_read", response: { refs: [], content: "", url: "", title: "" } },
+      {
+        method: "browser_locate",
+        response: {
+          matches: [{ ref: 1, role: "button", name: "First", selector: "#a" }],
+          used_snapshot: "current",
+        },
+      },
+      { method: "browser_click", response: { clicked: true, page_effect: emptyPageEffect() } },
+      // Step b — second prime.
+      { method: "browser_read", response: { refs: [], content: "", url: "", title: "" } },
+      {
+        method: "browser_locate",
+        response: {
+          matches: [{ ref: 2, role: "button", name: "Second", selector: "#b" }],
+          used_snapshot: "current",
+        },
+      },
+      { method: "browser_click", response: { clicked: true, page_effect: emptyPageEffect() } },
+    ]);
+
+    const exec = makePlaybookExecutor(ws);
+    const result = await exec({ name: "auto.prime", tab_id: "t_1", inputs: {} });
+
+    expect(result.completed).toBe(true);
+    const readCalls = ws.calls.filter((c) => c.method === "browser_read");
+    expect(readCalls.length).toBe(2);
+    // The reads land immediately before each locate.
+    const order = ws.calls.map((c) => c.method);
+    expect(order).toEqual([
+      "browser_read",
+      "browser_locate",
+      "browser_click",
+      "browser_read",
+      "browser_locate",
+      "browser_click",
+    ]);
+  });
+
   it("resolves locator + dispatches click with the matched ref", async () => {
     await writeYaml("shared/click_demo/playbook.yaml", {
       schema_version: 1,
@@ -130,7 +199,8 @@ describe("playbook execute — strict mode", () => {
     const result = await exec({ name: "click.demo", tab_id: "t_1", inputs: {} });
 
     expect(result.completed).toBe(true);
-    expect(ws.calls[1]?.params["ref"]).toBe(7);
+    const clickCall = ws.calls.find((c) => c.method === "browser_click");
+    expect(clickCall?.params["ref"]).toBe(7);
   });
 
   it("halts on locator miss with divergence info", async () => {
