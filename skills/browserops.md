@@ -274,6 +274,12 @@ Playbooks are a Playwright-style sibling to procedures. Same artefact (YAML, `~/
 
 **Never save an untested playbook.** `playbooks_save({bump_success: true})` flips `draft → trusted` only after a clean strict-mode run.
 
+### Authoring new playbooks (`browserops-playbook` skill)
+
+For "save / teach / remember a playbook for X" requests, switch to the **`browserops-playbook` skill** at `~/.claude/skills/browserops-playbook/SKILL.md` (mirrored to `skills/browserops-playbook.md`). It owns the autonomous flow end-to-end: pre-flight reuse check across both playbooks AND procedures, the three hard safety gates, the per-app safe-dummy registry, the locator-derivation loop, the strict-mode verification + external goal predicate, and the single-message report. Don't drive playbook authoring from this file alone — the skill is the source of truth.
+
+Always run `playbooks_search` AND `procedures_search` first. If a trusted procedure already covers the goal at score ≥0.5, offer to convert rather than re-author. If a trusted playbook covers it, point the user at the existing one.
+
 ### Authoring new procedures (`browserops-teach` skill)
 
 - For "learn to do X then remember it" requests, switch to the **`browserops-teach` skill** at `~/.claude/skills/browserops-teach/SKILL.md` — it owns the autonomous flow end-to-end (pre-flight reuse check, the three hard safety gates, the per-app safe-dummy registry, the in-context YAML authoring, the goal-grounded verification predicate). Don't drive the flow from this file.
