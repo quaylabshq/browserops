@@ -327,6 +327,17 @@ const MEMORY_CODES = [
   "MEMORY_ALREADY_EXISTS",
   "MEMORY_SCHEMA_INVALID",
 ] as const satisfies readonly ErrorCode[];
+const PLAYBOOK_CODES = [
+  "PLAYBOOK_NOT_FOUND",
+  "PLAYBOOK_ALREADY_EXISTS",
+  "PLAYBOOK_SCHEMA_INVALID",
+  "PLAYBOOK_IN_USE",
+  "PLAYBOOK_OWNER_INVALID",
+  "PLAYBOOK_RESUME_EXPIRED",
+  "PLAYBOOK_RESUME_INVALID",
+  "PLAYBOOK_BUDGET_EXCEEDED",
+  "PLAYBOOK_FORBIDDEN",
+] as const satisfies readonly ErrorCode[];
 
 // ---------------------------------------------------------------------------
 // Tool definitions
@@ -1980,6 +1991,303 @@ const proceduresExecute: ToolDef = {
 
 
 // ---------------------------------------------------------------------------
+// Playbooks (feature: "playbooks")
+//
+// Six tools in this family:
+//   playbooks_search / _get / _save / _delete — mirror procedures_*
+//   playbooks_execute — runs a playbook, may halt with needs_assist
+//   playbooks_resume  — resume a needs_assist execution with an LLM patch
+// ---------------------------------------------------------------------------
+
+const playbookNamePattern = "^[a-z][a-z0-9_.-]{0,79}$";
+
+const playbooksSearchMatchSchema: JSONSchemaObject = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "name",
+    "kind",
+    "description",
+    "inputs",
+    "triggers",
+    "side_effects",
+    "score",
+  ] as const,
+  properties: {
+    name: { type: "string" },
+    kind: { enum: ["leaf", "composite"] as const },
+    domain: { type: ["string", "null"] },
+    description: { type: "string" },
+    goal: { type: "string" },
+    inputs: { type: "array", items: { type: "string" } },
+    triggers: { type: "array", items: { type: "string" } },
+    side_effects: { type: "array", items: { type: "string" } },
+    score: { type: "number", minimum: 0, maximum: 1 },
+    snippet: { type: "string" },
+  },
+};
+
+const playbooksSearch: ToolDef = {
+  name: "playbooks_search",
+  feature: "playbooks",
+  description:
+    "Search the playbook catalogue by free-form query (token coverage + name/trigger/description ranking). " +
+    "Returns metadata-only matches; use playbooks_get for the YAML body. " +
+    "Excludes status:draft entries by default; pass include_drafts:true to see them. " +
+    'REQUIRED ARGUMENTS: {"query": "<text>"}.',
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["query"] as const,
+    properties: {
+      query: { type: "string", minLength: 1, maxLength: 200 },
+      limit: { type: "integer", minimum: 1, maximum: 25, default: 10 },
+      min_score: { type: "number", minimum: 0, maximum: 1, default: 0.2 },
+      domain: { type: "string" },
+      scope: { type: "string" },
+      deep: { type: "boolean", default: false },
+      include_drafts: { type: "boolean", default: false },
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["matches", "total", "truncated"] as const,
+    properties: {
+      matches: { type: "array", items: playbooksSearchMatchSchema },
+      total: { type: "integer", minimum: 0 },
+      truncated: { type: "boolean" },
+      drafts: { type: "array", items: playbooksSearchMatchSchema },
+    },
+  },
+  action_weight: 0,
+  risky: "never",
+  errorCodes: [...BASE_CODES, ...PLAYBOOK_CODES] as const,
+} as const;
+
+const playbookMetaSchema: JSONSchemaObject = {
+  type: "object",
+  additionalProperties: false,
+  required: ["version", "created", "last_verified", "status"] as const,
+  properties: {
+    version: { type: "integer", minimum: 1 },
+    created: { type: "string" },
+    last_verified: { type: "string" },
+    status: { enum: ["draft", "trusted"] as const },
+  },
+};
+
+const playbooksGet: ToolDef = {
+  name: "playbooks_get",
+  feature: "playbooks",
+  description:
+    "Fetch the YAML body + metadata for a playbook by name. " +
+    'REQUIRED ARGUMENTS: {"name": "<playbook name>"}.',
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["name"] as const,
+    properties: {
+      name: { type: "string", pattern: playbookNamePattern },
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["yaml", "path", "meta"] as const,
+    properties: {
+      yaml: { type: "string" },
+      path: { type: "string" },
+      meta: playbookMetaSchema,
+    },
+  },
+  action_weight: 0,
+  risky: "never",
+  errorCodes: [...BASE_CODES, ...PLAYBOOK_CODES] as const,
+} as const;
+
+const playbooksSave: ToolDef = {
+  name: "playbooks_save",
+  feature: "playbooks",
+  description:
+    "Create or update a playbook from YAML. Validates schema + forbidden + binding shape before write. " +
+    "Set bump_success:true after a clean strict-mode run to flip status from draft to trusted. " +
+    "The runtime refuses to bump trusted when the last execution used LLM fallback. " +
+    'REQUIRED ARGUMENTS: {"name": "<id>", "yaml": "<text>"}.',
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["name", "yaml"] as const,
+    properties: {
+      name: { type: "string", pattern: playbookNamePattern },
+      yaml: { type: "string", minLength: 1, maxLength: 65536 },
+      owner: { type: "string", pattern: playbookNamePattern },
+      overwrite: { type: "boolean", default: false },
+      bump_success: { type: "boolean", default: false },
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["saved", "path", "version"] as const,
+    properties: {
+      saved: { const: true },
+      path: { type: "string" },
+      version: { type: "integer", minimum: 1 },
+    },
+  },
+  action_weight: 0.5,
+  risky: "never",
+  errorCodes: [...BASE_CODES, ...PLAYBOOK_CODES] as const,
+} as const;
+
+const playbooksDelete: ToolDef = {
+  name: "playbooks_delete",
+  feature: "playbooks",
+  description:
+    "Remove a playbook from the store. Refuses if other composites reference it unless force:true. " +
+    'REQUIRED ARGUMENTS: {"name": "<id>"}.',
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["name"] as const,
+    properties: {
+      name: { type: "string", pattern: playbookNamePattern },
+      force: { type: "boolean", default: false },
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["deleted", "path"] as const,
+    properties: {
+      deleted: { const: true },
+      path: { type: "string" },
+    },
+  },
+  action_weight: 0.5,
+  risky: "never",
+  errorCodes: [...BASE_CODES, ...PLAYBOOK_CODES] as const,
+} as const;
+
+const playbookStepResultSchema: JSONSchemaObject = {
+  type: "object",
+  additionalProperties: true,
+  required: ["id", "action", "matched"] as const,
+  properties: {
+    id: { type: "string" },
+    action: { type: "string" },
+    matched: { type: "boolean" },
+    attempts: { type: "integer", minimum: 1 },
+    resolved_by: {
+      enum: ["first_try", "retry", "relocate", "llm", "halted"] as const,
+    },
+  },
+};
+
+const playbooksExecute: ToolDef = {
+  name: "playbooks_execute",
+  feature: "playbooks",
+  description:
+    "Run a playbook end-to-end. Resolves semantic locators against the live page, auto-waits, polls expect predicates, " +
+    "and applies the per-step fallback ladder (retry → relocate → llm). " +
+    "If a step's fallback resolves to llm (and strict:false), the runner halts and returns " +
+    '{"status":"needs_assist","execution_id":"<id>","envelope":{...}}. ' +
+    "Resume via playbooks_resume(execution_id, patch). " +
+    'REQUIRED ARGUMENTS: {"name": "<playbook>", "tab_id": "<tab>"}.',
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["name", "tab_id"] as const,
+    properties: {
+      name: { type: "string", pattern: playbookNamePattern },
+      tab_id: tabIdSchema,
+      inputs: { type: "object", additionalProperties: true, default: {} },
+      strict: {
+        type: "boolean",
+        default: false,
+        description:
+          "Refuse all LLM fallback paths even when steps declare them. Use for CI / batch runs.",
+      },
+      max_tool_calls: {
+        type: "integer",
+        minimum: 0,
+        maximum: 100,
+        description: "Global cap on tool_call budget spent by fallback strategies.",
+      },
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: true,
+    required: ["completed", "status", "steps_executed", "step_results", "used_llm_fallback"] as const,
+    properties: {
+      completed: { type: "boolean" },
+      status: {
+        enum: ["completed", "needs_assist", "gave_up", "halted"] as const,
+      },
+      steps_executed: { type: "integer", minimum: 0 },
+      step_results: { type: "array", items: playbookStepResultSchema },
+      execution_id: { type: "string" },
+      envelope: { type: "object", additionalProperties: true },
+      divergence: { type: "object", additionalProperties: true },
+      used_llm_fallback: { type: "boolean" },
+      verify_passed: { type: "boolean" },
+    },
+  },
+  action_weight: 1,
+  risky: "never",
+  errorCodes: [
+    ...BASE_CODES,
+    ...PLAYBOOK_CODES,
+    ...TAB_CODES,
+    "EXTENSION_DISCONNECTED",
+    "RATE_LIMITED",
+    "LOCATOR_NOT_FOUND",
+    "LOCATOR_AMBIGUOUS",
+    "ELEMENT_NOT_ACTIONABLE",
+  ] as const,
+} as const;
+
+const playbooksResume: ToolDef = {
+  name: "playbooks_resume",
+  feature: "playbooks",
+  description:
+    "Resume a suspended playbook execution with a patch. Three patch kinds: " +
+    "(1) resume_with{locator?, params?} — retry the failing step with a fresh descriptor; " +
+    "(2) insert_steps{steps[]} — run corrective steps then continue from the original step; " +
+    "(3) give_up{reason?} — abandon the run. " +
+    "Every step the patch introduces goes through the same forbidden guard as a normal dispatch. " +
+    'REQUIRED ARGUMENTS: {"execution_id": "<id>", "patch": {<patch>}}.',
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["execution_id", "patch"] as const,
+    properties: {
+      execution_id: { type: "string", minLength: 1 },
+      patch: {
+        type: "object",
+        additionalProperties: true,
+        required: ["kind"] as const,
+        properties: {
+          kind: { enum: ["resume_with", "insert_steps", "give_up"] as const },
+        },
+      },
+    },
+  },
+  outputSchema: playbooksExecute.outputSchema,
+  action_weight: 1,
+  risky: "never",
+  errorCodes: [
+    ...BASE_CODES,
+    ...PLAYBOOK_CODES,
+    ...TAB_CODES,
+    "EXTENSION_DISCONNECTED",
+    "LOCATOR_NOT_FOUND",
+  ] as const,
+} as const;
+
+// ---------------------------------------------------------------------------
 // Cross-agent memory tools (feature: "memory")
 //
 // Memories are markdown files under ~/browserops/memory/, with a small
@@ -2464,6 +2772,12 @@ export const TOOL_DEFS: readonly ToolDef[] = [
   memoryGet,
   memoryDelete,
   browserLocate,
+  playbooksSearch,
+  playbooksGet,
+  playbooksSave,
+  playbooksDelete,
+  playbooksExecute,
+  playbooksResume,
 ] as const;
 
 export const TOOL_DEF_MAP: Record<string, ToolDef> = Object.freeze(
