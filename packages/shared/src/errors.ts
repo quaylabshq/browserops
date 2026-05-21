@@ -34,6 +34,9 @@ export const ERROR_CODES = [
   "LORE_NOT_FOUND",
   "LORE_ALREADY_EXISTS",
   "LORE_SCHEMA_INVALID",
+  // Observation architecture (plan: observation-architecture)
+  "OBSERVATION_TOKEN_INVALID",
+  "COORDS_OUT_OF_SCREENSHOT_BOUNDS",
 ] as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[number];
