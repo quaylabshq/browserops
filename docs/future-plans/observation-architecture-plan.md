@@ -606,7 +606,7 @@ translation.
 - **Verify**: response includes `observation_token`; token resolves via
   `observation-cache.get`.
 - **Commit**: `feat(extension): return coord-space bundle from browser_screenshot`
-- [ ] Done
+- [x] Done
 
 #### 2.2.4 — Add `annotate: "som" | "none"` for SoM overlays
 
