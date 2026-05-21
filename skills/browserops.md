@@ -402,3 +402,92 @@ If you're editing browserops itself (not just using it):
 12. Never treat `browser_click_at` `clicked:true` as success on its own. Always verify with `page_effect` — coordinate clicks silently land on wrong elements (parent container, sibling overlay, flex gap) far more often than ref-based clicks do. Zero effect = failure, regardless of what the return field says.
 13. Never dive into a complex task (multi-site, branching, high-stakes, unfamiliar tools, ambiguous goal) without first spawning a planner sub-agent (§2 step 3) to produce the plan. The discipline that keeps simple tasks on-rails is the same discipline that collapses on complex ones when it all has to live in the main context at once — externalize the planning.
 14. Never ask the user more than one clarifying question in a single turn, and never for a task that can be interpreted and attempted. "Use amazon india to check delivery info" is interpretable. "Transfer $X to Y" where X or Y is missing is not. Default to interpret + attempt + verify via `page_effect`; escalate to the user only when the task literally cannot be tried or is irreversible with ambiguous target.
+
+---
+
+## 12. Observation architecture (page_effect envelope, browser_observe, predict-then-verify, xy-click)
+
+The observation architecture pass added four pieces. Each is opt-in shaped — old call sites keep working, new ones get a denser feedback loop for ~100 token cost.
+
+### 12.1 `effect` envelope on every state-changing action
+
+Every `browser_click`, `browser_click_at`, `browser_click_by_text`, `browser_type`, `browser_press`, `browser_hover`, `browser_navigate`, `browser_back/forward/reload`, and `browser_find_and_replace` response now carries an `effect: Effect` field alongside the legacy `page_effect`. The envelope has:
+
+- `mutations: { added, removed, attr, char }` — MutationObserver counts during the action window.
+- `network: { requests, failed, endpoints[] }` — CDP-sourced Network domain counts (endpoints stripped of query string).
+- `visual_hash_delta: 0..1` — dHash of viewport pre vs post (0 = identical, 1 = fully changed).
+- `focus_moved_to: string | null` — CSS selector / ref of the new focused element when focus moved.
+- `new_dialogs[]` — `role`/`name`/`ref` of any `role=dialog`/`role=alertdialog` that appeared.
+- `a11y_delta: { added, removed, changed }` — count of interactive-element key changes.
+- `console_errors: number` — `Runtime.consoleAPICalled(error)` + `Runtime.exceptionThrown` count.
+- `duration_ms: number`.
+
+Use it as the primary "did anything happen" signal. Read `page_effect` (legacy) for the precise DOM-mutation taxonomy the trusted-input work added.
+
+### 12.2 `browser_observe` — adaptive read
+
+Prefer `browser_observe` over raw `browser_read` for "look at the page" steps. Modes:
+
+| mode | what it returns |
+|---|---|
+| `auto` (default) | Heuristic pick. Canvas-dominant viewport → screenshot; ≤2k a11y tokens → augmented a11y; 2k–6k → viewport-scoped a11y; >6k → box-drawing + low-res screenshot. |
+| `text` | Forced augmented a11y. Default viewport scope. |
+| `visual` | Forced action-grade screenshot (768px longest edge, ~800 tok). |
+| `structure` | Box-drawing layout summary, landmarks + leaf refs + ARIA tables. |
+| `diff` | `since: <observation_token>` required. Returns added/removed/changed ref deltas. |
+
+Every response includes `observation_token` (12-char id, 30s TTL, max 32 cached). Use it as the second arg to `browser_click_at`/`browser_hover` via `coord_space: "screenshot:<token>"`.
+
+### 12.3 Predict-then-verify with `expected:`
+
+Every state-changing action takes an optional `expected: ActionExpectation`. The handler polls the page after dispatch until the predicate matches or `timeout_ms` (default 3000) elapses. Result: `expectation_met: boolean` + `mismatch_reason?: string`. **Soft signal — never throws.**
+
+```ts
+browser_click({
+  tab_id, ref: 42,
+  expected: {
+    new_dialog: true,           // any modal appeared
+    timeout_ms: 5000,
+  },
+})
+// → { clicked: true, effect: {...}, expectation_met: true }
+```
+
+Common predicates:
+
+| Want to assert… | Use |
+|---|---|
+| Modal opened | `new_dialog: true` or regex against name |
+| URL changed | `url_matches: "/checkout/?$"` |
+| Field filled | `value_contains: { ref: "...", substring: "hello" }` |
+| Backend was hit | `network_endpoint: "/api/cart"` |
+| Page actually changed | `visual_delta_at_least: 0.05` |
+
+This replaces the blind retry loop pattern. If a click "should" open a modal, attach `expected: { new_dialog: true }` and read `expectation_met` instead of issuing a screenshot+verify roundtrip.
+
+### 12.4 xy-click with SoM overlays
+
+`browser_screenshot({ tab_id, annotate: "som" })` returns the screenshot annotated with numbered labels on every interactive element plus `som_map: { "1": { ref, role, name }, ... }`. To click the element labeled "3":
+
+```ts
+const ss = browser_screenshot({ tab_id, annotate: "som" })
+// ss.observation_token, ss.som_map
+browser_click_at({
+  tab_id,
+  x: <pixel x of label 3 in the screenshot>,
+  y: <pixel y>,
+  coord_space: `screenshot:${ss.observation_token}`,
+})
+```
+
+The bridge resolves the coord via the observation cache (scale + scroll + dpr from the screenshot moment) to CSS pixels before dispatch. Token expires at 30s — re-screenshot if you took longer than that.
+
+Use xy-click for canvas/WebGL/poorly-marked-up sites where the a11y walker can't address the element. Prefer ref-based dispatch when refs are available.
+
+### 12.5 Viewport-scoped reads are the new default
+
+`browser_read` and `browser_quick_read` now default `scope: "viewport"` (only nodes intersecting the viewport rect). Pass `scope: "document"` to opt back into the legacy full-page walk; `scope: "ref:<id>"` filters to a subtree.
+
+Both tools also default `augment: true`, which decorates every ref with `bounds`, `visible`, `in_viewport`, `occluded_by`, `bg_color`, `fg_color`, `opacity`, `disabled_visual`, `display`, and `flex_direction` in a single batched DOM round-trip. Pass `augment: false` to skip the cost when you only need structural data.
+
+`browser_quick_read` also gained `only_enabled` / `only_visible` / `only_in_viewport` boolean filters, `within_region: { x, y, w, h }` spatial filter, `near: { ref, radius_px }` ref-relative spatial filter, and `best_match: true` for single-match mode.

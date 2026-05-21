@@ -34,6 +34,7 @@ import { MEMORY_HANDLERS } from "./memory/handlers.js";
 import { buildServerInstructions } from "./server-instructions.js";
 import { createPromptRegistry } from "./prompts.js";
 import { checkBreaker, recordResult as recordBreakerResult } from "./circuit-breaker.js";
+import { renderBoxDrawing } from "./observe/box-drawing-render.js";
 import { buildCommonProps, captureEvent, getTelemetry, type CommonProps } from "./telemetry/index.js";
 
 /**
@@ -148,6 +149,14 @@ export interface McpBridgeDeps {
    * tools/call with FEATURE_DISABLED.
    */
   enabledFeatures: ReadonlySet<FeatureName>;
+  /**
+   * Tool names that should be hidden from tools/list and rejected at
+   * tools/call. Populated from the BROWSEROPS_DISABLED_TOOLS env var
+   * (comma-separated). Use to enforce a minimal surface — e.g. a
+   * screenshot-first profile that hides browser_observe / quick_read /
+   * read / query_selector / describe_ref to mirror a simpler harness.
+   */
+  disabledTools?: ReadonlySet<string>;
   /** Optional trace writer. When provided, the router will emit a TraceEvent after each tool result. */
   traceWriter?: TraceWriter;
   /**
@@ -236,7 +245,9 @@ export class McpBridgeServer {
 
     this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
       tools: TOOL_DEFS.filter(
-        (d) => d.feature === undefined || this.deps.enabledFeatures.has(d.feature),
+        (d) =>
+          (d.feature === undefined || this.deps.enabledFeatures.has(d.feature)) &&
+          !(this.deps.disabledTools?.has(d.name) ?? false),
       ).map((d) => ({
         name: d.name,
         description: d.description,
@@ -308,6 +319,26 @@ export class McpBridgeServer {
     const def = TOOL_DEF_MAP[name];
     if (!def) {
       throw new McpError(McpErrorCode.MethodNotFound, `unknown tool: ${name}`);
+    }
+
+    // 2a. Disabled-tools gate (BROWSEROPS_DISABLED_TOOLS env). Tools listed
+    // there are hidden from tools/list; reject calls if the client cached
+    // the catalogue or names a tool we never advertised.
+    if (this.deps.disabledTools?.has(name) ?? false) {
+      const result = await this.reply(
+        id,
+        name,
+        toolError({
+          code: "TOOL_DISABLED",
+          message:
+            `tool "${name}" is disabled in this connector profile ` +
+            `(BROWSEROPS_DISABLED_TOOLS). Use the screenshot-first ` +
+            `equivalents instead.`,
+          details: { tool: name },
+        }),
+      );
+      this.record(id, name, params, originalParamKeys, startMs, result, undefined);
+      return result;
     }
 
     // 2b. Feature gate. Tools whose feature flag is set but disabled are
@@ -582,8 +613,9 @@ export class McpBridgeServer {
       // visibility + lastActiveTab fallback rules. Only path to error
       // here is current_tab with nothing visible, which surfaces as
       // TAB_NOT_FOUND.
-      const filtered = this.applySessionFilter(name, extResult);
-      const finalResult = filtered ?? toolOk(extResult);
+      const transformed = applyObserveBoxDrawing(name, extResult);
+      const filtered = this.applySessionFilter(name, transformed);
+      const finalResult = filtered ?? toolOk(transformed);
       if (finalResult.isError) {
         const result = await this.reply(id, name, finalResult);
         recordBreakerResult(breakerCall, { ok: false, error_code: "TAB_NOT_FOUND" });
@@ -943,6 +975,51 @@ export class McpBridgeServer {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+// Action handlers attach a page_effect envelope (`effect: Effect`) — a
+// structural delta about what changed during the action window. The bridge
+// forwards the extension's result verbatim, so the envelope reaches MCP
+// clients unmodified. The per-tool outputSchema in shared/src/tools.ts must
+// list `effect` to keep strict-validating clients happy.
+// browser_observe structure/auto modes embed a `_render: "box_drawing"` tag
+// in the payload to defer the actual ASCII rendering to the bridge — keeps
+// renderer logic out of the extension's MV3 SW and centralized here.
+function applyObserveBoxDrawing(toolName: string, result: unknown): unknown {
+  if (toolName !== "browser_observe") return result;
+  if (typeof result !== "object" || result === null) return result;
+  const r = result as Record<string, unknown>;
+  const payload = r["payload"];
+  if (typeof payload !== "object" || payload === null) return result;
+  const p = payload as Record<string, unknown>;
+  if (p["_render"] !== "box_drawing") return result;
+  const rawNodes = (p["nodes"] ?? []) as Array<Record<string, unknown>>;
+  const viewport_dims = (r["page_meta"] as { viewport_dims?: { w: number; h: number } } | undefined)
+    ?.viewport_dims ?? { w: 1280, h: 720 };
+  const nodes = rawNodes.map((n) => ({
+    ref: typeof n["ref"] === "string" ? n["ref"] : String(n["ref"] ?? ""),
+    role: typeof n["role"] === "string" ? n["role"] : "",
+    name: typeof n["name"] === "string" ? n["name"] : "",
+    selector: typeof n["selector"] === "string" ? n["selector"] : "",
+    bounds: (n["bounds"] as { x: number; y: number; w: number; h: number } | null) ?? null,
+    visible: n["visible"] === true,
+    in_viewport: n["in_viewport"] === true,
+    occluded_by: typeof n["occluded_by"] === "string" ? (n["occluded_by"] as string) : null,
+    bg_color: typeof n["bg_color"] === "string" ? (n["bg_color"] as string) : null,
+    fg_color: typeof n["fg_color"] === "string" ? (n["fg_color"] as string) : null,
+    opacity: typeof n["opacity"] === "number" ? (n["opacity"] as number) : 1,
+    disabled_visual: n["disabled_visual"] === true,
+    display: typeof n["display"] === "string" ? (n["display"] as string) : undefined,
+    flex_direction:
+      typeof n["flex_direction"] === "string" ? (n["flex_direction"] as string) : undefined,
+  }));
+  const rendered = renderBoxDrawing(nodes, viewport_dims);
+  const newPayload: Record<string, unknown> = {
+    text: rendered.text,
+    ref_map: rendered.ref_map,
+  };
+  if (p["image"] !== undefined) newPayload["image"] = p["image"];
+  return { ...r, payload: newPayload };
+}
 
 function toolOk(result: unknown): ToolCallResult {
   const text = typeof result === "string" ? result : safeJson(result);

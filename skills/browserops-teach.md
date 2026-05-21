@@ -182,3 +182,31 @@ verification predicate isn't tight, or the YAML is doing too much.
 For a brand-new app with no memory: budget ~20-30 calls (probe + author +
 verify + save + memory write). After 2-3 successful runs against that app,
 the budget collapses to the happy-path number above.
+
+---
+
+## 7. Observation-architecture authoring guidance
+
+When the observation-architecture changes are live in the agent's tool
+catalogue, prefer these patterns over their pre-observation equivalents:
+
+- **Use `browser_observe` for verification waits.** A leaf whose intent is
+  "wait until the modal is gone" should call `browser_observe(tab_id,
+  mode: "diff", since: <token-from-pre-action-observe>)` — the response
+  is a small added/removed/changed delta instead of a full re-read. Falls
+  back to augmented a11y when the prior token is stale.
+- **Set `expected:` predicates on action steps with a known success
+  criterion.** A click that "should" open a dialog gains
+  `expected: { new_dialog: true }`; a navigate that "should" change URL
+  gains `expected: { url_matches: "<regex>" }`. The handler polls
+  synchronously and returns `expectation_met: boolean`, so the procedure
+  step can branch on the result without a separate read.
+- **Drop `browser_read` from procedure leaves whose only purpose was to
+  check post-action state.** The `effect` envelope already carries
+  mutations / new dialogs / focus / visual hash delta / a11y delta —
+  cheaper than re-reading the tree.
+- **Prefer screenshot+SoM+xy-click only when ref-based dispatch can't
+  address the target** (canvas/WebGL, badly-marked-up SPAs). The
+  observation-cache token enforces tight coupling between the screenshot
+  state and the click coordinates, so don't reuse a token past its 30s
+  TTL.

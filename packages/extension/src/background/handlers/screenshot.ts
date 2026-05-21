@@ -1,5 +1,25 @@
 import type { ErrorCode } from "@browserops/shared";
 import type { Router } from "../router.js";
+import type { CdpManager } from "../cdp.js";
+import { execInTab } from "./input.js";
+import { put as cacheObservation } from "../observation-cache.js";
+import { renderSom, collectSomCandidates } from "../../lib/som-overlay.js";
+
+function readPageMetrics(): {
+  dpr: number;
+  scroll_x: number;
+  scroll_y: number;
+  inner_w: number;
+  inner_h: number;
+} {
+  return {
+    dpr: window.devicePixelRatio || 1,
+    scroll_x: window.scrollX,
+    scroll_y: window.scrollY,
+    inner_w: window.innerWidth,
+    inner_h: window.innerHeight,
+  };
+}
 
 /**
  * browser_screenshot handler.
@@ -24,7 +44,15 @@ interface ScreenshotParams {
   quality?: number;
   max_dimension?: number;
   full_quality?: boolean;
+  dimensions?: { longest_edge?: number };
+  region?: { x: number; y: number; w: number; h: number };
+  annotate?: "som" | "none";
 }
+
+// Default longest-edge for the action-grade screenshot path introduced by the
+// observation-architecture plan. Hits the Anthropic image-token budget at
+// ~800 tokens — markedly cheaper than the legacy 1024px verify-intent default.
+const DEFAULT_LONGEST_EDGE = 768;
 
 const INTENT_PRESETS: Record<ScreenshotIntent, { quality: number; max_dimension: number; full_quality: boolean }> = {
   glance:         { quality: 20,  max_dimension: 512,  full_quality: false },
@@ -33,12 +61,9 @@ const INTENT_PRESETS: Record<ScreenshotIntent, { quality: number; max_dimension:
   user_requested: { quality: 95,  max_dimension: 8192, full_quality: true  },
 };
 
-interface ScreenshotResult {
-  image_base64: string;
-  width: number;
-  height: number;
-  format: "png" | "jpeg";
-}
+// (ScreenshotResult type retired — the action-grade response shape is
+// inlined at the return site so the agent-visible fields match the
+// observation-architecture additions exactly.)
 
 function codedError(code: ErrorCode, message: string): Error {
   const err = new Error(message) as Error & { code: ErrorCode };
@@ -94,6 +119,50 @@ function parseParams(raw: Record<string, unknown>): ScreenshotParams {
     }
     out.intent = intent;
   }
+  const annotate = raw["annotate"];
+  if (annotate !== undefined) {
+    if (annotate !== "som" && annotate !== "none") {
+      throw codedError("INVALID_PARAMS", "annotate must be 'som' or 'none'");
+    }
+    out.annotate = annotate;
+  }
+  const region = raw["region"];
+  if (region !== undefined) {
+    if (typeof region !== "object" || region === null || Array.isArray(region)) {
+      throw codedError("INVALID_PARAMS", "region must be an object");
+    }
+    const r = region as Record<string, unknown>;
+    const x = r["x"];
+    const y = r["y"];
+    const w = r["w"];
+    const h = r["h"];
+    if (
+      typeof x !== "number" ||
+      typeof y !== "number" ||
+      typeof w !== "number" ||
+      typeof h !== "number" ||
+      w <= 0 ||
+      h <= 0
+    ) {
+      throw codedError("INVALID_PARAMS", "region must be {x,y,w,h} with positive w,h");
+    }
+    out.region = { x, y, w, h };
+  }
+  const dims = raw["dimensions"];
+  if (dims !== undefined) {
+    if (typeof dims !== "object" || dims === null || Array.isArray(dims)) {
+      throw codedError("INVALID_PARAMS", "dimensions must be an object");
+    }
+    const longest = (dims as Record<string, unknown>)["longest_edge"];
+    if (longest !== undefined) {
+      if (typeof longest !== "number" || !Number.isInteger(longest) || longest < 1 || longest > 8192) {
+        throw codedError("INVALID_PARAMS", "dimensions.longest_edge must be integer in [1,8192]");
+      }
+      out.dimensions = { longest_edge: longest };
+    } else {
+      out.dimensions = {};
+    }
+  }
   return out;
 }
 
@@ -118,6 +187,48 @@ async function captureVisible(
   return stripDataUrlPrefix(dataUrl);
 }
 
+/**
+ * Capture a viewport screenshot, preferring raw CDP Page.captureScreenshot
+ * when the tab has a persistent CDP attachment, falling back to
+ * chrome.tabs.captureVisibleTab otherwise.
+ *
+ * Why CDP-first: chrome.tabs.captureVisibleTab shares a quota across the
+ * entire extension and silently times out / returns blank payloads under
+ * load (~46% failure rate observed during h07 Notion runs). CDP's
+ * Page.captureScreenshot is per-target, has no quota, and is what
+ * browser-harness uses with consistent reliability.
+ *
+ * The `chrome.tabs.captureVisibleTab` fallback is kept so that tabs
+ * without CDP attached (e.g. user-released tabs, chrome-internal pages)
+ * still work.
+ */
+async function captureViewport(
+  cdp: CdpManager,
+  chromeTabId: number,
+  windowId: number,
+  format: "png" | "jpeg",
+  quality: number,
+): Promise<string> {
+  if (cdp.isPersistent(chromeTabId)) {
+    try {
+      // Page.captureScreenshot quality applies to jpeg only. Format names
+      // here are the CDP wire format ("png" | "jpeg" — lowercase, matches
+      // chrome.tabs API by coincidence).
+      const params: Record<string, unknown> = { format, captureBeyondViewport: false };
+      if (format === "jpeg") params["quality"] = quality;
+      const res = await cdp.send<{ data?: string }>(chromeTabId, "Page.captureScreenshot", params);
+      if (typeof res?.data !== "string" || res.data.length === 0) {
+        throw codedError("INTERNAL", "Page.captureScreenshot returned empty payload");
+      }
+      return res.data;
+    } catch (err) {
+      // Fall through to the extension-API path on any CDP error.
+      console.warn("[browserops] CDP Page.captureScreenshot failed, falling back:", err);
+    }
+  }
+  return captureVisible(windowId, format, quality);
+}
+
 function arrayBufferToBase64(buf: ArrayBuffer): string {
   // btoa(String.fromCharCode(...)) blows the call stack past ~100KB inputs,
   // so encode in 32KB chunks.
@@ -136,13 +247,25 @@ async function downscaleAndEncode(
   sourceFormat: "png" | "jpeg",
   maxDimension: number,
   quality: number,
+  region: { x: number; y: number; w: number; h: number } | undefined,
+  dpr: number,
 ): Promise<{ base64: string; width: number; height: number }> {
   const mime = sourceFormat === "png" ? "image/png" : "image/jpeg";
   const res = await fetch(`data:${mime};base64,${sourceBase64}`);
   const blob = await res.blob();
   const bitmap = await createImageBitmap(blob);
-  const srcW = bitmap.width;
-  const srcH = bitmap.height;
+  // captureVisibleTab returns device-pixel imagery on Retina. The region
+  // is supplied in CSS pixels; multiply by dpr to project into source pixels.
+  let srcX = 0;
+  let srcY = 0;
+  let srcW = bitmap.width;
+  let srcH = bitmap.height;
+  if (region !== undefined) {
+    srcX = Math.max(0, Math.round(region.x * dpr));
+    srcY = Math.max(0, Math.round(region.y * dpr));
+    srcW = Math.max(1, Math.min(bitmap.width - srcX, Math.round(region.w * dpr)));
+    srcH = Math.max(1, Math.min(bitmap.height - srcY, Math.round(region.h * dpr)));
+  }
   const longest = Math.max(srcW, srcH);
   const scale = longest > maxDimension ? maxDimension / longest : 1;
   const w = Math.max(1, Math.round(srcW * scale));
@@ -152,7 +275,7 @@ async function downscaleAndEncode(
   if (ctx === null) {
     throw codedError("INTERNAL", "OffscreenCanvas 2d context unavailable");
   }
-  ctx.drawImage(bitmap, 0, 0, w, h);
+  ctx.drawImage(bitmap, srcX, srcY, srcW, srcH, 0, 0, w, h);
   bitmap.close();
   const outBlob = await canvas.convertToBlob({
     type: "image/jpeg",
@@ -176,10 +299,12 @@ async function downscaleToBudget(
   sourceFormat: "png" | "jpeg",
   startMaxDimension: number,
   startQuality: number,
+  region: { x: number; y: number; w: number; h: number } | undefined,
+  dpr: number,
 ): Promise<{ base64: string; width: number; height: number }> {
   let dim = startMaxDimension;
   let q = startQuality;
-  let r = await downscaleAndEncode(sourceBase64, sourceFormat, dim, q);
+  let r = await downscaleAndEncode(sourceBase64, sourceFormat, dim, q, region, dpr);
   // Up to 3 retries. Each backs off the longest dimension 50% (floor
   // SCREENSHOT_FLOOR_DIM) and drops quality 20 points (floor 15). Content-rich
   // pages typically clear the budget by attempt 2; the loop bounds the
@@ -190,14 +315,14 @@ async function downscaleToBudget(
       dim = Math.max(SCREENSHOT_FLOOR_DIM, Math.floor(dim / 2));
     }
     q = Math.max(15, q - 20);
-    r = await downscaleAndEncode(sourceBase64, sourceFormat, dim, q);
+    r = await downscaleAndEncode(sourceBase64, sourceFormat, dim, q, region, dpr);
   }
   return r;
 }
 
 export function registerScreenshotHandler(
   router: Router,
-  opts: { tabIdMap: Map<string, number> },
+  opts: { tabIdMap: Map<string, number>; cdp: CdpManager },
 ): void {
   router.register("browser_screenshot", async (rawParams) => {
     const params = parseParams(rawParams);
@@ -223,16 +348,54 @@ export function registerScreenshotHandler(
     const explicitFormat = params.format;
     const format: "png" | "jpeg" = explicitFormat ?? "jpeg";
     const quality: number = params.quality ?? preset?.quality ?? (fullQuality ? 95 : 40);
-    const maxDimension = params.max_dimension ?? preset?.max_dimension ?? 1024;
+    // dimensions.longest_edge wins over max_dimension when both are set —
+    // the observation-architecture plan's action-grade default (768px) is
+    // the new preferred knob; max_dimension stays for back-compat callers.
+    const longestEdge =
+      params.dimensions?.longest_edge ??
+      params.max_dimension ??
+      preset?.max_dimension ??
+      DEFAULT_LONGEST_EDGE;
+    const maxDimension = longestEdge;
+
+    let metrics = { dpr: 1, scroll_x: 0, scroll_y: 0, inner_w: 0, inner_h: 0 };
+    try {
+      metrics = await execInTab(chromeTabId, readPageMetrics, [] as const);
+    } catch (err) {
+      console.warn("[browserops] readPageMetrics failed:", err);
+    }
 
     if (fullQuality) {
       // Bypass: capture at the requested format/quality and skip downscale.
-      const image_base64 = await captureVisible(tab.windowId, format, quality);
-      const width =
-        typeof tab.width === "number" && tab.width > 0 ? tab.width : 0;
-      const height =
-        typeof tab.height === "number" && tab.height > 0 ? tab.height : 0;
-      return { image_base64, width, height, format };
+      const image_base64 = await captureViewport(opts.cdp, chromeTabId, tab.windowId, format, quality);
+      const cssW =
+        typeof tab.width === "number" && tab.width > 0 ? tab.width : metrics.inner_w;
+      const cssH =
+        typeof tab.height === "number" && tab.height > 0 ? tab.height : metrics.inner_h;
+      const ssW = Math.round(cssW * metrics.dpr);
+      const ssH = Math.round(cssH * metrics.dpr);
+      const observation_token = cacheObservation({
+        tab_id: chromeTabId,
+        css_pixel_dims: { w: cssW, h: cssH },
+        screenshot_dims: { w: ssW, h: ssH },
+        scale: cssW > 0 ? ssW / cssW : 1,
+        scroll: { x: metrics.scroll_x, y: metrics.scroll_y },
+        dpr: metrics.dpr,
+        representation: "screenshot",
+      });
+      return {
+        image_base64,
+        width: cssW,
+        height: cssH,
+        format,
+        observation_token,
+        css_pixel_dims: { w: cssW, h: cssH },
+        screenshot_dims: { w: ssW, h: ssH },
+        scale: cssW > 0 ? ssW / cssW : 1,
+        scroll: { x: metrics.scroll_x, y: metrics.scroll_y },
+        dpr: metrics.dpr,
+        representation: "screenshot" as const,
+      };
     }
 
     // Downscale path always emits JPEG regardless of requested format (that is
@@ -240,14 +403,66 @@ export function registerScreenshotHandler(
     // full_quality:true. The budget-aware downscale enforces a hard ceiling
     // on the returned base64 size so default-intent screenshots stop blowing
     // the agent's context envelope on wide / content-rich pages.
-    const captured = await captureVisible(tab.windowId, "png", 100);
-    const encoded = await downscaleToBudget(captured, "png", maxDimension, quality);
-    const result: ScreenshotResult = {
-      image_base64: encoded.base64,
-      width: encoded.width,
-      height: encoded.height,
-      format: "jpeg",
+    const captured = await captureViewport(opts.cdp, chromeTabId, tab.windowId, "png", 100);
+    const encoded = await downscaleToBudget(captured, "png", maxDimension, quality, params.region, metrics.dpr);
+    const cssW = params.region?.w ?? metrics.inner_w;
+    const cssH = params.region?.h ?? metrics.inner_h;
+    const scaleVal = cssW > 0 ? encoded.width / cssW : 1;
+
+    let finalBase64 = encoded.base64;
+    let finalW = encoded.width;
+    let finalH = encoded.height;
+    let som_map: Record<string, { ref: string; role: string; name: string }> | undefined;
+    let representation: "screenshot" | "screenshot_som" = "screenshot";
+
+    if (params.annotate === "som") {
+      let candidates: ReturnType<typeof collectSomCandidates> = [];
+      try {
+        candidates = await execInTab(chromeTabId, collectSomCandidates, [] as const);
+      } catch (err) {
+        console.warn("[browserops] SoM candidate collection failed:", err);
+      }
+      try {
+        const annotated = await renderSom(
+          encoded.base64,
+          "image/jpeg",
+          candidates,
+          scaleVal,
+          params.region ? { x: params.region.x, y: params.region.y } : undefined,
+          quality,
+        );
+        finalBase64 = annotated.base64;
+        finalW = annotated.width;
+        finalH = annotated.height;
+        som_map = annotated.som_map;
+        representation = "screenshot_som";
+      } catch (err) {
+        console.warn("[browserops] SoM render failed; returning unannotated:", err);
+      }
+    }
+
+    const observation_token = cacheObservation({
+      tab_id: chromeTabId,
+      css_pixel_dims: { w: cssW, h: cssH },
+      screenshot_dims: { w: finalW, h: finalH },
+      scale: cssW > 0 ? finalW / cssW : 1,
+      scroll: { x: metrics.scroll_x, y: metrics.scroll_y },
+      dpr: metrics.dpr,
+      representation,
+    });
+    return {
+      image_base64: finalBase64,
+      width: finalW,
+      height: finalH,
+      format: "jpeg" as const,
+      observation_token,
+      css_pixel_dims: { w: cssW, h: cssH },
+      screenshot_dims: { w: finalW, h: finalH },
+      scale: cssW > 0 ? finalW / cssW : 1,
+      scroll: { x: metrics.scroll_x, y: metrics.scroll_y },
+      dpr: metrics.dpr,
+      representation,
+      ...(som_map !== undefined ? { som_map } : {}),
     };
-    return result;
   });
 }

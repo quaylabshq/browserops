@@ -62,8 +62,8 @@ Skills bundled with the CLI (`browserops`, `browserops-teach`) are kept in sync 
 ### Server instructions adapt to enabled features
 The text the bridge surfaces via MCP `initialize.result.instructions` is built per-server-instance from the active feature set, so disabled features don't bloat the prompt with documentation for tools the agent can't call. With `procedures` off the Procedure-memory section collapses to a one-line opt-in hint; with `memory` on a short Cross-agent-memory paragraph is appended; the procedure-prompt entry (`browserops_procedure`) is hidden from `prompts/list` whenever `procedures` is off. That's why the procedure-first orchestration rule above is conditional on `procedures_search` actually being in your tool catalogue.
 
-### Prefer `browser_quick_read` over `browser_read`
-When you need to find a specific element (a button, input, link) by its label, use `browser_quick_read` instead of `browser_read`. It searches the a11y tree by accessible name and returns only matching refs — much cheaper than a full page read. Fall back to `browser_read` only when you need the full page structure or when `browser_quick_read` returns no matches.
+### Prefer `browser_observe` for general state reads; `browser_quick_read` for element lookup
+For general "look at the page" steps, prefer `browser_observe` over both `browser_read` and `browser_quick_read` — its `auto` mode picks the cheapest representation (augmented a11y, action-grade screenshot, box-drawing summary, or diff against a prior observation_token) based on page characteristics. When you specifically need to find an element by its label, `browser_quick_read` is still the cheapest path. Fall back to raw `browser_read` only when you need the full a11y tree as a serialised blob (procedure replay, debugging). `browser_read` and `browser_quick_read` both default to viewport scope now; pass `scope: "document"` for the legacy full-page walk.
 
 ### Sub-agent threshold
 - **≤ 8 steps, no retries needed**: run browser tool calls directly from the main agent. No sub-agent.
@@ -80,9 +80,8 @@ Run <procedure_name> on tab t_3 with:
 Report success or failure.
 ```
 
-### Screenshots only on failure
-Never take a screenshot to "verify" a step that has a `wait_for` condition.
-Only screenshot when a step returns an error or unexpected state.
+### Screenshots only on failure (with one nuance)
+Never take a screenshot to "verify" a step that has a `wait_for` condition or an `expected:` predicate — the `effect` envelope already tells you whether anything changed. Screenshot when a step returns an error, unexpected state, OR when `browser_observe`'s auto-mode chose visual representation for you (canvas-dominant pages, ≥30% of the viewport). In auto mode, the bridge picks the screenshot path itself; in those cases the action-grade default (768px longest edge, ~800 tokens) is intentionally cheap, so you don't need to wave it off.
 
 ### Composite procedures = single fetch
 When a composite procedure covers the full flow, the sub-agent brief references ONLY the composite name — one `procedures_get`, no re-planning steps.

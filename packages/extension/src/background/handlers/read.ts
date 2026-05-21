@@ -2,6 +2,7 @@ import type { ErrorCode } from "@browserops/shared";
 import { sliceContent } from "@browserops/shared";
 import type { Router } from "../router.js";
 import type { RefCache, RefEntry, RefSnapshot } from "../ref-cache.js";
+import { augment } from "../../lib/a11y-augment.js";
 
 /**
  * browser_read handler.
@@ -21,6 +22,11 @@ import type { RefCache, RefEntry, RefSnapshot } from "../ref-cache.js";
 
 type ReadMode = "a11y_tree" | "markdown" | "sanitized_html" | "text";
 
+type ReadScope =
+  | { kind: "viewport" }
+  | { kind: "document" }
+  | { kind: "ref"; ref: string };
+
 interface ReadParams {
   tab_id: string;
   mode: ReadMode;
@@ -29,6 +35,8 @@ interface ReadParams {
   length: number;
   max_length: number;
   selector?: string;
+  scope: ReadScope;
+  augment: boolean;
 }
 
 interface ReadResult {
@@ -125,6 +133,25 @@ function parseParams(raw: Record<string, unknown>): ReadParams {
     }
     selector = selectorRaw;
   }
+  let scope: ReadScope = { kind: "viewport" };
+  const scopeRaw = raw["scope"];
+  if (scopeRaw !== undefined) {
+    if (typeof scopeRaw !== "string") {
+      throw codedError("INVALID_PARAMS", "scope must be a string");
+    }
+    if (scopeRaw === "viewport") scope = { kind: "viewport" };
+    else if (scopeRaw === "document") scope = { kind: "document" };
+    else if (scopeRaw.startsWith("ref:")) scope = { kind: "ref", ref: scopeRaw.slice(4) };
+    else throw codedError("INVALID_PARAMS", `scope must be 'viewport'|'document'|'ref:<id>', got ${scopeRaw}`);
+  }
+  const augmentRaw = raw["augment"];
+  let augment = true;
+  if (augmentRaw !== undefined) {
+    if (typeof augmentRaw !== "boolean") {
+      throw codedError("INVALID_PARAMS", "augment must be boolean");
+    }
+    augment = augmentRaw;
+  }
   const out: ReadParams = {
     tab_id: tabId,
     mode: mode as ReadMode,
@@ -132,6 +159,8 @@ function parseParams(raw: Record<string, unknown>): ReadParams {
     start,
     length,
     max_length,
+    scope,
+    augment,
   };
   if (selector !== undefined) out.selector = selector;
   return out;
@@ -263,7 +292,12 @@ function injectedReadMarkdown(selector: string | null): string | null {
  * Pruning: keep interactive or structural elements that are visible.
  * Numbering: 1-based refs assigned in DFS order. Capped at 500.
  */
-function injectedA11yWalk(verbose: boolean, selector: string | null): { entries: Array<{ ref: number; selector: string; role: string; name: string; attrs: Record<string, string> }>; tree: string; matched: boolean } {
+function injectedA11yWalk(
+  verbose: boolean,
+  selector: string | null,
+  scopeMode: "viewport" | "document",
+  rootSelector: string | null,
+): { entries: Array<{ ref: number; selector: string; role: string; name: string; attrs: Record<string, string> }>; tree: string; matched: boolean } {
   const MAX_REFS = 500;
   const MAX_SELECTOR_DEPTH = 6;
   const NAME_MAX = 80;
@@ -298,6 +332,16 @@ function injectedA11yWalk(verbose: boolean, selector: string | null): { entries:
     const style = window.getComputedStyle(el);
     if (style.visibility === "hidden" || style.display === "none") return false;
     if (style.opacity === "0") return false;
+    if (scopeMode === "viewport") {
+      if (
+        rect.bottom < 0 ||
+        rect.top > window.innerHeight ||
+        rect.right < 0 ||
+        rect.left > window.innerWidth
+      ) {
+        return false;
+      }
+    }
     return true;
   };
   const canDescend = (el: Element): boolean => {
@@ -503,9 +547,13 @@ function injectedA11yWalk(verbose: boolean, selector: string | null): { entries:
     }
     return anyChildMarked;
   };
-  const rootEl: Element | null = selector !== null
-    ? document.querySelector(selector)
-    : document.body;
+  // rootSelector (from scope: "ref:<id>") wins over the legacy selector
+  // arg — the ref scope is more specific.
+  const rootEl: Element | null = rootSelector !== null
+    ? document.querySelector(rootSelector)
+    : selector !== null
+      ? document.querySelector(selector)
+      : document.body;
 
   if (!verbose && rootEl !== null) {
     markPass(rootEl);
@@ -867,13 +915,28 @@ export function registerReadHandler(
     const selectorArg = params.selector ?? null;
 
     if (params.mode === "a11y_tree") {
+      // Resolve scope. "ref:<id>" needs to translate the ref id into a CSS
+      // selector via the RefCache so the walker can root its DOM traversal.
+      const scopeMode = params.scope.kind === "viewport" ? "viewport" : "document";
+      let rootSelector: string | null = null;
+      if (params.scope.kind === "ref") {
+        const refNum = Number.parseInt(params.scope.ref, 10);
+        const hit = opts.refCache.lookupWithFallback(params.tab_id, refNum);
+        if (hit === undefined) {
+          throw codedError(
+            "REF_STALE",
+            `scope=ref:${params.scope.ref} could not be resolved; call browser_read mode:'a11y_tree' first`,
+          );
+        }
+        rootSelector = hit.entry.selector;
+      }
       const raw: unknown = await execInTabWithArgs<
-        readonly [boolean, string | null],
+        readonly [boolean, string | null, "viewport" | "document", string | null],
         unknown
       >(
         chromeTabId,
         injectedA11yWalk,
-        [params.verbose, selectorArg],
+        [params.verbose, selectorArg, scopeMode, rootSelector],
         "ISOLATED",
       );
       const walk = narrowWalkResult(raw);
@@ -889,9 +952,44 @@ export function registerReadHandler(
       };
       opts.refCache.set(params.tab_id, snapshot);
       const sliced = sliceContent(walk.tree, params.start, effectiveLength);
+      // Visual augmentation: one extra round-trip that returns bounds /
+      // visibility / occlusion / style per ref. Costs O(refs) elementFromPoint
+      // calls inside the injected fn but is capped at 200 occlusion samples
+      // per call to stay under ~30 ms on typical pages.
+      let refsOut: ReadResult["refs"] = walk.entries;
+      if (params.augment && walk.entries.length > 0) {
+        try {
+          const a11yNodes = walk.entries.map((e) => ({
+            ref: String(e.ref),
+            role: e.role,
+            name: e.name,
+            selector: e.selector,
+          }));
+          const augmented = await augment(chromeTabId, a11yNodes);
+          refsOut = walk.entries.map((entry, i) => {
+            const a = augmented[i];
+            if (a === undefined) return entry;
+            return {
+              ...entry,
+              bounds: a.bounds,
+              visible: a.visible,
+              in_viewport: a.in_viewport,
+              occluded_by: a.occluded_by,
+              bg_color: a.bg_color,
+              fg_color: a.fg_color,
+              opacity: a.opacity,
+              disabled_visual: a.disabled_visual,
+              ...(a.display !== undefined ? { display: a.display } : {}),
+              ...(a.flex_direction !== undefined ? { flex_direction: a.flex_direction } : {}),
+            };
+          });
+        } catch (err) {
+          console.warn("[browserops] augmentation skipped:", err);
+        }
+      }
       const result: ReadResult = {
         content: sliced.slice,
-        refs: walk.entries,
+        refs: refsOut,
         url,
         title,
         total_length: sliced.total_length,
@@ -963,14 +1061,15 @@ export function registerReadHandler(
     if (chromeTabId === undefined) {
       throw codedError("TAB_NOT_FOUND", `unknown tab_id: ${tab_id}`);
     }
-    const snap = opts.refCache.get(tab_id);
-    if (snap === undefined) {
-      throw codedError("REF_STALE", `no a11y snapshot for tab ${tab_id}; call browser_read first`);
-    }
-    const entry = snap.entries.get(refRaw);
-    if (entry === undefined) {
+    const hit = opts.refCache.lookupWithFallback(tab_id, refRaw);
+    if (hit === undefined) {
+      const snap = opts.refCache.get(tab_id);
+      if (snap === undefined) {
+        throw codedError("REF_STALE", `no a11y snapshot for tab ${tab_id}; call browser_read first`);
+      }
       throw codedError("REF_NOT_FOUND", `ref ${refRaw} not present in current snapshot for ${tab_id}`);
     }
+    const entry = hit.entry;
     const results = (await chrome.scripting.executeScript({
       target: { tabId: chromeTabId },
       world: "MAIN",
@@ -1280,11 +1379,25 @@ export function registerReadHandler(
     }
     const roleRaw = rawParams["role"];
     const roleFilter = typeof roleRaw === "string" ? roleRaw.toLowerCase() : null;
-    const viewportOnly = rawParams["viewport_only"] === true;
+    let viewportOnly = rawParams["viewport_only"] === true;
     const maxResultsRaw = rawParams["max_results"];
     const maxResults = typeof maxResultsRaw === "number" && Number.isInteger(maxResultsRaw)
       ? Math.min(Math.max(maxResultsRaw, 1), 50)
       : 10;
+
+    // scope is the new viewport/document/ref discriminant. Default 'viewport'
+    // matches the observation-architecture plan; legacy viewport_only is
+    // preserved for callers that already opt into the same behavior.
+    const scopeRaw = rawParams["scope"];
+    let scope: "viewport" | "document" | { kind: "ref"; ref: string } = "viewport";
+    if (typeof scopeRaw === "string") {
+      if (scopeRaw === "viewport") scope = "viewport";
+      else if (scopeRaw === "document") scope = "document";
+      else if (scopeRaw.startsWith("ref:")) scope = { kind: "ref", ref: scopeRaw.slice(4) };
+      else throw codedError("INVALID_PARAMS", `scope must be 'viewport'|'document'|'ref:<id>', got ${scopeRaw}`);
+    }
+    if (scope === "viewport") viewportOnly = true;
+    else if (scope === "document") viewportOnly = false;
 
     let tab: chrome.tabs.Tab;
     try {
@@ -1320,8 +1433,172 @@ export function registerReadHandler(
     };
     opts.refCache.set(tabId, snapshot);
 
+    const onlyEnabled = rawParams["only_enabled"] === true;
+    const onlyVisible = rawParams["only_visible"] === true;
+    const onlyInViewport = rawParams["only_in_viewport"] === true;
+
+    // Augment matches with visual fields by default. The quick_read injected
+    // fn already attaches a `rect` so the agent gets bounds either way, but
+    // the augmentation pass adds visible / in_viewport / occluded_by / etc.
+    let matches: typeof result.entries | Array<typeof result.entries[number] & {
+      visible?: boolean;
+      in_viewport?: boolean;
+      occluded_by?: string | null;
+      bg_color?: string | null;
+      fg_color?: string | null;
+      opacity?: number;
+      disabled_visual?: boolean;
+      display?: string;
+      flex_direction?: string;
+    }> = result.entries;
+    const augmentFlag = rawParams["augment"];
+    if (augmentFlag !== false && result.entries.length > 0) {
+      try {
+        const a11yNodes = result.entries.map((e) => ({
+          ref: String(e.ref),
+          role: e.role,
+          name: e.name,
+          selector: e.selector,
+        }));
+        const augmented = await augment(chromeTabId, a11yNodes);
+        matches = result.entries.map((entry, i) => {
+          const a = augmented[i];
+          if (a === undefined) return entry;
+          return {
+            ...entry,
+            visible: a.visible,
+            in_viewport: a.in_viewport,
+            occluded_by: a.occluded_by,
+            bg_color: a.bg_color,
+            fg_color: a.fg_color,
+            opacity: a.opacity,
+            disabled_visual: a.disabled_visual,
+            ...(a.display !== undefined ? { display: a.display } : {}),
+            ...(a.flex_direction !== undefined ? { flex_direction: a.flex_direction } : {}),
+          };
+        });
+      } catch (err) {
+        console.warn("[browserops] quick_read augmentation skipped:", err);
+      }
+    }
+
+    if (onlyEnabled || onlyVisible || onlyInViewport) {
+      matches = (matches as Array<{
+        visible?: boolean;
+        in_viewport?: boolean;
+        disabled_visual?: boolean;
+      }>).filter((m) => {
+        if (onlyEnabled && m.disabled_visual === true) return false;
+        if (onlyVisible && m.visible === false) return false;
+        if (onlyInViewport && m.in_viewport === false) return false;
+        return true;
+      }) as typeof matches;
+    }
+
+    const near = rawParams["near"];
+    if (typeof near === "object" && near !== null && !Array.isArray(near)) {
+      const nr = near as { ref: string; radius_px: number };
+      if (typeof nr.ref === "string" && typeof nr.radius_px === "number") {
+        const refNum = Number.parseInt(nr.ref, 10);
+        const entry = !Number.isNaN(refNum)
+          ? opts.refCache.lookupWithFallback(tabId, refNum)?.entry
+          : undefined;
+        if (entry !== undefined) {
+          let centerBounds: { x: number; y: number } | null = null;
+          try {
+            const probed = await execInTabWithArgs<readonly [string], { x: number; y: number; w: number; h: number } | null>(
+              chromeTabId,
+              (sel: string) => {
+                const el = document.querySelector(sel);
+                if (el === null) return null;
+                const r = el.getBoundingClientRect();
+                return { x: r.x, y: r.y, w: r.width, h: r.height };
+              },
+              [entry.selector],
+              "ISOLATED",
+            );
+            if (probed !== null) {
+              centerBounds = { x: probed.x + probed.w / 2, y: probed.y + probed.h / 2 };
+            }
+          } catch (err) {
+            console.warn("[browserops] near ref bounds lookup failed:", err);
+          }
+          if (centerBounds !== null) {
+            const cx = centerBounds.x;
+            const cy = centerBounds.y;
+            const r2 = nr.radius_px * nr.radius_px;
+            matches = (matches as Array<{
+              rect: { x: number; y: number; width: number; height: number };
+            }>).filter((m) => {
+              const mx = m.rect.x + m.rect.width / 2;
+              const my = m.rect.y + m.rect.height / 2;
+              const dx = mx - cx;
+              const dy = my - cy;
+              return dx * dx + dy * dy <= r2;
+            }) as typeof matches;
+          }
+        }
+      }
+    }
+
+    const region = rawParams["within_region"];
+    if (
+      typeof region === "object" &&
+      region !== null &&
+      !Array.isArray(region)
+    ) {
+      const r = region as { x: number; y: number; w: number; h: number };
+      if (
+        typeof r.x === "number" &&
+        typeof r.y === "number" &&
+        typeof r.w === "number" &&
+        typeof r.h === "number"
+      ) {
+        matches = (matches as Array<{
+          rect: { x: number; y: number; width: number; height: number };
+        }>).filter((m) => {
+          const rect = m.rect;
+          return (
+            rect.x + rect.width > r.x &&
+            rect.y + rect.height > r.y &&
+            rect.x < r.x + r.w &&
+            rect.y < r.y + r.h
+          );
+        }) as typeof matches;
+      }
+    }
+
+    if (rawParams["best_match"] === true) {
+      const q = query.toLowerCase();
+      // Pure tie-breaker: lower score wins.
+      const scoreOf = (name: string, rect: { width: number; height: number }): number => {
+        const n = name.toLowerCase();
+        let kind = 3; // substring
+        if (n === q) kind = 1;
+        else if (n.startsWith(q)) kind = 2;
+        // Smaller bounding box (more specific) preferred at ties.
+        return kind * 1_000_000 + rect.width * rect.height;
+      };
+      let bestIdx = -1;
+      let bestScore = Infinity;
+      const arr = matches as Array<{ name: string; rect: { width: number; height: number } }>;
+      for (let i = 0; i < arr.length; i++) {
+        const m = arr[i]!;
+        const s = scoreOf(m.name, m.rect);
+        if (s < bestScore) {
+          bestScore = s;
+          bestIdx = i;
+        }
+      }
+      return {
+        match: bestIdx >= 0 ? matches[bestIdx] : null,
+        total: result.total,
+        query,
+      };
+    }
+
     return {
-      matches: result.entries,
+      matches,
       total: result.total,
       query,
     };

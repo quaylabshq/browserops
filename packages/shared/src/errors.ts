@@ -20,6 +20,7 @@ export const ERROR_CODES = [
   "INVALID_PARAMS",
   "INVALID_STATE",
   "FEATURE_DISABLED",
+  "TOOL_DISABLED",
   "INTERNAL",
   // Procedure-memory errors (plan 06)
   "PROC_NOT_FOUND",
@@ -34,6 +35,9 @@ export const ERROR_CODES = [
   "MEMORY_NOT_FOUND",
   "MEMORY_ALREADY_EXISTS",
   "MEMORY_SCHEMA_INVALID",
+  // Observation architecture (plan: observation-architecture)
+  "OBSERVATION_TOKEN_INVALID",
+  "COORDS_OUT_OF_SCREENSHOT_BOUNDS",
 ] as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[number];
