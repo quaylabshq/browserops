@@ -1,11 +1,59 @@
-import type { ErrorCode, PageEffect } from "@browserops/shared";
+import type { ActionExpectation, Effect, ErrorCode, PageEffect } from "@browserops/shared";
 import { isDestructiveChord } from "@browserops/shared";
 import type { Router } from "../router.js";
 import type { RefCache } from "../ref-cache.js";
 import type { CdpManager } from "../cdp.js";
 import type { NetworkTracker } from "../network-tracker.js";
 import { withEffectObservation, checkEffectExpectation } from "./effects.js";
+import { captureEffect } from "../effect.js";
+import { pollUntilMet } from "../expectation-poller.js";
+import { get as getObservation } from "../observation-cache.js";
+
+/**
+ * Parses the optional `expected` predicate. Lenient — unknown fields pass
+ * through (the matcher ignores them). Throws INVALID_PARAMS only when the
+ * top-level shape is wrong (e.g. not an object).
+ */
+function parseExpected(raw: unknown): ActionExpectation | undefined {
+  if (raw === undefined) return undefined;
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    throw codedError("INVALID_PARAMS", "expected must be an object");
+  }
+  // Trust the shape — the matcher tolerates absent fields.
+  return raw as ActionExpectation;
+}
 import { resolveKey } from "./key-resolver.js";
+
+interface ResolvedCoords {
+  cssX: number;
+  cssY: number;
+}
+
+function resolveCoords(
+  coordSpace: "css" | { kind: "screenshot"; token: string } | undefined,
+  x: number,
+  y: number,
+): ResolvedCoords {
+  if (coordSpace === undefined || coordSpace === "css") {
+    return { cssX: x, cssY: y };
+  }
+  const meta = getObservation(coordSpace.token);
+  if (meta === null) {
+    throw codedError(
+      "OBSERVATION_TOKEN_INVALID",
+      `observation_token "${coordSpace.token}" not found or expired (30s TTL); re-screenshot before issuing screenshot-coord clicks`,
+    );
+  }
+  if (x > meta.screenshot_dims.w || y > meta.screenshot_dims.h) {
+    throw codedError(
+      "COORDS_OUT_OF_SCREENSHOT_BOUNDS",
+      `(${x}, ${y}) is outside screenshot bounds ${meta.screenshot_dims.w}x${meta.screenshot_dims.h}`,
+    );
+  }
+  const cssX = x / meta.scale + meta.scroll.x;
+  const cssY = y / meta.scale + meta.scroll.y;
+  return { cssX, cssY };
+}
 
 type ExpectEffect = "any" | "dom" | "navigation" | "none";
 
@@ -83,6 +131,7 @@ interface ClickParams {
   modifiers?: readonly Modifier[];
   observe_effects?: boolean;
   expect_effect?: ExpectEffect;
+  expected?: ActionExpectation;
 }
 
 interface ClickAtParams {
@@ -91,6 +140,8 @@ interface ClickAtParams {
   y: number;
   button?: "left" | "middle" | "right";
   modifiers?: readonly Modifier[];
+  coord_space?: "css" | { kind: "screenshot"; token: string };
+  expected?: ActionExpectation;
 }
 
 type TypeMode = "keystroke" | "paste";
@@ -99,7 +150,7 @@ const KEYSTROKE_AUTO_THRESHOLD = 64;
 
 interface TypeParams {
   tab_id: string;
-  ref: number;
+  ref?: number;
   text: string;
   mode?: TypeMode;
   submit?: boolean;
@@ -107,6 +158,7 @@ interface TypeParams {
   delay_ms?: number;
   observe_effects?: boolean;
   expect_effect?: ExpectEffect;
+  expected?: ActionExpectation;
 }
 
 interface PressParams {
@@ -114,6 +166,7 @@ interface PressParams {
   keys: readonly string[];
   observe_effects?: boolean;
   expect_effect?: ExpectEffect;
+  expected?: ActionExpectation;
 }
 
 interface ScrollParams {
@@ -125,7 +178,10 @@ interface ScrollParams {
 
 interface HoverParams {
   tab_id: string;
-  ref: number;
+  ref?: number;
+  x?: number;
+  y?: number;
+  coord_space?: "css" | { kind: "screenshot"; token: string };
 }
 
 interface ExecuteJsParams {
@@ -168,6 +224,14 @@ interface ResolvedRef {
 }
 
 function resolveRef(refCache: RefCache, tabId: string, ref: number): ResolvedRef {
+  // Try the current snapshot first; if the ref was issued by a prior read
+  // and a same-page observation has since replaced the snapshot, fall
+  // back to the one-deep history. This is the common case after the
+  // agent does read -> click -> quick_read (verification) -> click again.
+  const hit = refCache.lookupWithFallback(tabId, ref);
+  if (hit !== undefined) {
+    return { selector: hit.entry.selector, role: hit.entry.role };
+  }
   const snap = refCache.get(tabId);
   if (snap === undefined) {
     throw codedError(
@@ -180,24 +244,20 @@ function resolveRef(refCache: RefCache, tabId: string, ref: number): ResolvedRef
       },
     );
   }
-  const entry = snap.entries.get(ref);
-  if (entry === undefined) {
-    throw codedError(
-      "REF_NOT_FOUND",
-      `ref ${ref} not present in current snapshot for ${tabId}`,
-      {
-        next_action:
-          "element ref is stale — call browser_quick_read again to get a fresh ref, do not reuse the old one",
-        diagnostic: {
-          tab_id: tabId,
-          ref,
-          snapshot_url: snap.url,
-          snapshot_size: snap.entries.size,
-        },
+  throw codedError(
+    "REF_NOT_FOUND",
+    `ref ${ref} not present in current snapshot for ${tabId}`,
+    {
+      next_action:
+        "element ref is stale — call browser_quick_read again to get a fresh ref, do not reuse the old one",
+      diagnostic: {
+        tab_id: tabId,
+        ref,
+        snapshot_url: snap.url,
+        snapshot_size: snap.entries.size,
       },
-    );
-  }
-  return { selector: entry.selector, role: entry.role };
+    },
+  );
 }
 
 function resolveSelector(refCache: RefCache, tabId: string, ref: number): string {
@@ -256,12 +316,114 @@ async function cdpType(cdp: CdpManager, chromeId: number, text: string): Promise
   await cdp.send(chromeId, "Input.insertText", { text });
 }
 
+/**
+ * US-layout character -> (code, shift, vkCode). Built once; covers the
+ * ASCII printables we can dispatch as real keystrokes. Used by
+ * `cdpTypeKeystroke` so canvas-backed editors (Sheets cells, Docs,
+ * Figma) and keypress-gated rich editors actually receive character
+ * input — Input.insertText alone leaves canvas grids untouched, which
+ * is why typing into a Sheets formula cell silently fails on this path.
+ */
+const CHAR_TO_KEY: Readonly<Record<string, { code: string; shift: boolean; vkCode: number }>> = (() => {
+  const m: Record<string, { code: string; shift: boolean; vkCode: number }> = {};
+  for (let i = 0; i < 26; i += 1) {
+    const lower = String.fromCharCode(97 + i);
+    const upper = String.fromCharCode(65 + i);
+    m[lower] = { code: `Key${upper}`, shift: false, vkCode: 65 + i };
+    m[upper] = { code: `Key${upper}`, shift: true,  vkCode: 65 + i };
+  }
+  for (let i = 0; i < 10; i += 1) {
+    const d = String.fromCharCode(48 + i);
+    m[d] = { code: `Digit${d}`, shift: false, vkCode: 48 + i };
+  }
+  const shiftedDigits: Array<[string, string]> = [
+    ["!", "Digit1"], ["@", "Digit2"], ["#", "Digit3"], ["$", "Digit4"],
+    ["%", "Digit5"], ["^", "Digit6"], ["&", "Digit7"], ["*", "Digit8"],
+    ["(", "Digit9"], [")", "Digit0"],
+  ];
+  for (const [ch, code] of shiftedDigits) {
+    const d = code.charAt(code.length - 1);
+    m[ch] = { code, shift: true, vkCode: d.charCodeAt(0) };
+  }
+  const puncts: Array<[string, string, string, number]> = [
+    ["/", "?", "Slash",        191],
+    [".", ">", "Period",       190],
+    [",", "<", "Comma",        188],
+    [";", ":", "Semicolon",    186],
+    ["'", "\"", "Quote",       222],
+    ["`", "~", "Backquote",    192],
+    ["-", "_", "Minus",        189],
+    ["=", "+", "Equal",        187],
+    ["[", "{", "BracketLeft",  219],
+    ["]", "}", "BracketRight", 221],
+    ["\\", "|", "Backslash",   220],
+  ];
+  for (const [base, shifted, code, vk] of puncts) {
+    m[base]    = { code, shift: false, vkCode: vk };
+    m[shifted] = { code, shift: true,  vkCode: vk };
+  }
+  m[" "]  = { code: "Space", shift: false, vkCode: 32 };
+  m["\n"] = { code: "Enter", shift: false, vkCode: 13 };
+  m["\t"] = { code: "Tab",   shift: false, vkCode:  9 };
+  return m;
+})();
+
+async function cdpTypeKeystroke(cdp: CdpManager, chromeId: number, text: string): Promise<void> {
+  // Per-character keyDown + keyUp via Input.dispatchKeyEvent so canvas
+  // editors and keydown-gated rich editors receive real character input.
+  // Falls back to Input.insertText for any character we cannot represent
+  // as a US-layout keystroke (extended Unicode, accented chars, emoji)
+  // so non-ASCII typing still works on normal contenteditable surfaces.
+  for (const ch of text) {
+    const mapping = CHAR_TO_KEY[ch];
+    if (mapping === undefined) {
+      await cdp.send(chromeId, "Input.insertText", { text: ch });
+      continue;
+    }
+    const modifiers = mapping.shift ? 8 : 0; // CDP bit: shift=8
+    // Canonical Chrome DevTools recipe for typing one printable character:
+    //   rawKeyDown (no text) -> char (text) -> keyUp
+    // The down event fires the keydown JS listener without inserting; the
+    // char event performs the single insertion via the IME/beforeinput
+    // pipeline. Sending keyDown WITH text plus a char event would cause
+    // contenteditable editors to receive two insertions per character.
+    await cdp.send(chromeId, "Input.dispatchKeyEvent", {
+      type: "rawKeyDown",
+      key: ch,
+      code: mapping.code,
+      windowsVirtualKeyCode: mapping.vkCode,
+      nativeVirtualKeyCode: mapping.vkCode,
+      modifiers,
+    });
+    await cdp.send(chromeId, "Input.dispatchKeyEvent", {
+      type: "char",
+      text: ch,
+      key: ch,
+      code: mapping.code,
+      windowsVirtualKeyCode: mapping.vkCode,
+      nativeVirtualKeyCode: mapping.vkCode,
+      modifiers,
+    });
+    await cdp.send(chromeId, "Input.dispatchKeyEvent", {
+      type: "keyUp",
+      key: ch,
+      code: mapping.code,
+      windowsVirtualKeyCode: mapping.vkCode,
+      nativeVirtualKeyCode: mapping.vkCode,
+      modifiers,
+    });
+  }
+}
+
 async function cdpPress(
   cdp: CdpManager, chromeId: number,
   token: string,
   mods: { ctrl: boolean; alt: boolean; shift: boolean; meta: boolean },
 ): Promise<void> {
-  const k = resolveKey(token);
+  // Pass mods so Shift chords resolve to the shifted character (Shift+Digit3
+  // -> "#", Shift+Slash -> "?"). Modifier chords (Ctrl/Cmd) still drop text
+  // downstream so Cmd+A doesn't accidentally type "a".
+  const k = resolveKey(token, mods);
   const m = cdpModBits(mods);
   // Always send key + code + windowsVirtualKeyCode + nativeVirtualKeyCode.
   // CDP does not auto-fill the VK codes from `key` alone — legacy editors
@@ -269,18 +431,48 @@ async function cdpPress(
   // `event.keyCode === 13` would see 0 and bail. text is emitted on
   // keyDown only for printables, and only when no chord modifier is set
   // so Cmd+A doesn't accidentally also insert the character "a".
+  // Decide upfront whether this press will produce a printable character.
+  // When it does, we follow Chrome DevTools' canonical recipe:
+  //   rawKeyDown (no text) -> char (text) -> keyUp
+  // rawKeyDown fires the keydown JS event without triggering the renderer's
+  // built-in character-insertion path. char then performs the single
+  // insertion via the IME/beforeinput pipeline that contenteditable, canvas,
+  // and OOPIF editors all listen to. If we instead sent keyDown WITH text
+  // followed by a char event, editors that listen on both paths (most
+  // contenteditable surfaces) would receive two insertions per keypress
+  // and double-type every character.
+  //
+  // Non-printable presses (Enter, Tab, Backspace, modifier chords like
+  // Cmd+A) keep the regular keyDown — no char event follows and the
+  // keyDown listener is the only signal those editors expect.
+  const emitText = k.text !== undefined && !mods.ctrl && !mods.meta;
+  const willEmitChar = emitText && k.text !== undefined && k.text.length === 1;
   const downParams: Record<string, unknown> = {
-    type: "keyDown",
+    type: willEmitChar ? "rawKeyDown" : "keyDown",
     key: k.key,
     code: k.code,
     windowsVirtualKeyCode: k.vkCode,
     nativeVirtualKeyCode: k.vkCode,
     modifiers: m,
   };
-  if (k.text !== undefined && !mods.ctrl && !mods.meta) {
+  // Only attach `text` to the down event when we are NOT going to emit a
+  // separate char event afterwards. Otherwise the renderer inserts once
+  // from the down event and once from the char event.
+  if (emitText && !willEmitChar) {
     downParams["text"] = k.text;
   }
   await cdp.send(chromeId, "Input.dispatchKeyEvent", downParams);
+  if (willEmitChar && k.text !== undefined) {
+    await cdp.send(chromeId, "Input.dispatchKeyEvent", {
+      type: "char",
+      text: k.text,
+      key: k.key,
+      code: k.code,
+      windowsVirtualKeyCode: k.vkCode,
+      nativeVirtualKeyCode: k.vkCode,
+      modifiers: m,
+    });
+  }
   await cdp.send(chromeId, "Input.dispatchKeyEvent", {
     type: "keyUp",
     key: k.key,
@@ -1434,6 +1626,8 @@ function parseClick(raw: Record<string, unknown>): ClickParams {
   if (raw["observe_effects"] === false) result.observe_effects = false;
   const expectEffect = parseExpectEffect(raw["expect_effect"]);
   if (expectEffect !== undefined) result.expect_effect = expectEffect;
+  const expected = parseExpected(raw["expected"]);
+  if (expected !== undefined) result.expected = expected;
   return result;
 }
 
@@ -1453,13 +1647,30 @@ function parseClickAt(raw: Record<string, unknown>): ClickAtParams {
     throw codedError("INVALID_PARAMS", "button must be left|middle|right");
   }
   const mods = parseModifiers(raw["modifiers"]);
-  return {
+  let coord_space: ClickAtParams["coord_space"] = "css";
+  const coordRaw = raw["coord_space"];
+  if (coordRaw !== undefined) {
+    if (typeof coordRaw !== "string") {
+      throw codedError("INVALID_PARAMS", "coord_space must be a string");
+    }
+    if (coordRaw === "css") coord_space = "css";
+    else if (coordRaw.startsWith("screenshot:")) {
+      coord_space = { kind: "screenshot", token: coordRaw.slice("screenshot:".length) };
+    } else {
+      throw codedError("INVALID_PARAMS", "coord_space must be 'css' or 'screenshot:<token>'");
+    }
+  }
+  const out: ClickAtParams = {
     tab_id,
     x,
     y,
     button: (button as ClickAtParams["button"]) ?? "left",
     modifiers: mods,
+    coord_space,
   };
+  const expected = parseExpected(raw["expected"]);
+  if (expected !== undefined) out.expected = expected;
+  return out;
 }
 
 function parseType(raw: Record<string, unknown>): TypeParams {
@@ -1467,8 +1678,9 @@ function parseType(raw: Record<string, unknown>): TypeParams {
   const ref = raw["ref"];
   const text = raw["text"];
   if (typeof tab_id !== "string") throw codedError("INVALID_PARAMS", "tab_id must be a string");
-  if (typeof ref !== "number" || !Number.isInteger(ref) || ref < 1) {
-    throw codedError("INVALID_PARAMS", "ref must be a positive integer");
+  // ref is optional: when omitted, the handler types into document.activeElement.
+  if (ref !== undefined && (typeof ref !== "number" || !Number.isInteger(ref) || ref < 1)) {
+    throw codedError("INVALID_PARAMS", "ref must be a positive integer when provided");
   }
   if (typeof text !== "string") throw codedError("INVALID_PARAMS", "text must be a string");
   const mode = raw["mode"];
@@ -1491,17 +1703,19 @@ function parseType(raw: Record<string, unknown>): TypeParams {
   }
   const result: TypeParams = {
     tab_id,
-    ref,
     text,
     submit: typeof submit === "boolean" ? submit : false,
     mode: mode !== undefined ? (mode as TypeMode) : undefined,
   };
+  if (typeof ref === "number") result.ref = ref;
   if (clearMode !== undefined) result.clear_mode = clearMode as ClearMode;
   if (typeof delay === "number") result.delay_ms = delay;
   // observe_effects defaults to true; only false explicitly disables observation.
   if (raw["observe_effects"] === false) result.observe_effects = false;
   const expectEffect = parseExpectEffect(raw["expect_effect"]);
   if (expectEffect !== undefined) result.expect_effect = expectEffect;
+  const expected = parseExpected(raw["expected"]);
+  if (expected !== undefined) result.expected = expected;
   return result;
 }
 
@@ -1510,9 +1724,21 @@ function resolveClearMode(params: TypeParams): ClearMode | undefined {
   return params.clear_mode;
 }
 
-function resolveTypeMode(text: string, explicit: TypeMode | undefined): TypeMode {
+function resolveTypeMode(_text: string, explicit: TypeMode | undefined): TypeMode {
   if (explicit !== undefined) return explicit;
-  return text.length <= KEYSTROKE_AUTO_THRESHOLD ? "keystroke" : "paste";
+  // Default to paste (Input.insertText). It sets the focused field's value
+  // without firing per-character keydown events, so SPA shortcut handlers
+  // (Notion's space-for-AI trigger, Linear's slash menus, Slack's draft
+  // formatters) don't intercept the typed text mid-stream. The agent saw
+  // this as a ~30-turn recovery loop in h07: typing into an empty Notion
+  // block triggered the AI prompt overlay which captured every subsequent
+  // keystroke into the wrong input. Default-paste prevents that whole
+  // class of failure.
+  //
+  // Canvas-backed editors that need real key events (Google Sheets cell
+  // editor) are detected separately in the browser_type handler and
+  // routed to keystroke mode without the caller having to ask.
+  return "paste";
 }
 
 function parsePress(raw: Record<string, unknown>): PressParams {
@@ -1532,6 +1758,8 @@ function parsePress(raw: Record<string, unknown>): PressParams {
   if (raw["observe_effects"] === false) result.observe_effects = false;
   const expectEffect = parseExpectEffect(raw["expect_effect"]);
   if (expectEffect !== undefined) result.expect_effect = expectEffect;
+  const expected = parseExpected(raw["expected"]);
+  if (expected !== undefined) result.expected = expected;
   return result;
 }
 
@@ -1574,12 +1802,34 @@ function parseScroll(raw: Record<string, unknown>): ScrollParams {
 
 function parseHover(raw: Record<string, unknown>): HoverParams {
   const tab_id = raw["tab_id"];
-  const ref = raw["ref"];
   if (typeof tab_id !== "string") throw codedError("INVALID_PARAMS", "tab_id must be a string");
-  if (typeof ref !== "number" || !Number.isInteger(ref) || ref < 1) {
-    throw codedError("INVALID_PARAMS", "ref must be a positive integer");
+  const ref = raw["ref"];
+  const x = raw["x"];
+  const y = raw["y"];
+  const hasRef = typeof ref === "number" && Number.isInteger(ref) && ref >= 1;
+  const hasXY = typeof x === "number" && typeof y === "number";
+  if (!hasRef && !hasXY) {
+    throw codedError("INVALID_PARAMS", "hover requires either ref or (x,y)");
   }
-  return { tab_id, ref };
+  const out: HoverParams = { tab_id };
+  if (hasRef) out.ref = ref;
+  if (hasXY) {
+    out.x = x;
+    out.y = y;
+  }
+  const coordRaw = raw["coord_space"];
+  if (coordRaw !== undefined) {
+    if (typeof coordRaw !== "string") {
+      throw codedError("INVALID_PARAMS", "coord_space must be a string");
+    }
+    if (coordRaw === "css") out.coord_space = "css";
+    else if (coordRaw.startsWith("screenshot:")) {
+      out.coord_space = { kind: "screenshot", token: coordRaw.slice("screenshot:".length) };
+    } else {
+      throw codedError("INVALID_PARAMS", "coord_space must be 'css' or 'screenshot:<token>'");
+    }
+  }
+  return out;
 }
 
 type FindReplaceOccurrence = "first" | "all";
@@ -1835,6 +2085,48 @@ function injectedAutoDismiss(targetSelector: string): {
   return { dismissed: false, occluder_type, close_candidates };
 }
 
+function injectedElementAtPoint(
+  x: number,
+  y: number,
+): { tag: string; role: string; name: string; ref: string } | null {
+  const el = document.elementFromPoint(x, y) as HTMLElement | null;
+  if (el === null) return null;
+  function selectorFor(node: Element): string {
+    const parts: string[] = [];
+    let n: Element | null = node;
+    while (n !== null && n !== document.documentElement && n !== document.body) {
+      const id = n.id;
+      if (id) {
+        parts.unshift(`#${CSS.escape(id)}`);
+        break;
+      }
+      const tag = n.tagName.toLowerCase();
+      const parent: Element | null = n.parentElement;
+      if (parent !== null) {
+        const siblings = Array.from(parent.children).filter(
+          (c) => c.tagName === (n as Element).tagName,
+        );
+        if (siblings.length > 1) {
+          const idx = siblings.indexOf(n) + 1;
+          parts.unshift(`${tag}:nth-child(${idx})`);
+        } else {
+          parts.unshift(tag);
+        }
+      } else {
+        parts.unshift(tag);
+      }
+      n = n.parentElement;
+    }
+    return parts.length > 0 ? parts.join(" > ") : node.tagName.toLowerCase();
+  }
+  return {
+    tag: el.tagName.toLowerCase(),
+    role: el.getAttribute("role") ?? "",
+    name: (el.getAttribute("aria-label") ?? el.textContent ?? "").trim().slice(0, 80),
+    ref: selectorFor(el),
+  };
+}
+
 function injectedClickAtPoint(
   x: number,
   y: number,
@@ -1891,6 +2183,9 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       retargeted?: boolean;
       suggestion?: string;
       page_effect?: PageEffect;
+      effect?: Effect;
+      expectation_met?: boolean;
+      mismatch_reason?: string;
       warnings?: string[];
     }> => {
       const params = parseClick(raw);
@@ -1902,6 +2197,8 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       const expectEffect = params.expect_effect;
       const mods = modifierFlags(modifiers);
       const buttonName = params.button ?? "left";
+
+      const { result: handlerResult, effect } = await captureEffect(chromeId, async () => {
 
       // Persistent CDP path: trusted click via Input.dispatchMouseEvent.
       if (cdp.isPersistent(chromeId)) {
@@ -2029,6 +2326,14 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
         return { ...r, warnings: ["expect_effect set but observe_effects:false — no effect data to verify against"] };
       }
       return buildResult();
+      });
+      let verification: { expectation_met?: boolean; mismatch_reason?: string } = {};
+      if (params.expected !== undefined) {
+        const v = await pollUntilMet(chromeId, effect, params.expected);
+        verification.expectation_met = v.expectation_met;
+        if (v.mismatch_reason !== undefined) verification.mismatch_reason = v.mismatch_reason;
+      }
+      return { ...handlerResult, effect, ...verification };
     },
   );
 
@@ -2036,22 +2341,57 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
     "browser_click_at",
     async (
       raw,
-    ): Promise<{ clicked: true; x: number; y: number }> => {
+    ): Promise<{
+      clicked: true;
+      x: number;
+      y: number;
+      effect: Effect;
+      hit_element?: { tag: string; role: string; name: string; ref: string };
+      expectation_met?: boolean;
+      mismatch_reason?: string;
+    }> => {
       const params = parseClickAt(raw);
       const chromeId = resolveChromeId(tabIdMap, params.tab_id);
       const buttonName = params.button ?? "left";
       const button = BUTTON_INDEX[buttonName];
       const modifiers = params.modifiers ?? [];
-      if (cdp.isPersistent(chromeId)) {
-        await cdpClick(cdp, chromeId, params.x, params.y, buttonName, modifierFlags(modifiers));
-        return { clicked: true, x: params.x, y: params.y };
+      const { cssX, cssY } = resolveCoords(params.coord_space, params.x, params.y);
+      const { result, effect } = await captureEffect(chromeId, async () => {
+        if (cdp.isPersistent(chromeId)) {
+          await cdpClick(cdp, chromeId, cssX, cssY, buttonName, modifierFlags(modifiers));
+        } else {
+          await execInTab(
+            chromeId,
+            injectedClickAtPoint,
+            [cssX, cssY, button, modifierFlags(modifiers)] as const,
+          );
+        }
+        let hit: { tag: string; role: string; name: string; ref: string } | null = null;
+        try {
+          hit = await execInTab(chromeId, injectedElementAtPoint, [cssX, cssY] as const);
+        } catch (err) {
+          console.warn("[browserops] hit_element capture failed:", err);
+        }
+        const inner: {
+          clicked: true;
+          x: number;
+          y: number;
+          hit_element?: { tag: string; role: string; name: string; ref: string };
+        } = {
+          clicked: true,
+          x: cssX,
+          y: cssY,
+        };
+        if (hit !== null) inner.hit_element = hit;
+        return inner;
+      });
+      let verification: { expectation_met?: boolean; mismatch_reason?: string } = {};
+      if (params.expected !== undefined) {
+        const v = await pollUntilMet(chromeId, effect, params.expected);
+        verification.expectation_met = v.expectation_met;
+        if (v.mismatch_reason !== undefined) verification.mismatch_reason = v.mismatch_reason;
       }
-      await execInTab(
-        chromeId,
-        injectedClickAtPoint,
-        [params.x, params.y, button, modifierFlags(modifiers)] as const,
-      );
-      return { clicked: true, x: params.x, y: params.y };
+      return { ...result, effect, ...verification };
     },
   );
 
@@ -2064,6 +2404,9 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       matched: { role: string; name: string; tag: string };
       occluded?: boolean;
       occluder?: { tag: string; text: string; role: string | null } | null;
+      effect: Effect;
+      expectation_met?: boolean;
+      mismatch_reason?: string;
     }> => {
       const tab_id = raw["tab_id"];
       const text = raw["text"];
@@ -2094,46 +2437,56 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       const mods = parseModifiers(raw["modifiers"]);
       const chromeId = resolveChromeId(tabIdMap, tab_id);
       const buttonName = (button as ClickParams["button"]) ?? "left";
-      const useCdp = cdp.isPersistent(chromeId);
-      const spec: ClickByTextSpec = {
-        text,
-        matchMode: (match as ClickByTextSpec["matchMode"]) ?? "substring",
-        roleFilter: typeof roleRaw === "string" && roleRaw.length > 0 ? roleRaw.toLowerCase() : null,
-        caseSensitive,
-        button: BUTTON_INDEX[buttonName],
-        modifiers: modifierFlags(mods),
-        // Locate-only when CDP is attached so the trusted Input.dispatchMouseEvent
-        // is what actually fires — synthetic dispatch is silently ignored by
-        // Slack/Discord/Linear handlers that gate on event.isTrusted.
-        dryRun: useCdp,
-      };
-      const res = await execInTab(chromeId, injectedClickByText, [spec] as const);
-      if (res.found === false) {
-        throw codedError(
-          "TEXT_NOT_FOUND",
-          `no visible element matched text "${text}" (${spec.matchMode}${spec.roleFilter ? `, role=${spec.roleFilter}` : ""})`,
-        );
-      }
-      if (useCdp) {
-        if (typeof res.x !== "number" || typeof res.y !== "number") {
-          throw codedError("INTERNAL", "click_by_text dry run did not return coordinates");
+      const { result, effect } = await captureEffect(chromeId, async () => {
+        const useCdp = cdp.isPersistent(chromeId);
+        const spec: ClickByTextSpec = {
+          text,
+          matchMode: (match as ClickByTextSpec["matchMode"]) ?? "substring",
+          roleFilter: typeof roleRaw === "string" && roleRaw.length > 0 ? roleRaw.toLowerCase() : null,
+          caseSensitive,
+          button: BUTTON_INDEX[buttonName],
+          modifiers: modifierFlags(mods),
+          // Locate-only when CDP is attached so the trusted Input.dispatchMouseEvent
+          // is what actually fires — synthetic dispatch is silently ignored by
+          // Slack/Discord/Linear handlers that gate on event.isTrusted.
+          dryRun: useCdp,
+        };
+        const res = await execInTab(chromeId, injectedClickByText, [spec] as const);
+        if (res.found === false) {
+          throw codedError(
+            "TEXT_NOT_FOUND",
+            `no visible element matched text "${text}" (${spec.matchMode}${spec.roleFilter ? `, role=${spec.roleFilter}` : ""})`,
+          );
         }
-        await cdpClick(cdp, chromeId, res.x, res.y, buttonName, modifierFlags(mods));
+        if (useCdp) {
+          if (typeof res.x !== "number" || typeof res.y !== "number") {
+            throw codedError("INTERNAL", "click_by_text dry run did not return coordinates");
+          }
+          await cdpClick(cdp, chromeId, res.x, res.y, buttonName, modifierFlags(mods));
+        }
+        const inner: {
+          clicked: true;
+          matched: { role: string; name: string; tag: string };
+          occluded?: boolean;
+          occluder?: { tag: string; text: string; role: string | null } | null;
+        } = {
+          clicked: true,
+          matched: res.matched ?? { role: "", name: "", tag: "" },
+        };
+        if (res.occluded === true) {
+          inner.occluded = true;
+          inner.occluder = res.occluder ?? null;
+        }
+        return inner;
+      });
+      const expected = parseExpected(raw["expected"]);
+      let verification: { expectation_met?: boolean; mismatch_reason?: string } = {};
+      if (expected !== undefined) {
+        const v = await pollUntilMet(chromeId, effect, expected);
+        verification.expectation_met = v.expectation_met;
+        if (v.mismatch_reason !== undefined) verification.mismatch_reason = v.mismatch_reason;
       }
-      const result: {
-        clicked: true;
-        matched: { role: string; name: string; tag: string };
-        occluded?: boolean;
-        occluder?: { tag: string; text: string; role: string | null } | null;
-      } = {
-        clicked: true,
-        matched: res.matched ?? { role: "", name: "", tag: "" },
-      };
-      if (res.occluded === true) {
-        result.occluded = true;
-        result.occluder = res.occluder ?? null;
-      }
-      return result;
+      return { ...result, effect, ...verification };
     },
   );
 
@@ -2145,10 +2498,49 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       cleared?: boolean;
       escalated_to_cdp?: true;
       page_effect?: PageEffect;
+      effect?: Effect;
+      expectation_met?: boolean;
+      mismatch_reason?: string;
       warnings?: string[];
     }> => {
       const params = parseType(raw);
       const chromeId = resolveChromeId(tabIdMap, params.tab_id);
+      const { result: handlerResult, effect } = await captureEffect(chromeId, async () => {
+      // Ref-less typing path (browser-harness-style type_text): inject into
+      // document.activeElement via Input.insertText. The agent is expected
+      // to have called browser_click_at first to focus the target. Skips
+      // the selector lookup, the focus-click, and the clear step — none of
+      // which mean anything without a ref. Useful when no a11y refs are
+      // available (e.g. screenshot-first profiles with browser_read /
+      // browser_quick_read disabled).
+      if (params.ref === undefined) {
+        if (cdp.isPersistent(chromeId)) {
+          await cdpType(cdp, chromeId, params.text);
+          if (params.submit === true) {
+            await cdpPress(cdp, chromeId, "Enter", { ctrl: false, alt: false, shift: false, meta: false });
+          }
+        } else {
+          // Synthetic fallback: dispatch insertText via execCommand on the
+          // active element. Works on contenteditable; form inputs need the
+          // CDP path for trusted events.
+          await execInTab(chromeId, ((text: string) => {
+            const el = document.activeElement as HTMLElement | null;
+            if (el === null) return;
+            try {
+              document.execCommand("insertText", false, text);
+            } catch {
+              if (typeof (el as HTMLInputElement).value === "string") {
+                const cur = (el as HTMLInputElement).value;
+                (el as HTMLInputElement).value = cur + text;
+                el.dispatchEvent(new Event("input", { bubbles: true }));
+              }
+            }
+          }) as (text: string) => void, [params.text] as const);
+        }
+        const r: { typed: number; mode: TypeMode } = { typed: params.text.length, mode: "paste" };
+        return r;
+      }
+
       const ref = resolveRef(refCache, params.tab_id, params.ref);
       const selector = ref.selector;
       const submit = params.submit ?? false;
@@ -2157,15 +2549,25 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       const expectEffect = params.expect_effect;
       let cleared: boolean | undefined;
 
-      // Infer mode from the ref metadata when agent didn't specify one.
-      // Contenteditable / rich-editor targets (role=textbox with editor
-      // class selectors, or any contenteditable) use paste mode — one-shot
-      // execCommand("insertText") that avoids focus-stealing between chars.
-      const RICH_SELECTOR_HINTS = [".ql-editor", ".ProseMirror", "[data-slate-editor", ".public-DraftEditor", "contenteditable", ".cm-content"];
-      const looksRichEditor = ref.role === "textbox" && RICH_SELECTOR_HINTS.some(h => selector.includes(h));
+      // Mode selection. Default is paste (Input.insertText) because it sets
+      // the focused field's value atomically without firing per-character
+      // keydown events — SPA shortcut handlers (Notion's space-for-AI
+      // overlay, Linear's slash menus) can't intercept the typed text. The
+      // only callers that need real per-key dispatch are canvas-backed
+      // editors that listen for keydown on a hidden input (Google Sheets'
+      // cell editor). Detect those by selector and switch automatically.
+      // Rich editors like ProseMirror / Quill / CodeMirror also prefer
+      // paste, which is now the default — so the prior RICH_SELECTOR_HINTS
+      // gate is no longer needed.
+      const CANVAS_SELECTOR_HINTS = [
+        "#waffle-rich-text-editor",       // Google Sheets cell editor
+        "#docs-texteventtarget-iframe",   // Google Docs body (canvas)
+      ];
+      const looksCanvasEditor = CANVAS_SELECTOR_HINTS.some(h => selector.includes(h));
+      const looksRichEditor = false;       // retained as a binding for diagnostic code below
       const mode: TypeMode = params.mode !== undefined
-        ? resolveTypeMode(params.text, params.mode)
-        : looksRichEditor ? "paste" : resolveTypeMode(params.text, undefined);
+        ? params.mode
+        : looksCanvasEditor ? "keystroke" : "paste";
 
       // Persistent CDP path: trusted type via Input.insertText.
       if (cdp.isPersistent(chromeId)) {
@@ -2184,7 +2586,15 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
             throw codedError("REF_STALE", `ref ${params.ref} no longer resolves in tab ${params.tab_id}`);
           }
           await cdpClick(cdp, chromeId, center.x, center.y, "left", { ctrl: false, alt: false, shift: false, meta: false });
-          await cdpType(cdp, chromeId, params.text);
+          if (mode === "paste") {
+            // Bulk-assign via Input.insertText — fast for long strings,
+            // sufficient for normal textboxes and contenteditable.
+            await cdpType(cdp, chromeId, params.text);
+          } else {
+            // Per-char dispatchKeyEvent — necessary for canvas grids and
+            // keydown-gated editors (Sheets cells, Docs, Figma).
+            await cdpTypeKeystroke(cdp, chromeId, params.text);
+          }
           if (submit) {
             await cdpPress(cdp, chromeId, "Enter", { ctrl: false, alt: false, shift: false, meta: false });
           }
@@ -2419,16 +2829,28 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
         return { ...r, warnings: ["expect_effect set but observe_effects:false — no effect data to verify against"] };
       }
       return dispatchWithRescue();
+      });
+      let verification: { expectation_met?: boolean; mismatch_reason?: string } = {};
+      if (params.expected !== undefined) {
+        const v = await pollUntilMet(chromeId, effect, params.expected);
+        verification.expectation_met = v.expectation_met;
+        if (v.mismatch_reason !== undefined) verification.mismatch_reason = v.mismatch_reason;
+      }
+      return { ...handlerResult, effect, ...verification };
     },
   );
 
   router.register("browser_press", async (raw): Promise<{
     pressed: true;
     page_effect?: PageEffect;
+    effect?: Effect;
+    expectation_met?: boolean;
+    mismatch_reason?: string;
     warnings?: string[];
   }> => {
     const params = parsePress(raw);
     const chromeId = resolveChromeId(tabIdMap, params.tab_id);
+    const { result: handlerResult, effect: pressEffect } = await captureEffect(chromeId, async () => {
     const observeEffects = params.observe_effects !== false;
     const expectEffect = params.expect_effect;
     const keys = params.keys;
@@ -2463,9 +2885,10 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
     }
 
     // Synthetic path. Pre-resolve the key tuple here so the injected fn
-    // ships only the data it needs and stays free of imports.
+    // ships only the data it needs and stays free of imports. Pass mods
+    // through so Shift chords resolve to shifted text on this path too.
     const dispatchPress = async (): Promise<{ pressed: true }> => {
-      const kTuple = resolveKey(terminal);
+      const kTuple = resolveKey(terminal, modifierFlags(mods));
       await execInTab(
         chromeId,
         injectedPress,
@@ -2495,6 +2918,14 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       return { ...r, warnings: ["expect_effect set but observe_effects:false — no effect data to verify against"] };
     }
     return dispatchPress();
+    });
+    let verification: { expectation_met?: boolean; mismatch_reason?: string } = {};
+    if (params.expected !== undefined) {
+      const v = await pollUntilMet(chromeId, pressEffect, params.expected);
+      verification.expectation_met = v.expectation_met;
+      if (v.mismatch_reason !== undefined) verification.mismatch_reason = v.mismatch_reason;
+    }
+    return { ...handlerResult, effect: pressEffect, ...verification };
   });
 
   router.register("browser_scroll", async (raw): Promise<{ scrolled: true }> => {
@@ -2517,29 +2948,64 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
     return { scrolled: true };
   });
 
-  router.register("browser_hover", async (raw): Promise<{ hovered: true }> => {
+  router.register("browser_hover", async (raw): Promise<{ hovered: true; effect: Effect }> => {
     const params = parseHover(raw);
     const chromeId = resolveChromeId(tabIdMap, params.tab_id);
-    const selector = resolveSelector(refCache, params.tab_id, params.ref);
 
-    // Persistent CDP path: trusted hover via Input.dispatchMouseEvent.
-    // Synthetic mouseover/mouseenter is silently ignored by hover-gated UIs
-    // (Slack message-action toolbar, GitHub tooltip stacks) — only a real
-    // mouse move surfaces them.
-    if (cdp.isPersistent(chromeId)) {
-      const center = await execInTab(chromeId, injectedElementCenter, [selector] as const);
-      if (center === null) {
+    const { result, effect } = await captureEffect(chromeId, async () => {
+      // xy-coord path: bypass ref resolution and dispatch at the resolved
+      // CSS coords directly (mirrors browser_click_at).
+      if (params.ref === undefined && params.x !== undefined && params.y !== undefined) {
+        const { cssX, cssY } = resolveCoords(params.coord_space, params.x, params.y);
+        if (cdp.isPersistent(chromeId)) {
+          await cdpHover(cdp, chromeId, cssX, cssY);
+        } else {
+          // Synthetic hover at point: dispatch mouseover at elementFromPoint.
+          await execInTab(
+            chromeId,
+            (x: number, y: number) => {
+              const el = document.elementFromPoint(x, y) as HTMLElement | null;
+              if (el === null) return;
+              const init: MouseEventInit = {
+                bubbles: true,
+                cancelable: true,
+                composed: true,
+                clientX: x,
+                clientY: y,
+              };
+              el.dispatchEvent(new MouseEvent("mouseover", init));
+              el.dispatchEvent(new MouseEvent("mouseenter", init));
+              el.dispatchEvent(new MouseEvent("mousemove", init));
+            },
+            [cssX, cssY] as const,
+          );
+        }
+        return { hovered: true as const };
+      }
+      // Ref-based path (legacy).
+      if (params.ref === undefined) {
+        throw codedError("INVALID_PARAMS", "hover requires either ref or (x,y)");
+      }
+      const selector = resolveSelector(refCache, params.tab_id, params.ref);
+      // Persistent CDP path: trusted hover via Input.dispatchMouseEvent.
+      // Synthetic mouseover/mouseenter is silently ignored by hover-gated UIs
+      // (Slack message-action toolbar, GitHub tooltip stacks) — only a real
+      // mouse move surfaces them.
+      if (cdp.isPersistent(chromeId)) {
+        const center = await execInTab(chromeId, injectedElementCenter, [selector] as const);
+        if (center === null) {
+          throw codedError("REF_STALE", `ref ${params.ref} no longer resolves in tab ${params.tab_id}`);
+        }
+        await cdpHover(cdp, chromeId, center.x, center.y);
+        return { hovered: true as const };
+      }
+      const res = await execInTab(chromeId, injectedHover, [selector] as const);
+      if (res.found === false) {
         throw codedError("REF_STALE", `ref ${params.ref} no longer resolves in tab ${params.tab_id}`);
       }
-      await cdpHover(cdp, chromeId, center.x, center.y);
-      return { hovered: true };
-    }
-
-    const res = await execInTab(chromeId, injectedHover, [selector] as const);
-    if (res.found === false) {
-      throw codedError("REF_STALE", `ref ${params.ref} no longer resolves in tab ${params.tab_id}`);
-    }
-    return { hovered: true };
+      return { hovered: true as const };
+    });
+    return { ...result, effect };
   });
 
   router.register("browser_find_and_replace", async (raw) => {
@@ -2549,32 +3015,35 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       params.ref !== undefined
         ? resolveSelector(refCache, params.tab_id, params.ref)
         : null;
-    const res = await execInTab(chromeId, injectedFindAndReplaceSynthetic, [
-      selectorArg,
-      params.find,
-      params.replace,
-      params.occurrence,
-      params.case_sensitive,
-    ] as const);
-    if (res.status === "no_target") {
-      throw codedError(
-        "INVALID_PARAMS",
-        "no target element (ref was not provided and document.activeElement is not editable)",
-      );
-    }
-    if (res.status === "not_found") {
-      throw codedError("TEXT_NOT_FOUND", `substring not found in target element`);
-    }
-    if (res.status === "unsupported_kind") {
-      throw codedError(
-        "INTERNAL",
-        `element <${res.tag}> is not editable (expected input, textarea, or contenteditable)`,
-      );
-    }
-    return {
-      replaced: res.replaced,
-      used_fallback: res.used_fallback,
-    };
+    const { result, effect } = await captureEffect(chromeId, async () => {
+      const res = await execInTab(chromeId, injectedFindAndReplaceSynthetic, [
+        selectorArg,
+        params.find,
+        params.replace,
+        params.occurrence,
+        params.case_sensitive,
+      ] as const);
+      if (res.status === "no_target") {
+        throw codedError(
+          "INVALID_PARAMS",
+          "no target element (ref was not provided and document.activeElement is not editable)",
+        );
+      }
+      if (res.status === "not_found") {
+        throw codedError("TEXT_NOT_FOUND", `substring not found in target element`);
+      }
+      if (res.status === "unsupported_kind") {
+        throw codedError(
+          "INTERNAL",
+          `element <${res.tag}> is not editable (expected input, textarea, or contenteditable)`,
+        );
+      }
+      return {
+        replaced: res.replaced,
+        used_fallback: res.used_fallback,
+      };
+    });
+    return { ...result, effect };
   });
 
   router.register("browser_execute_js", async (raw) => {

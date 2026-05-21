@@ -13,10 +13,12 @@ import { Router, type Context } from "./router.js";
 import { RefCache } from "./ref-cache.js";
 import { CdpManager } from "./cdp.js";
 import { NetworkTracker } from "./network-tracker.js";
+import { setCdpForEffect } from "./effect.js";
 import { registerTabHandlers } from "./handlers/tabs.js";
 import { registerNavigationHandlers } from "./handlers/navigation.js";
 import { registerScreenshotHandler } from "./handlers/screenshot.js";
 import { registerReadHandler } from "./handlers/read.js";
+import { registerObserveHandler } from "./handlers/observe.js";
 import { registerInputHandlers } from "./handlers/input.js";
 import { registerSafetyHandler, resolveSafetyDecision } from "./handlers/safety.js";
 import { registerSessionGroupHandlers } from "./handlers/session-groups.js";
@@ -39,6 +41,7 @@ const chromeIdToTabId = new Map<number, string>();
 const router = new Router();
 const refCache = new RefCache();
 const cdp = new CdpManager();
+setCdpForEffect(cdp);
 const network = new NetworkTracker();
 let wsClient: WsClient | null = null;
 
@@ -84,8 +87,9 @@ registerTabHandlers(router, {
   cdp,
 });
 registerNavigationHandlers(router, { tabIdMap: tabIdToChromeId, refCache, network, cdp });
-registerScreenshotHandler(router, { tabIdMap: tabIdToChromeId });
+registerScreenshotHandler(router, { tabIdMap: tabIdToChromeId, cdp });
 registerReadHandler(router, { tabIdMap: tabIdToChromeId, refCache });
+registerObserveHandler(router, { tabIdMap: tabIdToChromeId, refCache });
 registerInputHandlers(router, { tabIdMap: tabIdToChromeId, refCache, cdp, network });
 registerSafetyHandler(router, { restoreBadge: () => setBadge(currentConnected) });
 

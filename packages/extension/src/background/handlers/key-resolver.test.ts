@@ -100,4 +100,87 @@ describe("resolveKey", () => {
       expect(t.text).toBeUndefined();
     });
   });
+
+  describe("US-layout punctuation event.code names", () => {
+    it.each<[string, { key: string; text: string; vkCode: number }]>([
+      ["Slash",        { key: "/",  text: "/",  vkCode: 191 }],
+      ["Period",       { key: ".",  text: ".",  vkCode: 190 }],
+      ["Comma",        { key: ",",  text: ",",  vkCode: 188 }],
+      ["Semicolon",    { key: ";",  text: ";",  vkCode: 186 }],
+      ["Quote",        { key: "'",  text: "'",  vkCode: 222 }],
+      ["Backquote",    { key: "`",  text: "`",  vkCode: 192 }],
+      ["Minus",        { key: "-",  text: "-",  vkCode: 189 }],
+      ["Equal",        { key: "=",  text: "=",  vkCode: 187 }],
+      ["BracketLeft",  { key: "[",  text: "[",  vkCode: 219 }],
+      ["BracketRight", { key: "]",  text: "]",  vkCode: 221 }],
+      ["Backslash",    { key: "\\", text: "\\", vkCode: 220 }],
+    ])("%s carries base-layer text", (token, expected) => {
+      const tuple = resolveKey(token);
+      expect(tuple.key).toBe(expected.key);
+      expect(tuple.code).toBe(token);
+      expect(tuple.text).toBe(expected.text);
+      expect(tuple.vkCode).toBe(expected.vkCode);
+    });
+  });
+
+  describe("shifted-text resolution under Shift mod", () => {
+    it.each<[string, string]>([
+      ["Digit1", "!"],
+      ["Digit2", "@"],
+      ["Digit3", "#"],
+      ["Digit4", "$"],
+      ["Digit5", "%"],
+      ["Digit6", "^"],
+      ["Digit7", "&"],
+      ["Digit8", "*"],
+      ["Digit9", "("],
+      ["Digit0", ")"],
+      ["Slash", "?"],
+      ["Period", ">"],
+      ["Comma", "<"],
+      ["Semicolon", ":"],
+      ["Quote", "\""],
+      ["Backquote", "~"],
+      ["Minus", "_"],
+      ["Equal", "+"],
+      ["BracketLeft", "{"],
+      ["BracketRight", "}"],
+      ["Backslash", "|"],
+    ])("Shift+%s -> text:%s", (token, shifted) => {
+      const tuple = resolveKey(token, { shift: true });
+      expect(tuple.text).toBe(shifted);
+      expect(tuple.key).toBe(shifted);
+      // The code does NOT change under Shift — that matches real browser
+      // KeyboardEvent semantics (event.code is the physical key, event.key
+      // is the produced character).
+      expect(tuple.code).toBe(token);
+    });
+
+    it("Shift+KeyA returns uppercase 'A'", () => {
+      const t = resolveKey("KeyA", { shift: true });
+      expect(t.key).toBe("A");
+      expect(t.text).toBe("A");
+      expect(t.code).toBe("KeyA");
+      expect(t.vkCode).toBe(65);
+    });
+
+    it("Shift+Digit3 returns '#' (the classic Notion-H1 trigger)", () => {
+      const t = resolveKey("Digit3", { shift: true });
+      expect(t.text).toBe("#");
+      expect(t.key).toBe("#");
+    });
+
+    it("Cmd+KeyA (meta chord) preserves text — downstream suppresses it", () => {
+      // text is left intact by resolveKey; the cdpPress gate drops it under
+      // ctrl/meta so Cmd+A doesn't insert a literal 'a'. Important: this
+      // preserves the existing Cmd+A invariant.
+      const t = resolveKey("KeyA", { meta: true });
+      expect(t.text).toBe("a");
+    });
+
+    it("Ctrl+Shift+KeyA leaves text at 'a' (modifier chord, not pure-shift)", () => {
+      const t = resolveKey("KeyA", { ctrl: true, shift: true });
+      expect(t.text).toBe("a");
+    });
+  });
 });

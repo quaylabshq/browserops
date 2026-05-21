@@ -82,6 +82,76 @@ export interface Event<TPayload = Record<string, unknown>> {
 
 export type Envelope = Hello | HelloAck | Request | Response | Event;
 
+/**
+ * Per-action page_effect envelope. Every state-changing browser_* handler
+ * returns one of these alongside its result, so the agent can verify
+ * structurally what happened during the action window without re-reading
+ * the page. ~100 tokens when serialized.
+ */
+export interface MutationCounts {
+  added: number;
+  removed: number;
+  attr: number;
+  char: number;
+}
+
+export interface NetworkActivity {
+  requests: number;
+  failed: number;
+  endpoints: string[];
+}
+
+export interface A11yDelta {
+  added: number;
+  removed: number;
+  changed: number;
+}
+
+export interface NewDialog {
+  role: string;
+  name: string;
+  ref: string;
+}
+
+export interface Effect {
+  url_changed: boolean;
+  title_changed: boolean;
+  mutations: MutationCounts;
+  network: NetworkActivity;
+  visual_hash_delta: number;
+  a11y_delta: A11yDelta;
+  focus_moved_to: string | null;
+  new_dialogs: NewDialog[];
+  console_errors: number;
+  duration_ms: number;
+}
+
+/**
+ * Predicate the agent attaches to a state-changing action to assert what
+ * should happen after dispatch. The handler polls the page until the
+ * predicate matches or `timeout_ms` elapses, then returns
+ * `expectation_met: boolean` alongside the usual effect envelope.
+ *
+ * Named `ActionExpectation` (not `ExpectedEffect`) because the procedure-
+ * memory module already exports a differently-shaped `ExpectedEffect`.
+ * Agent-facing tool descriptions still refer to the field as "expected".
+ *
+ * All fields are optional; matching is "all-of" — every present field
+ * must hold for the predicate to be considered met.
+ */
+export interface ActionExpectation {
+  url_matches?: string;
+  new_dialog?: boolean | string;
+  value_contains?: { ref: string; substring: string };
+  mutations_at_least?: number;
+  network_endpoint?: string;
+  focus_to?: string;
+  visual_delta_at_least?: number;
+  title_matches?: string;
+  timeout_ms?: number;
+  poll_interval_ms?: number;
+}
+
 export function isHello(e: unknown): e is Hello {
   return isObj(e) && e.type === "hello";
 }
