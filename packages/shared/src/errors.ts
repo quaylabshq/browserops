@@ -38,6 +38,19 @@ export const ERROR_CODES = [
   // Observation architecture (plan: observation-architecture)
   "OBSERVATION_TOKEN_INVALID",
   "COORDS_OUT_OF_SCREENSHOT_BOUNDS",
+  // Playbooks (plan: playbooks)
+  "PLAYBOOK_NOT_FOUND",
+  "PLAYBOOK_ALREADY_EXISTS",
+  "PLAYBOOK_SCHEMA_INVALID",
+  "PLAYBOOK_IN_USE",
+  "PLAYBOOK_OWNER_INVALID",
+  "PLAYBOOK_RESUME_EXPIRED",
+  "PLAYBOOK_RESUME_INVALID",
+  "PLAYBOOK_BUDGET_EXCEEDED",
+  "PLAYBOOK_FORBIDDEN",
+  "LOCATOR_NOT_FOUND",
+  "LOCATOR_AMBIGUOUS",
+  "ELEMENT_NOT_ACTIONABLE",
 ] as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[number];
