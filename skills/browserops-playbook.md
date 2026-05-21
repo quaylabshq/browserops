@@ -122,11 +122,11 @@ verification value, default to **send-to-self** for messaging surfaces.
 
    Per-step rules:
 
-     - Before every step that uses locator, insert a one-line
-       { id: "prime_*", do: "observe", with: { tab_id: "{{tab_id}}", mode: "text" } }
-       step. This is a v1 rough edge — the runtime doesn't auto-seed the
-       ref-cache before browser_locate, so each locator step needs a fresh
-       observation. (When the auto-prime lands, this guidance goes away.)
+     - DO NOT add manual prime/observe steps before locator steps. The
+       executor auto-calls browser_read before every browser_locate, so
+       the ref-cache is fresh even after SPA hash transitions (Gmail's
+       #inbox → #inbox?compose=new, etc.). A manual prime step is now
+       redundant and just slows the run down.
      - Every action step with a positive success criterion gets an
        expect: { ... } block. expect is REQUIRED on any step whose
        fallback.strategy is "llm" — without it the runtime can't tell
@@ -193,10 +193,10 @@ get user pushback before the playbook ships.
 
 ## 5. Don'ts (failure modes specific to playbooks)
 
-- **Don't author a locator step without a preceding observe step.** The
-  ref-cache empties on a new tab and isn't auto-seeded by browser_locate
-  in v1. Without an observe right before, the locator handler returns
-  LOCATOR_NOT_FOUND on a perfectly valid descriptor.
+- **Don't add a manual `do: observe` step right before a locator step.**
+  The executor auto-primes via browser_read internally; a manual prime
+  is redundant. (This used to be required pre-auto-prime — old playbooks
+  with prime steps still work, but new authoring should omit them.)
 - **Don't bake `ref: <number>` into a playbook step.** Refs are a
   procedures concept and don't survive replay. Playbook steps express
   their target via `locator:` and let the runtime resolve fresh.

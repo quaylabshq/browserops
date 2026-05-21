@@ -43,6 +43,9 @@ function stubWsBridge(script: Script[]): WSBridgeLike {
       method: string,
       _params: Record<string, unknown>,
     ): Promise<T> => {
+      if (method === "browser_read" && script[idx]?.method !== "browser_read") {
+        return { refs: [], content: "", url: "", title: "" } as T;
+      }
       const item = script[idx++];
       if (!item) throw new Error(`stub ran out (next ${method})`);
       if (item.method !== method) {

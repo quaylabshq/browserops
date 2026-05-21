@@ -419,6 +419,27 @@ async function tryStepOnce(
     resolvedLocator = substituted;
 
     const autoTimeout = step.auto_wait?.timeout_ms ?? 4000;
+
+    // Auto-prime the ref-cache before every locate. In v1 the extension
+    // side does not seed the cache from browser_observe, and SPA hash
+    // transitions (e.g. Gmail's #inbox → #inbox?compose=new) invalidate
+    // the snapshot via chrome.webNavigation.onHistoryStateUpdated. Doing
+    // the read here matches the contract that locate.ts already advertises
+    // in its module doc ("The playbook executor on the bridge takes care
+    // of refreshing the snapshot via browser_read before each locate
+    // call"). The cost is one a11y_tree read per locator step — cheap
+    // compared to a needless LLM-fallback round-trip.
+    try {
+      await wsBridge.callExtension(
+        "browser_read",
+        { tab_id, mode: "a11y_tree", scope: { kind: "viewport" }, augment: true },
+        DEFAULT_TOOL_TIMEOUT_MS,
+      );
+    } catch {
+      // A failed prime is not fatal — browser_locate will surface its
+      // own LOCATOR_NOT_FOUND if the cache is genuinely empty.
+    }
+
     try {
       const locateResult = await wsBridge.callExtension<{
         matches: Array<{ ref: number; role: string; name: string; selector: string }>;
