@@ -202,6 +202,42 @@ function proceduresSection(enabledFeatures: ReadonlySet<FeatureName>): Lines {
   ];
 }
 
+function playbooksSection(enabledFeatures: ReadonlySet<FeatureName>): Lines {
+  if (!enabledFeatures.has("playbooks")) {
+    return [
+      "Playbooks are opt-in via `browserops feature enable playbooks` (then",
+      "`browserops restart`). They layer semantic locators, auto-wait, retrying",
+      "expect predicates, and a per-step LLM-fallback ladder on top of the core",
+      "browser_* tools. Off by default.",
+    ];
+  }
+  return [
+    "Playbooks:",
+    "- Playbooks are deterministic-first browser flows with retrying expect",
+    "  predicates and per-step fallback strategies. Each step has a semantic",
+    "  locator descriptor ({role, name, has_text, nth, ...}) that re-resolves",
+    "  against the live a11y tree each step — no stale-ref class of bugs.",
+    "- Before authoring a flow, call `playbooks_search` (then `playbooks_get`)",
+    "  to find a trusted match. If score >= 0.5, run via `playbooks_execute`",
+    "  with the matching inputs.",
+    "- `playbooks_execute` either completes, halts (strict failure), or returns",
+    '  `{"status":"needs_assist", "execution_id", "envelope"}` — the envelope',
+    "  carries the step goal, last attempt, remaining-steps preview, and the",
+    "  playbook's safety constraints. Inspect it and call `playbooks_resume`",
+    "  with a patch: resume_with{locator?, params?}, insert_steps{steps[]},",
+    "  or give_up{reason}.",
+    "- Every patch step flows through the playbook's forbidden{locators,",
+    "  actions} guard — the LLM cannot bypass author-declared safety bars",
+    "  via the resume path.",
+    "- Strict mode (strict:true) refuses every LLM fallback even if a step",
+    "  declares it. Use for batch / CI runs and any execution that should be",
+    "  reproducible.",
+    "- Playbooks compose two ways: playbook_call steps invoke another",
+    "  playbook in-process, and procedure_call steps invoke a saved",
+    "  procedure. Procedures can also call playbooks back.",
+  ];
+}
+
 function memorySection(enabledFeatures: ReadonlySet<FeatureName>): Lines {
   if (!enabledFeatures.has("memory")) return [];
   return [
@@ -236,6 +272,7 @@ export function buildServerInstructions(
     clicking,
     risky,
     proceduresSection(enabledFeatures),
+    playbooksSection(enabledFeatures),
     memorySection(enabledFeatures),
   ].filter((b) => b.length > 0);
 
