@@ -597,6 +597,12 @@ const screenshot: ToolDef = {
           h: { type: "number", minimum: 0 },
         },
       },
+      annotate: {
+        description:
+          "Overlay annotations. 'som' adds Set-of-Marks numbered labels on interactive elements and returns `som_map` mapping label → {ref, role, name}. 'none' (default) leaves the screenshot un-annotated.",
+        enum: ["som", "none"] as const,
+        default: "none",
+      },
     },
   },
   outputSchema: {
