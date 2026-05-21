@@ -584,6 +584,19 @@ const screenshot: ToolDef = {
           longest_edge: { type: "integer", minimum: 1, maximum: 8192 },
         },
       },
+      region: {
+        type: "object",
+        additionalProperties: false,
+        description:
+          "Crop to {x, y, w, h} in CSS pixels (relative to the viewport) before resizing to the target dimensions. Useful for focusing the agent on a specific UI region without paying for the full viewport.",
+        required: ["x", "y", "w", "h"] as const,
+        properties: {
+          x: { type: "number", minimum: 0 },
+          y: { type: "number", minimum: 0 },
+          w: { type: "number", minimum: 0 },
+          h: { type: "number", minimum: 0 },
+        },
+      },
     },
   },
   outputSchema: {

@@ -1,5 +1,22 @@
 import type { ErrorCode } from "@browserops/shared";
 import type { Router } from "../router.js";
+import { execInTab } from "./input.js";
+
+function readPageMetrics(): {
+  dpr: number;
+  scroll_x: number;
+  scroll_y: number;
+  inner_w: number;
+  inner_h: number;
+} {
+  return {
+    dpr: window.devicePixelRatio || 1,
+    scroll_x: window.scrollX,
+    scroll_y: window.scrollY,
+    inner_w: window.innerWidth,
+    inner_h: window.innerHeight,
+  };
+}
 
 /**
  * browser_screenshot handler.
@@ -25,6 +42,7 @@ interface ScreenshotParams {
   max_dimension?: number;
   full_quality?: boolean;
   dimensions?: { longest_edge?: number };
+  region?: { x: number; y: number; w: number; h: number };
 }
 
 // Default longest-edge for the action-grade screenshot path introduced by the
@@ -100,6 +118,28 @@ function parseParams(raw: Record<string, unknown>): ScreenshotParams {
     }
     out.intent = intent;
   }
+  const region = raw["region"];
+  if (region !== undefined) {
+    if (typeof region !== "object" || region === null || Array.isArray(region)) {
+      throw codedError("INVALID_PARAMS", "region must be an object");
+    }
+    const r = region as Record<string, unknown>;
+    const x = r["x"];
+    const y = r["y"];
+    const w = r["w"];
+    const h = r["h"];
+    if (
+      typeof x !== "number" ||
+      typeof y !== "number" ||
+      typeof w !== "number" ||
+      typeof h !== "number" ||
+      w <= 0 ||
+      h <= 0
+    ) {
+      throw codedError("INVALID_PARAMS", "region must be {x,y,w,h} with positive w,h");
+    }
+    out.region = { x, y, w, h };
+  }
   const dims = raw["dimensions"];
   if (dims !== undefined) {
     if (typeof dims !== "object" || dims === null || Array.isArray(dims)) {
@@ -157,13 +197,25 @@ async function downscaleAndEncode(
   sourceFormat: "png" | "jpeg",
   maxDimension: number,
   quality: number,
+  region: { x: number; y: number; w: number; h: number } | undefined,
+  dpr: number,
 ): Promise<{ base64: string; width: number; height: number }> {
   const mime = sourceFormat === "png" ? "image/png" : "image/jpeg";
   const res = await fetch(`data:${mime};base64,${sourceBase64}`);
   const blob = await res.blob();
   const bitmap = await createImageBitmap(blob);
-  const srcW = bitmap.width;
-  const srcH = bitmap.height;
+  // captureVisibleTab returns device-pixel imagery on Retina. The region
+  // is supplied in CSS pixels; multiply by dpr to project into source pixels.
+  let srcX = 0;
+  let srcY = 0;
+  let srcW = bitmap.width;
+  let srcH = bitmap.height;
+  if (region !== undefined) {
+    srcX = Math.max(0, Math.round(region.x * dpr));
+    srcY = Math.max(0, Math.round(region.y * dpr));
+    srcW = Math.max(1, Math.min(bitmap.width - srcX, Math.round(region.w * dpr)));
+    srcH = Math.max(1, Math.min(bitmap.height - srcY, Math.round(region.h * dpr)));
+  }
   const longest = Math.max(srcW, srcH);
   const scale = longest > maxDimension ? maxDimension / longest : 1;
   const w = Math.max(1, Math.round(srcW * scale));
@@ -173,7 +225,7 @@ async function downscaleAndEncode(
   if (ctx === null) {
     throw codedError("INTERNAL", "OffscreenCanvas 2d context unavailable");
   }
-  ctx.drawImage(bitmap, 0, 0, w, h);
+  ctx.drawImage(bitmap, srcX, srcY, srcW, srcH, 0, 0, w, h);
   bitmap.close();
   const outBlob = await canvas.convertToBlob({
     type: "image/jpeg",
@@ -197,10 +249,12 @@ async function downscaleToBudget(
   sourceFormat: "png" | "jpeg",
   startMaxDimension: number,
   startQuality: number,
+  region: { x: number; y: number; w: number; h: number } | undefined,
+  dpr: number,
 ): Promise<{ base64: string; width: number; height: number }> {
   let dim = startMaxDimension;
   let q = startQuality;
-  let r = await downscaleAndEncode(sourceBase64, sourceFormat, dim, q);
+  let r = await downscaleAndEncode(sourceBase64, sourceFormat, dim, q, region, dpr);
   // Up to 3 retries. Each backs off the longest dimension 50% (floor
   // SCREENSHOT_FLOOR_DIM) and drops quality 20 points (floor 15). Content-rich
   // pages typically clear the budget by attempt 2; the loop bounds the
@@ -211,7 +265,7 @@ async function downscaleToBudget(
       dim = Math.max(SCREENSHOT_FLOOR_DIM, Math.floor(dim / 2));
     }
     q = Math.max(15, q - 20);
-    r = await downscaleAndEncode(sourceBase64, sourceFormat, dim, q);
+    r = await downscaleAndEncode(sourceBase64, sourceFormat, dim, q, region, dpr);
   }
   return r;
 }
@@ -269,8 +323,14 @@ export function registerScreenshotHandler(
     // full_quality:true. The budget-aware downscale enforces a hard ceiling
     // on the returned base64 size so default-intent screenshots stop blowing
     // the agent's context envelope on wide / content-rich pages.
+    let metrics = { dpr: 1, scroll_x: 0, scroll_y: 0, inner_w: 0, inner_h: 0 };
+    try {
+      metrics = await execInTab(chromeTabId, readPageMetrics, [] as const);
+    } catch (err) {
+      console.warn("[browserops] readPageMetrics failed:", err);
+    }
     const captured = await captureVisible(tab.windowId, "png", 100);
-    const encoded = await downscaleToBudget(captured, "png", maxDimension, quality);
+    const encoded = await downscaleToBudget(captured, "png", maxDimension, quality, params.region, metrics.dpr);
     const result: ScreenshotResult = {
       image_base64: encoded.base64,
       width: encoded.width,
