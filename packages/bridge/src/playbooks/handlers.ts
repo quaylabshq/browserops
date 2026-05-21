@@ -29,9 +29,10 @@ import {
 } from "./index-builder.js";
 import { validatePlaybook } from "./validator.js";
 import { search, type PlaybookSearchOptions } from "./search.js";
-import { makePlaybookExecutor } from "./execute.js";
+import { makePlaybookExecutor, type InProcessDispatch } from "./execute.js";
 import { makeResumeHandler } from "./resume.js";
 import type { WSBridgeLike } from "../mcp-server.js";
+import { buildProcedureHandlers } from "../procedures/handlers.js";
 
 const NAME_PATTERN = /^[a-z][a-z0-9_.-]{0,79}$/;
 
@@ -471,12 +472,40 @@ type HandlerFn = (raw: Record<string, unknown>) => Promise<unknown>;
 export function buildPlaybookHandlers(
   wsBridge: WSBridgeLike,
 ): Record<string, HandlerFn> {
+  // Self-referential dispatcher so playbook_call recurses and procedure_call
+  // routes through the procedures executor — without round-tripping through
+  // the WebSocket bridge for what are pure in-process calls.
+  let executor: HandlerFn = async () => {
+    throw new CodedError(
+      "INTERNAL",
+      "playbook executor not initialised yet",
+    );
+  };
+  const procHandlers = buildProcedureHandlers(wsBridge);
+
+  const inProcess: InProcessDispatch = async (toolName, params) => {
+    if (toolName === "playbooks_execute") {
+      return executor(params);
+    }
+    if (toolName === "procedures_execute") {
+      const fn = procHandlers["procedures_execute"];
+      if (!fn) throw new CodedError("INTERNAL", "procedures_execute handler missing");
+      return fn(params);
+    }
+    throw new CodedError(
+      "INVALID_PARAMS",
+      `inProcessDispatch refused unknown tool: ${toolName}`,
+    );
+  };
+
+  executor = makePlaybookExecutor(wsBridge, inProcess) as HandlerFn;
+
   return {
     playbooks_search: handleSearch,
     playbooks_get: handleGet,
     playbooks_save: handleSave,
     playbooks_delete: handleDelete,
-    playbooks_execute: makePlaybookExecutor(wsBridge),
+    playbooks_execute: executor,
     playbooks_resume: makeResumeHandler(wsBridge),
   };
 }
