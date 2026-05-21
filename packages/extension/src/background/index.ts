@@ -20,6 +20,7 @@ import { registerScreenshotHandler } from "./handlers/screenshot.js";
 import { registerReadHandler } from "./handlers/read.js";
 import { registerObserveHandler } from "./handlers/observe.js";
 import { registerInputHandlers } from "./handlers/input.js";
+import { registerLocateHandler } from "./handlers/locate.js";
 import { registerSafetyHandler, resolveSafetyDecision } from "./handlers/safety.js";
 import { registerSessionGroupHandlers } from "./handlers/session-groups.js";
 
@@ -91,6 +92,7 @@ registerScreenshotHandler(router, { tabIdMap: tabIdToChromeId, cdp });
 registerReadHandler(router, { tabIdMap: tabIdToChromeId, refCache });
 registerObserveHandler(router, { tabIdMap: tabIdToChromeId, refCache });
 registerInputHandlers(router, { tabIdMap: tabIdToChromeId, refCache, cdp, network });
+registerLocateHandler(router, { tabIdMap: tabIdToChromeId, refCache });
 registerSafetyHandler(router, { restoreBadge: () => setBadge(currentConnected) });
 
 registerSessionGroupHandlers(router);
