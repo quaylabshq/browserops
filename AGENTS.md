@@ -183,6 +183,10 @@ Playbooks and procedures compose two ways:
 
 Pass `strict: true` to `playbooks_execute` to refuse every LLM-fallback path even if a step declares one. Use for CI / batch runs and for the post-authoring verification run that flips `bump_success: true → status: trusted`.
 
+### Authoring new playbooks
+
+The `browserops-playbook` skill at `~/.claude/skills/browserops-playbook/SKILL.md` (mirrored to `skills/browserops-playbook.md`) owns the autonomous playbook authoring flow — same shape as `browserops-teach` but produces playbooks instead of procedures. It pre-flight-searches both stores, derives semantic locators from a single `browser_observe`, drafts the YAML, verifies via `playbooks_execute({strict: true})` plus an external goal predicate, then promotes to trusted via `playbooks_save({bump_success: true})`. Installed automatically by `browserops sync skills` / `browserops upgrade` whenever the `playbooks` feature is on.
+
 ## Approval mode
 
 browserops runs in **auto-approve mode by default**: risky actions (`browser_execute_js`, click/type on sensitive domains, procedures marked `risky: true`) execute without prompting. Destructive keyboard chords and navigations to `javascript:`, `file://`, or `chrome://` URLs are refused regardless of mode.
