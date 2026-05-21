@@ -2246,6 +2246,83 @@ const releaseTab: ToolDef = {
 } as const;
 
 // ---------------------------------------------------------------------------
+// Playbooks: browser_locate (semantic-locator resolver, opt-in via feature)
+// ---------------------------------------------------------------------------
+
+const locatorInputSchema: JSONSchemaObject = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    role: { type: "string", minLength: 1, maxLength: 40 },
+    name: { type: "string", minLength: 1, maxLength: 400 },
+    has_text: { type: "string", minLength: 1, maxLength: 400 },
+    has_text_not: { type: "string", minLength: 1, maxLength: 400 },
+    in_frame: { type: "string", minLength: 1, maxLength: 400 },
+    near: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        ref: { type: "integer", minimum: 1 },
+        locator: { type: "object", additionalProperties: true },
+        radius_px: { type: "number", minimum: 0 },
+      },
+    },
+    nth: { type: "integer", minimum: 0 },
+    scope: { enum: ["viewport", "document"] as const },
+  },
+};
+
+const browserLocate: ToolDef = {
+  name: "browser_locate",
+  feature: "playbooks",
+  description:
+    "Resolve a semantic Locator descriptor (role/name/has_text/nth) against the tab's current a11y snapshot and return matching refs. " +
+    "Operates against the in-memory ref-cache, so a prior browser_read or browser_quick_read on the same tab is required. " +
+    "Returns LOCATOR_NOT_FOUND when nothing matches; the playbook executor polls + refreshes the snapshot to handle dynamic UIs. " +
+    'REQUIRED ARGUMENTS: {"tab_id": "<id>", "locator": {<descriptor>}}.',
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["tab_id", "locator"] as const,
+    properties: {
+      tab_id: tabIdSchema,
+      locator: locatorInputSchema,
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["matches", "used_snapshot"] as const,
+    properties: {
+      matches: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["ref", "role", "name", "selector"] as const,
+          properties: {
+            ref: { type: "integer", minimum: 1 },
+            role: { type: "string" },
+            name: { type: "string" },
+            selector: { type: "string" },
+          },
+        },
+      },
+      used_snapshot: { enum: ["current", "previous", "none"] as const },
+    },
+  },
+  action_weight: 0,
+  risky: "never",
+  errorCodes: [
+    ...BASE_CODES,
+    ...TAB_CODES,
+    "LOCATOR_NOT_FOUND",
+    "LOCATOR_AMBIGUOUS",
+    "ELEMENT_NOT_ACTIONABLE",
+  ] as const,
+} as const;
+
+// ---------------------------------------------------------------------------
 // Public catalogue
 // ---------------------------------------------------------------------------
 
@@ -2386,6 +2463,7 @@ export const TOOL_DEFS: readonly ToolDef[] = [
   memorySearch,
   memoryGet,
   memoryDelete,
+  browserLocate,
 ] as const;
 
 export const TOOL_DEF_MAP: Record<string, ToolDef> = Object.freeze(
