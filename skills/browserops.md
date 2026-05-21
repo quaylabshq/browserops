@@ -250,6 +250,30 @@ Common chord recipes:
 
 - Replays a saved procedure step-by-step, checking expected effects at each step. Halts on divergence. Use when reproducing a flaky flow for debugging, when the user wants a dry-run before committing, or as the verification step after authoring a draft.
 
+### `playbooks_search` / `playbooks_get` / `playbooks_execute` / `playbooks_resume`
+
+> **Experimental — opt-in.** Gated behind the `playbooks` feature; off by default. Tools only appear once `browserops feature enable playbooks` is run. With the feature off, ignore this section.
+
+Playbooks are a Playwright-style sibling to procedures. Same artefact (YAML, `~/browserops/playbooks/`, `meta.status: draft|trusted`), different runtime:
+
+- **Locators are descriptors**, re-resolved every step. The locator field on a step holds `{role, name, has_text, nth, ...}`; the runtime calls `browser_locate` against the live a11y tree before each dispatch.
+- **`expect:` polls.** A step's `expect:` predicate (any of `url_matches`, `text_visible`, `new_dialog`, `network_endpoint`, `value_contains`, `visual_delta_at_least`, `dom_added_min`, `console_errors_max`) is polled until match or `timeout_ms`.
+- **Per-step fallback ladder.** `fallback.strategy: strict | retry | relocate | relocate_then_llm | llm`. The `llm` paths halt with `{"status":"needs_assist","execution_id","envelope":{...}}` — inspect the envelope, then call `playbooks_resume` with a patch (`resume_with`, `insert_steps`, or `give_up`).
+
+**Calling discipline:**
+
+1. `playbooks_search(query)` — same scoring as `procedures_search`. Score ≥0.5 → run via `playbooks_execute`. Drafts hidden by default; `include_drafts:true` to see them.
+2. `playbooks_execute({name, tab_id, inputs?, strict?})` — strict mode refuses every LLM fallback even if a step declares one. Use for batch / CI / post-authoring verification before `bump_success: true`.
+3. If the result is `needs_assist`, the envelope tells you what to do:
+   - small fix (label changed): `playbooks_resume(execution_id, {kind:"resume_with", with:{locator:{...}}})`
+   - dialog/banner blocked the step: `playbooks_resume(execution_id, {kind:"insert_steps", steps:[{...}]})`
+   - genuine blocker: `playbooks_resume(execution_id, {kind:"give_up", reason})`
+4. Every patch step still flows through the playbook's `forbidden{locators, actions}` guard — your `resume_with` cannot bypass it.
+
+**Composition:** a playbook step with `do: procedure_call` runs a saved procedure in-process; `do: playbook_call` recurses into another playbook. Procedures can also call playbooks. Use this to keep leaves small and lift orchestration into playbooks.
+
+**Never save an untested playbook.** `playbooks_save({bump_success: true})` flips `draft → trusted` only after a clean strict-mode run.
+
 ### Authoring new procedures (`browserops-teach` skill)
 
 - For "learn to do X then remember it" requests, switch to the **`browserops-teach` skill** at `~/.claude/skills/browserops-teach/SKILL.md` — it owns the autonomous flow end-to-end (pre-flight reuse check, the three hard safety gates, the per-app safe-dummy registry, the in-context YAML authoring, the goal-grounded verification predicate). Don't drive the flow from this file.
