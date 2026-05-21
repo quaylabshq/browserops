@@ -103,19 +103,29 @@ export interface ExecuteParams {
   max_tool_calls?: number;
 }
 
-export function makePlaybookExecutor(wsBridge: WSBridgeLike) {
+/**
+ * Optional in-process dispatcher. When provided, the execute loop routes
+ * `procedure_call` and `playbook_call` step actions through this function
+ * instead of wsBridge — which lets a playbook compose with procedures and
+ * other playbooks without round-tripping through the extension.
+ */
+export type InProcessDispatch = (
+  toolName: string,
+  params: Record<string, unknown>,
+) => Promise<unknown>;
+
+export function makePlaybookExecutor(
+  wsBridge: WSBridgeLike,
+  inProcessDispatch?: InProcessDispatch,
+) {
   return async function executePlaybook(
     raw: Record<string, unknown>,
   ): Promise<ExecuteOutcome> {
     const params = parseParams(raw);
 
-    // Load + validate
     const playbook = await loadPlaybook(params.name);
-
-    // Substitute inputs
     const inputs = params.inputs;
 
-    // Run
     return runPlaybook({
       playbook,
       tab_id: params.tab_id,
@@ -123,6 +133,7 @@ export function makePlaybookExecutor(wsBridge: WSBridgeLike) {
       strict: params.strict ?? false,
       max_tool_calls: params.max_tool_calls ?? 25,
       wsBridge,
+      inProcessDispatch,
       step_results: [],
       start_at: 0,
       binds: {},
@@ -242,6 +253,7 @@ export interface RunPlaybookContext {
   strict: boolean;
   max_tool_calls: number;
   wsBridge: WSBridgeLike;
+  inProcessDispatch?: InProcessDispatch;
   step_results: StepResult[];
   start_at: number;
   binds: Record<string, unknown>;
@@ -472,11 +484,20 @@ async function tryStepOnce(
     };
   }
 
-  // Dispatch
+  // Dispatch — in-process for procedure_call / playbook_call when an
+  // in-process dispatcher is wired (handlers builder sets it up). Falls
+  // through to the wsBridge for browser_* primitives.
   let toolResult: unknown;
+  const isInProcessCall =
+    (step.do === "procedure_call" || step.do === "playbook_call") &&
+    ctx.inProcessDispatch !== undefined;
   try {
-    const timeoutMs = toolName === "browser_navigate" ? NAVIGATE_TIMEOUT_MS : DEFAULT_TOOL_TIMEOUT_MS;
-    toolResult = await wsBridge.callExtension(toolName, finalWith, timeoutMs);
+    if (isInProcessCall) {
+      toolResult = await ctx.inProcessDispatch!(toolName, finalWith);
+    } else {
+      const timeoutMs = toolName === "browser_navigate" ? NAVIGATE_TIMEOUT_MS : DEFAULT_TOOL_TIMEOUT_MS;
+      toolResult = await wsBridge.callExtension(toolName, finalWith, timeoutMs);
+    }
   } catch (err) {
     const code = (err as { code?: string }).code ?? "INTERNAL";
     const message = err instanceof Error ? err.message : String(err);
