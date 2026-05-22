@@ -39,6 +39,39 @@ export function collectAugmentedFields(
   const out: Array<VisualFields & { resolved: boolean }> = [];
   const vw = window.innerWidth;
   const vh = window.innerHeight;
+
+  function selectorFor(node: Element): string {
+    const parts: string[] = [];
+    let n: Element | null = node;
+    while (n !== null && n !== document.documentElement && n !== document.body) {
+      const id = n.id;
+      if (id) {
+        parts.unshift(`#${CSS.escape(id)}`);
+        break;
+      }
+      const tag = n.tagName.toLowerCase();
+      const parent: Element | null = n.parentElement;
+      if (parent !== null) {
+        const siblings = Array.from(parent.children).filter(
+          (c) => c.tagName === (n as Element).tagName,
+        );
+        if (siblings.length > 1) {
+          const idx = siblings.indexOf(n) + 1;
+          parts.unshift(`${tag}:nth-child(${idx})`);
+        } else {
+          parts.unshift(tag);
+        }
+      } else {
+        parts.unshift(tag);
+      }
+      n = n.parentElement;
+    }
+    return parts.length > 0 ? parts.join(" > ") : node.tagName.toLowerCase();
+  }
+
+  // Occlusion via elementFromPoint is O(visible nodes); cap so wildly long
+  // a11y trees don't pay 10k forced-layouts.
+  let occlusionsRemaining = 200;
   for (const sel of selectors) {
     const el = document.querySelector(sel);
     if (el === null) {
@@ -73,12 +106,24 @@ export function collectAugmentedFields(
       bounds.y + bounds.h >= 0 &&
       bounds.x <= vw &&
       bounds.y <= vh;
+    let occluded_by: string | null = null;
+    if (visible && in_viewport && occlusionsRemaining > 0 && bounds !== null) {
+      occlusionsRemaining -= 1;
+      const cx = bounds.x + bounds.w / 2;
+      const cy = bounds.y + bounds.h / 2;
+      if (cx >= 0 && cy >= 0 && cx <= vw && cy <= vh) {
+        const hit = document.elementFromPoint(cx, cy);
+        if (hit !== null && hit !== el && !el.contains(hit)) {
+          occluded_by = selectorFor(hit);
+        }
+      }
+    }
     out.push({
       resolved: true,
       bounds,
       visible,
       in_viewport,
-      occluded_by: null,
+      occluded_by,
       bg_color: null,
       fg_color: null,
       opacity: isFinite(opacity) ? opacity : 1,
