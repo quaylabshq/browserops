@@ -747,7 +747,7 @@ representation given page characteristics and intent.
   calls.
 - **Files**: `packages/extension/src/lib/a11y-augment.ts`
 - **Commit**: `feat(extension): attach bounds to a11y nodes via batched DOM lookup`
-- [ ] Done
+- [x] Done
 
 #### 3.1.3 — Visibility + in_viewport flags
 
