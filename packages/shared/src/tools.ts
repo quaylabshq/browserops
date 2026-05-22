@@ -1200,14 +1200,23 @@ const scroll: ToolDef = {
 const hover: ToolDef = {
   name: "browser_hover",
   description:
-    "Move the synthetic mouse over an element identified by ref (fires CSS :hover and pointer events). Response includes a `page_effect` envelope describing what changed during the action window.",
+    "Move the synthetic mouse over an element identified by ref (fires CSS :hover and pointer events). Also accepts (x, y) coords with `coord_space` like browser_click_at — useful for hovering over canvas / SoM-labeled regions. Response includes a `page_effect` envelope describing what changed during the action window.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
-    required: ["tab_id", "ref"] as const,
+    required: ["tab_id"] as const,
     properties: {
       tab_id: tabIdSchema,
       ref: refSchema,
+      x: { type: "number", minimum: 0 },
+      y: { type: "number", minimum: 0 },
+      coord_space: {
+        description:
+          "Coordinate space for x,y. 'css' (default) treats them as CSS pixels relative to the viewport. 'screenshot:<token>' treats them as pixels inside the screenshot identified by the token.",
+        type: "string",
+        pattern: "^(css|screenshot:.+)$",
+        default: "css",
+      },
     },
   },
   outputSchema: {
