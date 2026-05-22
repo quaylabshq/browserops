@@ -756,7 +756,7 @@ representation given page characteristics and intent.
   opacity > 0.01. `in_viewport` = bounds intersect viewport rect.
 - **Files**: same module.
 - **Commit**: `feat(extension): attach visibility and in_viewport flags to a11y nodes`
-- [ ] Done
+- [x] Done
 
 #### 3.1.4 — Occlusion check via elementFromPoint
 
