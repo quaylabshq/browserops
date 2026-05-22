@@ -671,7 +671,7 @@ translation.
 - **Files**: same handler; small content-script helper.
 - **Verify**: `hit_element` matches the visually targeted element.
 - **Commit**: `feat(extension): report hit_element on browser_click_at`
-- [ ] Done
+- [x] Done
 
 #### 2.3.4 — Mirror coord_space + translation in `browser_hover`
 

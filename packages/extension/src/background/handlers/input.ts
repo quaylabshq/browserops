@@ -1883,6 +1883,48 @@ function injectedAutoDismiss(targetSelector: string): {
   return { dismissed: false, occluder_type, close_candidates };
 }
 
+function injectedElementAtPoint(
+  x: number,
+  y: number,
+): { tag: string; role: string; name: string; ref: string } | null {
+  const el = document.elementFromPoint(x, y) as HTMLElement | null;
+  if (el === null) return null;
+  function selectorFor(node: Element): string {
+    const parts: string[] = [];
+    let n: Element | null = node;
+    while (n !== null && n !== document.documentElement && n !== document.body) {
+      const id = n.id;
+      if (id) {
+        parts.unshift(`#${CSS.escape(id)}`);
+        break;
+      }
+      const tag = n.tagName.toLowerCase();
+      const parent: Element | null = n.parentElement;
+      if (parent !== null) {
+        const siblings = Array.from(parent.children).filter(
+          (c) => c.tagName === (n as Element).tagName,
+        );
+        if (siblings.length > 1) {
+          const idx = siblings.indexOf(n) + 1;
+          parts.unshift(`${tag}:nth-child(${idx})`);
+        } else {
+          parts.unshift(tag);
+        }
+      } else {
+        parts.unshift(tag);
+      }
+      n = n.parentElement;
+    }
+    return parts.length > 0 ? parts.join(" > ") : node.tagName.toLowerCase();
+  }
+  return {
+    tag: el.tagName.toLowerCase(),
+    role: el.getAttribute("role") ?? "",
+    name: (el.getAttribute("aria-label") ?? el.textContent ?? "").trim().slice(0, 80),
+    ref: selectorFor(el),
+  };
+}
+
 function injectedClickAtPoint(
   x: number,
   y: number,
@@ -2089,7 +2131,13 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
     "browser_click_at",
     async (
       raw,
-    ): Promise<{ clicked: true; x: number; y: number; effect: Effect }> => {
+    ): Promise<{
+      clicked: true;
+      x: number;
+      y: number;
+      effect: Effect;
+      hit_element?: { tag: string; role: string; name: string; ref: string };
+    }> => {
       const params = parseClickAt(raw);
       const chromeId = resolveChromeId(tabIdMap, params.tab_id);
       const buttonName = params.button ?? "left";
@@ -2099,14 +2147,31 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       const { result, effect } = await captureEffect(chromeId, async () => {
         if (cdp.isPersistent(chromeId)) {
           await cdpClick(cdp, chromeId, cssX, cssY, buttonName, modifierFlags(modifiers));
-          return { clicked: true as const, x: cssX, y: cssY };
+        } else {
+          await execInTab(
+            chromeId,
+            injectedClickAtPoint,
+            [cssX, cssY, button, modifierFlags(modifiers)] as const,
+          );
         }
-        await execInTab(
-          chromeId,
-          injectedClickAtPoint,
-          [cssX, cssY, button, modifierFlags(modifiers)] as const,
-        );
-        return { clicked: true as const, x: cssX, y: cssY };
+        let hit: { tag: string; role: string; name: string; ref: string } | null = null;
+        try {
+          hit = await execInTab(chromeId, injectedElementAtPoint, [cssX, cssY] as const);
+        } catch (err) {
+          console.warn("[browserops] hit_element capture failed:", err);
+        }
+        const inner: {
+          clicked: true;
+          x: number;
+          y: number;
+          hit_element?: { tag: string; role: string; name: string; ref: string };
+        } = {
+          clicked: true,
+          x: cssX,
+          y: cssY,
+        };
+        if (hit !== null) inner.hit_element = hit;
+        return inner;
       });
       return { ...result, effect };
     },
