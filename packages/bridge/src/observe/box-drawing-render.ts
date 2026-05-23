@@ -82,10 +82,23 @@ function groupByLandmark(
   return out;
 }
 
+function describeLayout(n: BoxDrawingNode): string {
+  const d = n.display ?? "";
+  if (d === "flex" || d === "inline-flex") {
+    const dir = n.flex_direction ?? "row";
+    return ` [flex ${dir}]`;
+  }
+  if (d === "grid" || d === "inline-grid") {
+    return " [grid]";
+  }
+  return "";
+}
+
 function renderLandmarkHeader(group: LandmarkGroup): string {
+  const layoutHint = group.nodes.length > 0 ? describeLayout(group.nodes[0]!) : "";
   const label = group.name !== ""
-    ? `${group.role.toUpperCase()}: ${group.name}`
-    : group.role.toUpperCase();
+    ? `${group.role.toUpperCase()}${layoutHint}: ${group.name}`
+    : `${group.role.toUpperCase()}${layoutHint}`;
   return `┌── ${label} ${"─".repeat(Math.max(0, 60 - label.length))}┐`;
 }
 
