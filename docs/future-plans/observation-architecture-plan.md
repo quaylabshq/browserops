@@ -840,7 +840,7 @@ representation given page characteristics and intent.
   inline ref token. Containers are box-drawn with title bar.
 - **Files**: same.
 - **Commit**: `feat(bridge): emit text rendering with inline ref tokens`
-- [ ] Done
+- [x] Done
 
 #### 3.2.5 — ASCII-table renderer for `role=table` / `role=grid`
 
