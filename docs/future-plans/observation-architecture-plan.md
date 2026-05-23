@@ -785,7 +785,7 @@ representation given page characteristics and intent.
 - **Files**: `packages/shared/src/tools.ts`,
   `packages/extension/src/background/handlers/read.ts`
 - **Commit**: `feat(extension): wire a11y augmentation into browser_read`
-- [ ] Done
+- [x] Done
 
 #### 3.1.7 — Hook augmentation into `browser_quick_read`
 
