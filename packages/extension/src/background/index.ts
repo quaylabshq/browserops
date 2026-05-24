@@ -89,7 +89,7 @@ registerTabHandlers(router, {
 registerNavigationHandlers(router, { tabIdMap: tabIdToChromeId, refCache, network, cdp });
 registerScreenshotHandler(router, { tabIdMap: tabIdToChromeId });
 registerReadHandler(router, { tabIdMap: tabIdToChromeId, refCache });
-registerObserveHandler(router, { tabIdMap: tabIdToChromeId });
+registerObserveHandler(router, { tabIdMap: tabIdToChromeId, refCache });
 registerInputHandlers(router, { tabIdMap: tabIdToChromeId, refCache, cdp, network });
 registerSafetyHandler(router, { restoreBadge: () => setBadge(currentConnected) });
 
