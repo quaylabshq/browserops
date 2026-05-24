@@ -31,6 +31,8 @@ import type {
 import { TOOL_DEF_MAP } from "@browserops/shared";
 import { DEFAULT_TOOL_TIMEOUT_MS, NAVIGATE_TIMEOUT_MS } from "@browserops/shared";
 import { isLocatorEmpty } from "@browserops/shared";
+import { classifyLocator } from "@browserops/shared";
+import type { Locator, PlaybookHealthDef } from "@browserops/shared";
 
 import type { WSBridgeLike } from "../mcp-server.js";
 
@@ -48,6 +50,9 @@ import {
 import type { StepResult, DivergenceInfo } from "./execute-types.js";
 import { createState, type ExecutionState } from "./state.js";
 import { applyRetry, applyRelocate } from "./fallback.js";
+import { emptyHealth, recordResolution } from "./health.js";
+import { mergeHealthIntoPlaybookYaml } from "./health-merge.js";
+import { writePlaybookYamlAtomic } from "./store.js";
 
 // ---------------------------------------------------------------------------
 // Result types
@@ -207,6 +212,31 @@ function parseParams(raw: Record<string, unknown>): ParsedExecuteParams {
   return result;
 }
 
+/**
+ * Best-effort write-back of accumulated drift health into the playbook
+ * YAML's meta.health. Swallows errors — health is auxiliary; a failed
+ * disk write must not fail the run.
+ */
+async function flushHealth(
+  playbookName: string,
+  health: PlaybookHealthDef,
+): Promise<void> {
+  if (Object.keys(health.steps).length === 0) return;
+  try {
+    const root = playbooksRoot();
+    const manifest = await ensureIndex(root);
+    const entry = manifest.playbooks[playbookName];
+    if (!entry) return;
+    const absPath = path.join(root, entry.path);
+    const text = await readPlaybookYaml(absPath);
+    const merged = mergeHealthIntoPlaybookYaml(text, health);
+    if (merged === text) return;
+    await writePlaybookYamlAtomic(absPath, merged);
+  } catch {
+    // Health write-back is best-effort.
+  }
+}
+
 async function loadPlaybook(name: string): Promise<PlaybookDef> {
   const root = playbooksRoot();
   const manifest = await ensureIndex(root);
@@ -275,6 +305,13 @@ export async function runPlaybook(
 
   const stepResults = ctx.step_results;
 
+  // Per-run health accumulator. Folded back into the on-disk playbook's
+  // meta.health when the run terminates (any of completed / halted /
+  // needs_assist / verify-failed). Health updates are best-effort — a
+  // disk write failure does not fail the run.
+  const nowIso = new Date().toISOString();
+  let healthAccum: PlaybookHealthDef = emptyHealth(nowIso);
+
   for (let i = ctx.start_at; i < playbook.steps.length; i++) {
     const step = playbook.steps[i]!;
 
@@ -296,10 +333,11 @@ export async function runPlaybook(
         resolved_by: "halted",
         warnings: [forbiddenCheck.reason ?? "forbidden"],
       });
+      await flushHealth(playbook.name, healthAccum);
       return haltedOutcome(stepResults, div, ctx.used_llm_fallback);
     }
 
-    const { ok, divergence, observation, attempts, resolvedBy } =
+    const { ok, divergence, observation, attempts, resolvedBy, resolution } =
       await tryStepOnce(ctx, step, i);
 
     if (!ok) {
@@ -310,6 +348,19 @@ export async function runPlaybook(
         stepResults.push(fallbackResult.stepResult);
         if (typeof step.bind === "string" && step.bind.length > 0 && fallbackResult.observation) {
           ctx.binds[step.bind] = fallbackResult.observation;
+        }
+        if (fallbackResult.resolution) {
+          healthAccum = recordResolution(
+            healthAccum,
+            step.id,
+            {
+              matched_ref: fallbackResult.resolution.matched_ref,
+              match_count: fallbackResult.resolution.match_count,
+              tier: classifyLocator(fallbackResult.resolution.locator_used) ?? 3,
+              used_relocate: fallbackResult.usedRelocate === true,
+            },
+            nowIso,
+          );
         }
         continue;
       }
@@ -329,6 +380,7 @@ export async function runPlaybook(
           budget: ctx.budget,
           used_llm_fallback: ctx.used_llm_fallback,
         });
+        await flushHealth(playbook.name, healthAccum);
         return {
           completed: false,
           status: "needs_assist",
@@ -341,6 +393,7 @@ export async function runPlaybook(
         };
       }
       stepResults.push(fallbackResult.stepResult);
+      await flushHealth(playbook.name, healthAccum);
       return haltedOutcome(stepResults, fallbackResult.divergence, ctx.used_llm_fallback);
     }
 
@@ -355,6 +408,19 @@ export async function runPlaybook(
     if (typeof step.bind === "string" && step.bind.length > 0 && observation) {
       ctx.binds[step.bind] = observation;
     }
+    if (resolution) {
+      healthAccum = recordResolution(
+        healthAccum,
+        step.id,
+        {
+          matched_ref: resolution.matched_ref,
+          match_count: resolution.match_count,
+          tier: classifyLocator(resolution.locator_used) ?? 3,
+          used_relocate: false,
+        },
+        nowIso,
+      );
+    }
     void inputs;
   }
 
@@ -365,6 +431,7 @@ export async function runPlaybook(
     const verify = await pollExpect(playbook.verify, async () => obs);
     verifyPassed = verify.matched;
     if (!verify.matched) {
+      await flushHealth(playbook.name, healthAccum);
       return {
         completed: false,
         status: "halted",
@@ -381,6 +448,7 @@ export async function runPlaybook(
     }
   }
 
+  await flushHealth(playbook.name, healthAccum);
   return {
     completed: true,
     status: "completed",
@@ -401,6 +469,12 @@ interface StepAttemptResult {
   observation?: unknown;
   attempts: number;
   resolvedBy?: StepResult["resolved_by"];
+  /** Health snapshot from the resolve — only present when step.locator was used. */
+  resolution?: {
+    matched_ref: number;
+    match_count: number;
+    locator_used: Locator;
+  };
 }
 
 async function tryStepOnce(
@@ -413,6 +487,7 @@ async function tryStepOnce(
   // Resolve locator → ref if step.locator is present and non-empty.
   let resolvedRef: number | undefined;
   let resolvedLocator: unknown = step.locator;
+  let resolution: StepAttemptResult["resolution"] | undefined;
 
   if (step.locator !== undefined && !isLocatorEmpty(step.locator)) {
     const substituted = substituteVars(step.locator, inputs, binds);
@@ -462,6 +537,11 @@ async function tryStepOnce(
         };
       }
       resolvedRef = first.ref;
+      resolution = {
+        matched_ref: first.ref,
+        match_count: locateResult.matches.length,
+        locator_used: substituted as Locator,
+      };
     } catch (err) {
       const code = (err as { code?: string }).code ?? "INTERNAL";
       const message = err instanceof Error ? err.message : String(err);
@@ -561,6 +641,7 @@ async function tryStepOnce(
     attempts: 1,
     observation: toolResult,
     resolvedBy: "first_try",
+    ...(resolution ? { resolution } : {}),
   };
 }
 
@@ -574,6 +655,8 @@ interface FallbackResult {
   divergence: DivergenceInfo;
   stepResult: StepResult;
   observation?: unknown;
+  resolution?: StepAttemptResult["resolution"];
+  usedRelocate?: boolean;
 }
 
 function resolveStrategy(
@@ -645,6 +728,8 @@ async function tryFallback(
             attempts: totalAttempts,
             resolved_by: "retry",
           },
+          ...(next.resolution ? { resolution: next.resolution } : {}),
+          usedRelocate: false,
         };
       }
       if (next.divergence) lastDivergence = next.divergence;
@@ -685,6 +770,8 @@ async function tryFallback(
               attempts: 2,
               resolved_by: "relocate",
             },
+            ...(next.resolution ? { resolution: next.resolution } : {}),
+            usedRelocate: true,
           };
         }
         if (next.divergence) lastDivergence = next.divergence;
