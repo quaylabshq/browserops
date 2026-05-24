@@ -41,6 +41,40 @@ export function resolveLocator(
     matches = matches.filter((e) => matchString(e.name, loc.name!));
   }
 
+  // ---- Tier-1 attribute filters ----
+  // aria_label → attrs["aria-label"]
+  if (loc.aria_label !== undefined && loc.aria_label !== "") {
+    matches = matches.filter((e) =>
+      matchAttr(e, "aria-label", loc.aria_label!),
+    );
+  }
+
+  // data_testid → any of attrs["data-testid" | "data-test" | "data-qa"]
+  if (loc.data_testid !== undefined && loc.data_testid !== "") {
+    matches = matches.filter(
+      (e) =>
+        matchAttr(e, "data-testid", loc.data_testid!) ||
+        matchAttr(e, "data-test", loc.data_testid!) ||
+        matchAttr(e, "data-qa", loc.data_testid!),
+    );
+  }
+
+  // href → attrs["href"]
+  if (loc.href !== undefined && loc.href !== "") {
+    matches = matches.filter((e) => matchAttr(e, "href", loc.href!));
+  }
+
+  // attr → attrs[attr.name] matches attr.value (regex or substring)
+  if (
+    loc.attr !== undefined &&
+    typeof loc.attr.name === "string" &&
+    loc.attr.name.length > 0
+  ) {
+    const key = loc.attr.name;
+    const val = loc.attr.value;
+    matches = matches.filter((e) => matchAttr(e, key, val));
+  }
+
   if (loc.has_text !== undefined && loc.has_text !== "") {
     // For `has_text` we approximate descendant-text by checking the
     // entry's accessible name PLUS any text attr. Without a parent/
@@ -93,4 +127,16 @@ export function matchString(value: string, pattern: string): boolean {
 function collectAttrText(e: RefEntry): string {
   if (!e.attrs) return "";
   return Object.values(e.attrs).filter((v) => typeof v === "string").join(" ");
+}
+
+/**
+ * Match `pattern` against a single attribute on `e`. Returns false if the
+ * entry has no attrs map or the attr is absent. Pattern matching uses the
+ * same regex/substring rules as `matchString`.
+ */
+function matchAttr(e: RefEntry, key: string, pattern: string): boolean {
+  if (!e.attrs) return false;
+  const v = e.attrs[key];
+  if (typeof v !== "string" || v.length === 0) return false;
+  return matchString(v, pattern);
 }
