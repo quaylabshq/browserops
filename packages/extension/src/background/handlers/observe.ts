@@ -135,6 +135,63 @@ function injectedObserveWalk(
   return out;
 }
 
+interface VisualPayload {
+  image_base64: string;
+  width: number;
+  height: number;
+  format: "jpeg";
+  scale: number;
+}
+
+async function modeVisual(
+  chromeTabId: number,
+  page_meta: PageMeta,
+): Promise<{ representation: "screenshot"; payload: VisualPayload; ssW: number; ssH: number }> {
+  const tab = await chrome.tabs.get(chromeTabId);
+  // chrome.tabs.captureVisibleTab needs the window id; the tab's windowId
+  // is the right argument.
+  const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, {
+    format: "jpeg",
+    quality: 50,
+  });
+  if (typeof dataUrl !== "string" || dataUrl.length === 0) {
+    throw makeError("INTERNAL", "captureVisibleTab returned empty payload");
+  }
+  const comma = dataUrl.indexOf(",");
+  const base64 = comma === -1 ? dataUrl : dataUrl.slice(comma + 1);
+  // Decode + downscale to 768px longest edge for the action-grade default.
+  const blob = await (await fetch(`data:image/jpeg;base64,${base64}`)).blob();
+  const bitmap = await createImageBitmap(blob);
+  const longest = Math.max(bitmap.width, bitmap.height);
+  const scale = longest > 768 ? 768 / longest : 1;
+  const w = Math.max(1, Math.round(bitmap.width * scale));
+  const h = Math.max(1, Math.round(bitmap.height * scale));
+  const canvas = new OffscreenCanvas(w, h);
+  const ctx = canvas.getContext("2d");
+  if (ctx === null) {
+    bitmap.close();
+    throw makeError("INTERNAL", "OffscreenCanvas 2d context unavailable");
+  }
+  ctx.drawImage(bitmap, 0, 0, w, h);
+  bitmap.close();
+  const outBlob = await canvas.convertToBlob({ type: "image/jpeg", quality: 0.5 });
+  const buf = await outBlob.arrayBuffer();
+  const bytes = new Uint8Array(buf);
+  let bin = "";
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    bin += String.fromCharCode(...bytes.subarray(i, Math.min(i + CHUNK, bytes.length)));
+  }
+  const finalBase64 = btoa(bin);
+  const cssW = page_meta.viewport_dims.w;
+  return {
+    representation: "screenshot",
+    payload: { image_base64: finalBase64, width: w, height: h, format: "jpeg", scale: cssW > 0 ? w / cssW : 1 },
+    ssW: w,
+    ssH: h,
+  };
+}
+
 async function modeText(
   chromeTabId: number,
   scopeMode: "viewport" | "document",
@@ -207,6 +264,25 @@ export function registerObserveHandler(router: Router, opts: ObserveOpts): void 
         representation,
       });
       return { representation, observation_token, payload, page_meta };
+    }
+
+    if (mode === "visual") {
+      const v = await modeVisual(chromeTabId, page_meta);
+      const observation_token = cacheObservation({
+        tab_id: chromeTabId,
+        css_pixel_dims: page_meta.viewport_dims,
+        screenshot_dims: { w: v.ssW, h: v.ssH },
+        scale: v.payload.scale,
+        scroll: page_meta.scroll,
+        dpr: page_meta.dpr,
+        representation: v.representation,
+      });
+      return {
+        representation: v.representation,
+        observation_token,
+        payload: v.payload,
+        page_meta,
+      };
     }
 
     // Other modes wired in subsequent substeps. For now route to text.

@@ -901,7 +901,7 @@ representation given page characteristics and intent.
   dims. Optionally adds SoM overlay when the agent flags
   `mode_options.som` (extension to schema).
 - **Commit**: `feat(extension): implement visual mode in browser_observe`
-- [ ] Done
+- [x] Done
 
 #### 3.3.5 — Mode: structure (box-drawing summary)
 
