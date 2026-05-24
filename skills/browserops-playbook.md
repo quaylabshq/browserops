@@ -91,21 +91,38 @@ verification value, default to **send-to-self** for messaging surfaces.
    match by domain. New tab only if nothing's open.
 
 2. Probe page state to derive locators. The point of probing is NOT to
-   capture refs (which won't survive replay) but to learn what role + name
-   pairs the app exposes for each control you'll need.
-     - Call browser_observe({mode: "text"}) once to get the augmented a11y
-       tree. Look at the role + accessible-name of every control you'll
-       touch.
-     - For each control, decide the locator shape:
-         simple, unique label    → { role: "<role>", name: "<exact>" }
-         label varies slightly   → { role: "<role>", name: "/<substring>/i" }
-         several similar buttons → add has_text_not / nth to disambiguate
-         anchored exact          → name: "/^<word>$/i"
-     - Capture: { open_compose, fill_to, fill_subject, fill_body, send }
-       and any per-step locator.
-   Cap probe at ~5 browser_* calls. If you're past that without clear
-   locators, the UI may not be addressable — fall back to a procedure
-   (use browserops-teach instead) and tell the user.
+   capture refs (which won't survive replay) but to learn the STABLE
+   ATTRIBUTES each control exposes — the more author/contract-controlled
+   the signal, the longer the locator survives.
+     - Call browser_read({mode: "a11y_tree", augment: true}) once to
+       populate the ref-cache with role + accessible-name + tier-1 attrs
+       (aria-label, data-testid, href, form-control name).
+     - For each control you'll touch, get its ref from the read, then
+       call browser_propose_locator({tab_id, ref}). The proposer returns
+       the SMALLEST, HIGHEST-TIER descriptor that resolves to exactly
+       that element:
+         { unique: true, locator: {...}, tier: 1|2|3, fragile: bool,
+           warnings: [...], candidates: [...] }
+     - Use the proposed locator verbatim in your step's `locator:` field.
+       Don't second-guess — the proposer measured uniqueness against
+       the live snapshot; you can't beat that by eyeballing.
+     - If tier === 3 (fragile, fell through to nth) OR unique === false:
+       the page lacks stable signals for this control. Either: (a) ask
+       the user to inject a data-testid, (b) reach for a procedure step
+       with `browser_click_by_text` instead of a playbook step (use
+       browserops-teach), or (c) declare fallback.strategy:
+       relocate_then_llm so a future LLM patch can re-resolve.
+   Cap probe at ~5 browser_* calls (one read + one propose per control).
+   If propose returns tier-3 for every control, the UI isn't
+   playbook-friendly — fall back to a procedure.
+
+   Stability tiers (what the proposer prefers, in order):
+     Tier 1: aria_label, data_testid, href, attr{name,value}, role, in_frame
+       → author/contract-controlled, survives rebuilds
+     Tier 2: name, has_text, has_text_not, near
+       → text/layout-derived, churns when copy or DOM order changes
+     Tier 3: nth
+       → fragile; only emitted as last resort, ALWAYS flagged in warnings
 
 3. Author the playbook YAML directly in your context. Use lore priors
    plus the locator table from step 2. Schema rules to follow:
@@ -158,6 +175,15 @@ verification value, default to **send-to-self** for messaging surfaces.
    → playbook flips to status:trusted and becomes discoverable via
    playbooks_search by default.
 
+   If the save response carries `demoted: true` plus `demote_reason`, the
+   runtime refused the trusted flip because drift health from prior runs
+   already degraded past threshold (relocate-rate > 0.4 across ≥5 runs,
+   target_changed > 0 across ≥3 runs, or tier-3 + relocate-rate > 0.1).
+   In that case: re-author the failing step's locator (use
+   browser_propose_locator on a fresh snapshot — descriptors that
+   worked last week may not be unique anymore), re-verify, then bump.
+   Do NOT report success — surface the demote_reason in the final report.
+
 7. On fail: edit the YAML, re-execute. Up to ~3 self-correction attempts.
    If still failing after 3, write a structured failure note to lore
    and tell the user what blocked you. Do not ask them to demonstrate;
@@ -193,10 +219,19 @@ get user pushback before the playbook ships.
 
 ## 5. Don'ts (failure modes specific to playbooks)
 
+- **Don't hand-write a locator when browser_propose_locator would have
+  proposed a better one.** The proposer reads the live snapshot and
+  picks the smallest tier-1 descriptor that resolves uniquely. Your
+  eyeballed `{role: "button", name: "Send"}` is probably tier 2 — let
+  the proposer find the `aria_label` or `data_testid` that's tier 1.
+- **Don't author a tier-3 (nth) locator without flagging it.** If
+  browser_propose_locator returns `fragile: true`, either: refactor
+  the step (add `near:`, `has_text:`, or a `forbidden:` exclusion of
+  neighbouring elements), inject a data-testid, or set
+  `fallback.strategy: relocate_then_llm` so the runtime can recover.
 - **Don't add a manual `do: observe` step right before a locator step.**
   The executor auto-primes via browser_read internally; a manual prime
-  is redundant. (This used to be required pre-auto-prime — old playbooks
-  with prime steps still work, but new authoring should omit them.)
+  is redundant.
 - **Don't bake `ref: <number>` into a playbook step.** Refs are a
   procedures concept and don't survive replay. Playbook steps express
   their target via `locator:` and let the runtime resolve fresh.
@@ -227,16 +262,18 @@ get user pushback before the playbook ships.
 For a flow against a known SaaS app with priors in lore:
 
 - 1 `playbooks_search` + 1 `procedures_search` (pre-flight reuse check)
-- 1-3 `browser_observe` to confirm role/name pairs for each control
+- 1 `browser_read({mode: "a11y_tree", augment: true})` to seed the snapshot
+- N `browser_propose_locator` (one per control you'll touch)
 - 1 `playbooks_save` (draft)
 - 1 `playbooks_execute({strict: true})` to verify
 - 1 external-API predicate call
 - 1 `playbooks_save({overwrite: true, bump_success: true})` to promote
 - 1 final report
 
-That's <12 tool calls for the happy path on a known app. More than 20
-is the signal that priors are missing from memory, the locator
-descriptors are too loose, or the verify predicate isn't tight.
+For a 5-step flow that's <14 tool calls on a known app. More than 25
+is the signal that priors are missing, the proposer kept returning
+fragile descriptors (the UI lacks stable signals), or the verify
+predicate isn't tight.
 
 For a brand-new app with no lore: budget ~25-35 calls (explore +
 author + verify + save + lore write). After 2-3 successful runs against
@@ -250,10 +287,10 @@ that app, the budget collapses to the happy-path number above.
 |---|---|---|
 | Output artefact | procedure YAML | playbook YAML |
 | Step shape | `{action, with, bind, expected_effect}` | `{do, locator, with, expect, fallback}` |
-| How targets are addressed | refs from `browser_quick_read`, bound via `bind:` | semantic locator (`role`, `name`, `has_text`) |
+| How targets are addressed | refs from `browser_quick_read`, bound via `bind:` | semantic locator picked by `browser_propose_locator` — tier-1 fields preferred (`aria_label`, `data_testid`, `href`, `attr`) |
 | Drift resilience | low — refs stale on UI changes | high — locator re-resolves every step |
 | Verification step | `procedures_execute` (one-shot expected_effect) | `playbooks_execute({strict: true})` (polling expect + verify block) |
-| Promotion rule | clean run with `bump_success: true` | clean **strict-mode** run with `bump_success: true`; refused if any step used LLM fallback |
+| Promotion rule | clean run with `bump_success: true` | clean **strict-mode** run with `bump_success: true`; refused if any step used LLM fallback OR if `meta.health` drift exceeds threshold (`demoted: true` in save result) |
 | LLM fallback inside artefact | no (`on_fail:` is advisory) | yes (per-step `fallback.strategy`) |
 | Safety bar | per-procedure `risky: true` flag | per-playbook `forbidden{locators, actions}` block enforced on every dispatch including LLM patches |
 
