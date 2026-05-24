@@ -20,6 +20,10 @@ export interface ObservationMetadata {
   dpr: number;
   created_at: number;
   representation: string;
+  // Optional payload snapshot used by browser_observe mode=diff. Kept small
+  // (no images, no big string blobs) — diffing across full screenshots is
+  // out of scope.
+  diff_payload?: unknown;
 }
 
 const cache = new Map<string, ObservationMetadata>();
