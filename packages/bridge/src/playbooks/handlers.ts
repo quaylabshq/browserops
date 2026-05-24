@@ -29,6 +29,7 @@ import {
 } from "./index-builder.js";
 import { validatePlaybook } from "./validator.js";
 import { search, type PlaybookSearchOptions } from "./search.js";
+import { shouldDemoteFromHealth } from "./health.js";
 import { makePlaybookExecutor, type InProcessDispatch } from "./execute.js";
 import { makeResumeHandler } from "./resume.js";
 import type { WSBridgeLike } from "../mcp-server.js";
@@ -146,6 +147,7 @@ interface PlaybookMeta {
   created: string;
   last_verified: string;
   status: "draft" | "trusted";
+  health?: import("@browserops/shared").PlaybookHealthDef;
 }
 
 export interface GetResult {
@@ -172,13 +174,17 @@ function extractMeta(parsed: unknown, defaultTs: string): PlaybookMeta {
   const m = (parsed as Record<string, unknown>)["meta"] as Record<string, unknown>;
   const status: "draft" | "trusted" =
     m["status"] === "trusted" ? "trusted" : "draft";
-  return {
+  const out: PlaybookMeta = {
     version: typeof m["version"] === "number" ? m["version"] : 1,
     created: typeof m["created"] === "string" ? m["created"] : defaultTs,
     last_verified:
       typeof m["last_verified"] === "string" ? m["last_verified"] : defaultTs,
     status,
   };
+  if (typeof m["health"] === "object" && m["health"] !== null) {
+    out.health = m["health"] as import("@browserops/shared").PlaybookHealthDef;
+  }
+  return out;
 }
 
 export async function handleGet(
@@ -226,6 +232,11 @@ export interface SaveResult {
   saved: true;
   path: string;
   version: number;
+  /** When true, the requested bump_success was overridden because drift
+   * health flagged the playbook for demotion. The save persists as
+   * status:draft and the warning message names the failing signal. */
+  demoted?: true;
+  demote_reason?: string;
 }
 
 export async function handleSave(
@@ -362,6 +373,7 @@ export async function handleSave(
   // Compute meta
   const now = new Date().toISOString();
   let newMeta: PlaybookMeta;
+  let demoteReason: string | undefined;
 
   if (fileExists && overwrite) {
     let priorMeta: PlaybookMeta;
@@ -384,12 +396,26 @@ export async function handleSave(
         status: "draft",
       };
     }
+    // Auto-demote: if the prior health flags degraded drift, refuse the
+    // bump_success → trusted flip. The save still proceeds, but as draft.
+    const wantsBump = bumpSuccess;
+    const shouldDemote = wantsBump && shouldDemoteFromHealth(priorMeta.health);
+    if (shouldDemote) {
+      demoteReason =
+        "drift health degraded since last verify — re-author the failing step's locator and verify again before bumping trusted";
+    }
     newMeta = {
       version: priorMeta.version + 1,
       created: priorMeta.created,
       last_verified: now,
-      status: bumpSuccess ? "trusted" : priorMeta.status,
+      status: shouldDemote
+        ? "draft"
+        : wantsBump
+          ? "trusted"
+          : priorMeta.status,
     };
+    // Preserve health across overwrites — it's executor-managed.
+    if (priorMeta.health !== undefined) newMeta.health = priorMeta.health;
   } else {
     newMeta = {
       version: 1,
@@ -407,7 +433,12 @@ export async function handleSave(
   const newManifest = await buildIndex(playbooksRoot());
   await writeIndex(playbooksRoot(), newManifest);
 
-  return { saved: true, path: relPath, version: newMeta.version };
+  const result: SaveResult = { saved: true, path: relPath, version: newMeta.version };
+  if (demoteReason !== undefined) {
+    result.demoted = true;
+    result.demote_reason = demoteReason;
+  }
+  return result;
 }
 
 // ---- handleDelete ----
