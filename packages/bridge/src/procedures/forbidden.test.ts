@@ -1,0 +1,69 @@
+import { describe, expect, it } from "vitest";
+import { checkForbidden } from "./forbidden.js";
+
+describe("checkForbidden", () => {
+  it("undefined block always allows", () => {
+    expect(
+      checkForbidden(undefined, { action: "click", locator: { name: "Delete" } })
+        .allowed,
+    ).toBe(true);
+  });
+
+  it("blocks forbidden action", () => {
+    const r = checkForbidden(
+      { actions: ["browser_execute_js"] },
+      { action: "browser_execute_js", locator: undefined },
+    );
+    expect(r.allowed).toBe(false);
+    expect(r.reason).toMatch(/forbidden\.actions/);
+  });
+
+  it("allows non-listed action", () => {
+    const r = checkForbidden(
+      { actions: ["browser_execute_js"] },
+      { action: "click", locator: undefined },
+    );
+    expect(r.allowed).toBe(true);
+  });
+
+  it("blocks locator name substring overlap", () => {
+    const r = checkForbidden(
+      { locators: [{ name: "/^delete/i" }] },
+      { action: "click", locator: { role: "button", name: "Delete account" } },
+    );
+    expect(r.allowed).toBe(false);
+  });
+
+  it("blocks role + name substring", () => {
+    const r = checkForbidden(
+      { locators: [{ role: "button", name: "delete" }] },
+      { action: "click", locator: { role: "button", name: "Delete" } },
+    );
+    expect(r.allowed).toBe(false);
+  });
+
+  it("allows when role mismatches denied role", () => {
+    const r = checkForbidden(
+      { locators: [{ role: "button", name: "delete" }] },
+      { action: "click", locator: { role: "link", name: "Delete" } },
+    );
+    expect(r.allowed).toBe(true);
+  });
+
+  it("refuses unknown candidate name when denied name is set", () => {
+    const r = checkForbidden(
+      { locators: [{ name: "/^delete/i" }] },
+      { action: "click", locator: { role: "button" } },
+    );
+    // candidate.name is undefined → assume overlap, refuse.
+    expect(r.allowed).toBe(false);
+  });
+
+  it("locator-only block ignores action checks", () => {
+    const r = checkForbidden(
+      { locators: [{ name: "delete" }] },
+      { action: "click", locator: { role: "button", name: "Send" } },
+    );
+    expect(r.allowed).toBe(true);
+  });
+});
