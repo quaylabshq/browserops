@@ -52,16 +52,31 @@ export type RegexLike = string;
  *
  *   1. role           — case-insensitive substring on a11y role
  *   2. name           — case-insensitive substring or regex on accessible name
- *   3. has_text       — descendant text must match
- *   4. has_text_not   — descendant text must NOT match
- *   5. in_frame       — restrict to nodes inside the given iframe
- *   6. near           — restrict to nodes within radius_px of an anchor
- *   7. scope          — viewport (default) or document
- *   8. nth            — 0-based pick among remaining matches
+ *   3. aria_label     — explicit aria-label attribute match (tier-1 stable)
+ *   4. data_testid    — data-testid / data-test / data-qa attribute (tier-1 stable)
+ *   5. href           — link href attribute (tier-1 stable)
+ *   6. attr           — generic stable-attribute escape hatch {name, value}
+ *   7. has_text       — descendant text must match
+ *   8. has_text_not   — descendant text must NOT match
+ *   9. in_frame       — restrict to nodes inside the given iframe
+ *  10. near           — restrict to nodes within radius_px of an anchor
+ *  11. scope          — viewport (default) or document
+ *  12. nth            — 0-based pick among remaining matches
+ *
+ * Tier-1 fields (`aria_label`, `data_testid`, `href`, `attr`) match against
+ * `RefEntry.attrs`. They are preferred by the uniqueness scorer because
+ * they're author/contract-controlled and stable across rebuilds.
  */
 export interface Locator {
   role?: AriaRole;
   name?: RegexLike;
+  aria_label?: RegexLike;
+  data_testid?: RegexLike;
+  href?: RegexLike;
+  attr?: {
+    name: string;
+    value: RegexLike;
+  };
   has_text?: RegexLike;
   has_text_not?: RegexLike;
   in_frame?: string;
@@ -124,6 +139,18 @@ export function locatorToCanonical(loc: Locator | undefined | null): string {
   if (typeof loc.name === "string" && loc.name.length > 0) {
     parts.push(`name=${formatRegexLike(loc.name)}`);
   }
+  if (typeof loc.aria_label === "string" && loc.aria_label.length > 0) {
+    parts.push(`aria_label=${formatRegexLike(loc.aria_label)}`);
+  }
+  if (typeof loc.data_testid === "string" && loc.data_testid.length > 0) {
+    parts.push(`data_testid=${formatRegexLike(loc.data_testid)}`);
+  }
+  if (typeof loc.href === "string" && loc.href.length > 0) {
+    parts.push(`href=${formatRegexLike(loc.href)}`);
+  }
+  if (loc.attr !== undefined && typeof loc.attr.name === "string" && loc.attr.name.length > 0) {
+    parts.push(`attr={${loc.attr.name}=${formatRegexLike(loc.attr.value)}}`);
+  }
   if (typeof loc.has_text === "string" && loc.has_text.length > 0) {
     parts.push(`has_text=${formatRegexLike(loc.has_text)}`);
   }
@@ -164,6 +191,10 @@ export function isLocatorEmpty(loc: Locator | undefined | null): boolean {
   return (
     !loc.role &&
     !loc.name &&
+    !loc.aria_label &&
+    !loc.data_testid &&
+    !loc.href &&
+    !loc.attr &&
     !loc.has_text &&
     !loc.has_text_not &&
     !loc.in_frame &&
@@ -186,6 +217,18 @@ export const LOCATOR_SCHEMA = {
   properties: {
     role: { type: "string", minLength: 1, maxLength: 40 },
     name: { type: "string", minLength: 1, maxLength: 400 },
+    aria_label: { type: "string", minLength: 1, maxLength: 400 },
+    data_testid: { type: "string", minLength: 1, maxLength: 200 },
+    href: { type: "string", minLength: 1, maxLength: 400 },
+    attr: {
+      type: "object",
+      additionalProperties: false,
+      required: ["name", "value"],
+      properties: {
+        name: { type: "string", minLength: 1, maxLength: 80 },
+        value: { type: "string", minLength: 1, maxLength: 400 },
+      },
+    },
     has_text: { type: "string", minLength: 1, maxLength: 400 },
     has_text_not: { type: "string", minLength: 1, maxLength: 400 },
     in_frame: { type: "string", minLength: 1, maxLength: 400 },

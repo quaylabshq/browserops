@@ -96,4 +96,44 @@ describe("isLocatorEmpty", () => {
     expect(isLocatorEmpty({ near: { ref: 1 } })).toBe(false);
     expect(isLocatorEmpty({ nth: 0 })).toBe(false);
   });
+
+  it("treats tier-1 fields as non-empty", () => {
+    expect(isLocatorEmpty({ aria_label: "Compose" })).toBe(false);
+    expect(isLocatorEmpty({ data_testid: "send-btn" })).toBe(false);
+    expect(isLocatorEmpty({ href: "/inbox" })).toBe(false);
+    expect(isLocatorEmpty({ attr: { name: "data-row-id", value: "/^\\d+$/" } })).toBe(false);
+  });
+});
+
+describe("tier-1 fields in locatorToCanonical", () => {
+  it("formats aria_label as quoted substring", () => {
+    const loc: Locator = { role: "button", aria_label: "Send message" };
+    expect(locatorToCanonical(loc)).toBe('button[aria_label="Send message"]');
+  });
+
+  it("formats data_testid as quoted substring", () => {
+    const loc: Locator = { data_testid: "compose-button" };
+    expect(locatorToCanonical(loc)).toBe('[data_testid="compose-button"]');
+  });
+
+  it("formats href as regex when serialised", () => {
+    const loc: Locator = { role: "link", href: "/^\\/inbox/" };
+    expect(locatorToCanonical(loc)).toBe("link[href=/^\\/inbox/]");
+  });
+
+  it("formats attr as name=value pair", () => {
+    const loc: Locator = { attr: { name: "data-row-id", value: "42" } };
+    expect(locatorToCanonical(loc)).toBe('[attr={data-row-id="42"}]');
+  });
+
+  it("combines tier-1 fields with classic fields", () => {
+    const loc: Locator = {
+      role: "button",
+      aria_label: "Send",
+      data_testid: "send-btn",
+    };
+    expect(locatorToCanonical(loc)).toBe(
+      'button[aria_label="Send",data_testid="send-btn"]',
+    );
+  });
 });
