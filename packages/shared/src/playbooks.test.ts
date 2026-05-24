@@ -172,4 +172,72 @@ describe("PLAYBOOK_SCHEMA", () => {
     const ok = validate(bad);
     expect(ok).toBe(false);
   });
+
+  describe("meta.health", () => {
+    it("accepts a meta.health block with per-step locator drift entries", () => {
+      const ok = validate({
+        ...minimalLeaf,
+        meta: {
+          version: 1,
+          created: "2026-05-24T00:00:00Z",
+          health: {
+            updated: "2026-05-24T00:00:00Z",
+            steps: {
+              s1: {
+                runs: 10,
+                relocates: 1,
+                ambiguous_resolves: 0,
+                target_changed: 0,
+                avg_match_count: 1.1,
+                last_tier: 1,
+              },
+            },
+          },
+        },
+      });
+      expect(ok).toBe(true);
+    });
+
+    it("rejects health.steps entries with negative counters", () => {
+      const bad = {
+        ...minimalLeaf,
+        meta: {
+          version: 1,
+          created: "2026-05-24T00:00:00Z",
+          health: {
+            updated: "2026-05-24T00:00:00Z",
+            steps: { s1: { runs: -1, relocates: 0, ambiguous_resolves: 0, target_changed: 0 } },
+          },
+        },
+      };
+      expect(validate(bad)).toBe(false);
+    });
+
+    it("rejects unknown fields under health.steps[stepId]", () => {
+      const bad = {
+        ...minimalLeaf,
+        meta: {
+          version: 1,
+          created: "2026-05-24T00:00:00Z",
+          health: {
+            updated: "2026-05-24T00:00:00Z",
+            steps: { s1: { runs: 1, junk: true } },
+          },
+        },
+      };
+      expect(validate(bad)).toBe(false);
+    });
+
+    it("accepts a health block with no per-step entries (freshly created)", () => {
+      const ok = validate({
+        ...minimalLeaf,
+        meta: {
+          version: 1,
+          created: "2026-05-24T00:00:00Z",
+          health: { updated: "2026-05-24T00:00:00Z", steps: {} },
+        },
+      });
+      expect(ok).toBe(true);
+    });
+  });
 });
