@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach } from "vitest";
-import type { PlaybookDef } from "@browserops/shared";
+import type { ProcedureDef } from "@browserops/shared";
 import {
   EXECUTION_TTL_MS,
   _activeStateCount,
@@ -9,10 +9,10 @@ import {
   getState,
 } from "./state.js";
 
-const playbook: PlaybookDef = {
+const procedure: ProcedureDef = {
   schema_version: 1,
   name: "demo.test",
-  description: "Test playbook",
+  description: "Test procedure",
   kind: "leaf",
   steps: [{ id: "s1", do: "navigate", with: { url: "x" } }],
 };
@@ -24,7 +24,7 @@ beforeEach(() => {
 describe("execution state", () => {
   it("createState stores and returns a fresh state", () => {
     const s = createState({
-      playbook,
+      procedure: procedure,
       tab_id: "t_1",
       inputs: {},
       paused_at: 0,
@@ -38,7 +38,7 @@ describe("execution state", () => {
 
   it("getState returns by id", () => {
     const s = createState({
-      playbook,
+      procedure: procedure,
       tab_id: "t_1",
       inputs: {},
       paused_at: 0,
@@ -51,7 +51,7 @@ describe("execution state", () => {
 
   it("dropState removes the entry", () => {
     const s = createState({
-      playbook,
+      procedure: procedure,
       tab_id: "t_1",
       inputs: {},
       paused_at: 0,
@@ -65,7 +65,7 @@ describe("execution state", () => {
 
   it("evicts entries past their TTL on access", () => {
     const s = createState({
-      playbook,
+      procedure: procedure,
       tab_id: "t_1",
       inputs: {},
       paused_at: 0,
@@ -82,7 +82,7 @@ describe("execution state", () => {
 
   it("TTL is 5 minutes by default", () => {
     const s = createState({
-      playbook,
+      procedure: procedure,
       tab_id: "t_1",
       inputs: {},
       paused_at: 0,

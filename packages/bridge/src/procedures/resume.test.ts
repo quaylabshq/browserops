@@ -3,24 +3,24 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import YAML from "yaml";
 import type { WSBridgeLike } from "../mcp-server.js";
-import { makePlaybookExecutor } from "./execute.js";
+import { makeProcedureExecutor } from "./execute.js";
 import { makeResumeHandler } from "./resume.js";
 import { _resetForTests } from "./state.js";
 
 let tmpDir: string;
-const ORIGINAL_ENV = process.env["BROWSEROPS_PLAYBOOKS_DIR"];
+const ORIGINAL_ENV = process.env["BROWSEROPS_PROCEDURES_DIR"];
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(
     path.join(import.meta.dirname ?? __dirname, ".pbres-test-"),
   );
-  process.env["BROWSEROPS_PLAYBOOKS_DIR"] = tmpDir;
+  process.env["BROWSEROPS_PROCEDURES_DIR"] = tmpDir;
   _resetForTests();
 });
 
 afterEach(async () => {
-  if (ORIGINAL_ENV === undefined) delete process.env["BROWSEROPS_PLAYBOOKS_DIR"];
-  else process.env["BROWSEROPS_PLAYBOOKS_DIR"] = ORIGINAL_ENV;
+  if (ORIGINAL_ENV === undefined) delete process.env["BROWSEROPS_PROCEDURES_DIR"];
+  else process.env["BROWSEROPS_PROCEDURES_DIR"] = ORIGINAL_ENV;
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
@@ -73,9 +73,9 @@ function emptyPageEffect() {
   };
 }
 
-describe("playbooks_resume", () => {
+describe("procedures_resume", () => {
   it("resume_with patch retries the failing step with a new locator", async () => {
-    await writeYaml("shared/r/playbook.yaml", {
+    await writeYaml("shared/r/procedure.yaml", {
       schema_version: 1,
       name: "r.click",
       description: "resume_with demo",
@@ -104,7 +104,7 @@ describe("playbooks_resume", () => {
       { method: "browser_click", response: { clicked: true, page_effect: emptyPageEffect() } },
     ]);
 
-    const exec = makePlaybookExecutor(ws);
+    const exec = makeProcedureExecutor(ws);
     const first = await exec({ name: "r.click", tab_id: "t_1", inputs: {} });
     expect(first.status).toBe("needs_assist");
 
@@ -120,7 +120,7 @@ describe("playbooks_resume", () => {
   });
 
   it("insert_steps runs the patch steps then continues", async () => {
-    await writeYaml("shared/i/playbook.yaml", {
+    await writeYaml("shared/i/procedure.yaml", {
       schema_version: 1,
       name: "i.flow",
       description: "insert_steps demo",
@@ -157,7 +157,7 @@ describe("playbooks_resume", () => {
       { method: "browser_click", response: { clicked: true, page_effect: emptyPageEffect() } },
     ]);
 
-    const exec = makePlaybookExecutor(ws);
+    const exec = makeProcedureExecutor(ws);
     const first = await exec({ name: "i.flow", tab_id: "t_1", inputs: {} });
     expect(first.status).toBe("needs_assist");
 
@@ -179,7 +179,7 @@ describe("playbooks_resume", () => {
   });
 
   it("give_up patch returns gave_up and drops state", async () => {
-    await writeYaml("shared/g/playbook.yaml", {
+    await writeYaml("shared/g/procedure.yaml", {
       schema_version: 1,
       name: "g.flow",
       description: "give_up demo",
@@ -197,7 +197,7 @@ describe("playbooks_resume", () => {
     const ws = stubWsBridge([
       { method: "browser_locate", error: { code: "LOCATOR_NOT_FOUND", message: "x" } },
     ]);
-    const exec = makePlaybookExecutor(ws);
+    const exec = makeProcedureExecutor(ws);
     const first = await exec({ name: "g.flow", tab_id: "t_1", inputs: {} });
     expect(first.status).toBe("needs_assist");
 
@@ -210,7 +210,7 @@ describe("playbooks_resume", () => {
   });
 
   it("refuses forbidden locators in resume_with", async () => {
-    await writeYaml("shared/f/playbook.yaml", {
+    await writeYaml("shared/f/procedure.yaml", {
       schema_version: 1,
       name: "f.flow",
       description: "forbidden resume",
@@ -229,7 +229,7 @@ describe("playbooks_resume", () => {
     const ws = stubWsBridge([
       { method: "browser_locate", error: { code: "LOCATOR_NOT_FOUND", message: "x" } },
     ]);
-    const exec = makePlaybookExecutor(ws);
+    const exec = makeProcedureExecutor(ws);
     const first = await exec({ name: "f.flow", tab_id: "t_1", inputs: {} });
     expect(first.status).toBe("needs_assist");
 
@@ -242,19 +242,19 @@ describe("playbooks_resume", () => {
           with: { locator: { role: "button", name: "Delete account" } },
         },
       }),
-    ).rejects.toThrow(/PLAYBOOK_FORBIDDEN|forbidden/);
+    ).rejects.toThrow(/PROCEDURE_FORBIDDEN|forbidden/);
   });
 
-  it("returns PLAYBOOK_RESUME_EXPIRED for unknown execution_id", async () => {
+  it("returns PROCEDURE_RESUME_EXPIRED for unknown execution_id", async () => {
     const ws = stubWsBridge([]);
     const resume = makeResumeHandler(ws);
     await expect(
       resume({ execution_id: "ex_nope", patch: { kind: "give_up" } }),
-    ).rejects.toThrow(/PLAYBOOK_RESUME_EXPIRED|unknown or has expired/);
+    ).rejects.toThrow(/PROCEDURE_RESUME_EXPIRED|unknown or has expired/);
   });
 
   it("rejects unknown patch kinds", async () => {
-    await writeYaml("shared/u/playbook.yaml", {
+    await writeYaml("shared/u/procedure.yaml", {
       schema_version: 1,
       name: "u.flow",
       description: "unknown patch kind",
@@ -272,7 +272,7 @@ describe("playbooks_resume", () => {
     const ws = stubWsBridge([
       { method: "browser_locate", error: { code: "LOCATOR_NOT_FOUND", message: "x" } },
     ]);
-    const exec = makePlaybookExecutor(ws);
+    const exec = makeProcedureExecutor(ws);
     const first = await exec({ name: "u.flow", tab_id: "t_1", inputs: {} });
 
     const resume = makeResumeHandler(ws);
@@ -281,6 +281,6 @@ describe("playbooks_resume", () => {
         execution_id: first.execution_id!,
         patch: { kind: "explode" },
       } as unknown as Record<string, unknown>),
-    ).rejects.toThrow(/PLAYBOOK_RESUME_INVALID|kind/);
+    ).rejects.toThrow(/PROCEDURE_RESUME_INVALID|kind/);
   });
 });

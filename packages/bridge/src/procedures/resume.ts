@@ -1,11 +1,11 @@
 /**
- * playbooks_resume — apply a caller-supplied patch to a suspended playbook
+ * procedures_resume — apply a caller-supplied patch to a suspended procedure
  * execution and continue.
  *
  * Three patch kinds:
  *   resume_with   — merge {locator?, with?} into the failing step and re-run
  *   insert_steps  — execute a list of corrective steps, then continue from the
- *                   next playbook step
+ *                   next procedure step
  *   give_up       — drop state and return a `gave_up` outcome
  *
  * Every step the patch introduces flows through the same `checkForbidden`
@@ -14,20 +14,20 @@
  */
 import type {
   Locator,
-  PlaybookDef,
-  PlaybookStepDef,
+  ProcedureDef,
+  StepDef,
 } from "@browserops/shared";
 import { isLocatorEmpty } from "@browserops/shared";
 
 import { CodedError } from "./store.js";
 import { dropState, getState, type ExecutionState } from "./state.js";
 import {
-  runPlaybook,
+  runProcedure,
   type ExecuteOutcome,
-  type RunPlaybookContext,
+  type RunProcedureContext,
 } from "./execute.js";
 import { checkForbidden } from "./forbidden.js";
-import { validatePlaybook } from "./validator.js";
+import { validateProcedure } from "./validator.js";
 import type { WSBridgeLike } from "../mcp-server.js";
 
 export type ResumePatch =
@@ -40,7 +40,7 @@ export type ResumePatch =
     }
   | {
       kind: "insert_steps";
-      steps: PlaybookStepDef[];
+      steps: StepDef[];
     }
   | { kind: "give_up"; reason?: string };
 
@@ -112,7 +112,7 @@ function parseParams(raw: Record<string, unknown>): ResumeParams {
       execution_id: id,
       patch: {
         kind: "insert_steps",
-        steps: stepsRaw as PlaybookStepDef[],
+        steps: stepsRaw as StepDef[],
       },
     };
   }
@@ -123,7 +123,7 @@ function parseParams(raw: Record<string, unknown>): ResumeParams {
     return { execution_id: id, patch: out };
   }
   throw new CodedError(
-    "PLAYBOOK_RESUME_INVALID",
+    "PROCEDURE_RESUME_INVALID",
     `patch.kind must be one of: resume_with, insert_steps, give_up — got: ${String(kind)}`,
   );
 }
@@ -136,7 +136,7 @@ export function makeResumeHandler(wsBridge: WSBridgeLike) {
     const state = getState(params.execution_id);
     if (state === undefined) {
       throw new CodedError(
-        "PLAYBOOK_RESUME_EXPIRED",
+        "PROCEDURE_RESUME_EXPIRED",
         `execution ${params.execution_id} is unknown or has expired`,
         { execution_id: params.execution_id },
       );
@@ -159,22 +159,22 @@ export function makeResumeHandler(wsBridge: WSBridgeLike) {
     if (state.strict) {
       dropState(state.execution_id);
       throw new CodedError(
-        "PLAYBOOK_RESUME_INVALID",
+        "PROCEDURE_RESUME_INVALID",
         "cannot resume a strict-mode execution via LLM patch",
         { execution_id: params.execution_id },
       );
     }
 
-    const playbook = applyPatchToPlaybook(state, params.patch);
+    const procedure = applyPatchToProcedure(state, params.patch);
 
     // Run the same execute loop, starting at the suspended step. The
-    // patch produced a new in-memory playbook with the relocated /
-    // inserted steps; runPlaybook handles substitution + forbidden +
+    // patch produced a new in-memory procedure with the relocated /
+    // inserted steps; runProcedure handles substitution + forbidden +
     // dispatch like any other run.
     dropState(state.execution_id);
 
-    const ctx: RunPlaybookContext = {
-      playbook,
+    const ctx: RunProcedureContext = {
+      procedure: procedure,
       tab_id: state.tab_id,
       inputs: state.inputs,
       strict: state.strict,
@@ -187,21 +187,21 @@ export function makeResumeHandler(wsBridge: WSBridgeLike) {
       used_llm_fallback: state.used_llm_fallback,
     };
 
-    return runPlaybook(ctx);
+    return runProcedure(ctx);
   };
 }
 
 /**
- * Apply a resume_with or insert_steps patch to the saved playbook, in
+ * Apply a resume_with or insert_steps patch to the saved procedure, in
  * memory only. The original on-disk YAML is never modified.
  */
-function applyPatchToPlaybook(
+function applyPatchToProcedure(
   state: ExecutionState,
   patch: Exclude<ResumePatch, { kind: "give_up" }>,
-): PlaybookDef {
-  const next: PlaybookDef = {
-    ...state.playbook,
-    steps: state.playbook.steps.slice(),
+): ProcedureDef {
+  const next: ProcedureDef = {
+    ...state.procedure,
+    steps: state.procedure.steps.slice(),
   };
 
   if (patch.kind === "resume_with") {
@@ -209,25 +209,25 @@ function applyPatchToPlaybook(
     const step = next.steps[idx];
     if (!step) {
       throw new CodedError(
-        "PLAYBOOK_RESUME_INVALID",
+        "PROCEDURE_RESUME_INVALID",
         `paused_at index ${idx} is out of bounds (steps=${next.steps.length})`,
       );
     }
-    const newStep: PlaybookStepDef = { ...step };
+    const newStep: StepDef = { ...step };
     if (patch.with?.locator !== undefined) {
       if (isLocatorEmpty(patch.with.locator)) {
         throw new CodedError(
-          "PLAYBOOK_RESUME_INVALID",
+          "PROCEDURE_RESUME_INVALID",
           "patch.with.locator must declare at least one field",
         );
       }
-      const forbid = checkForbidden(state.playbook.forbidden, {
+      const forbid = checkForbidden(state.procedure.forbidden, {
         action: step.do,
         locator: patch.with.locator,
       });
       if (!forbid.allowed) {
         throw new CodedError(
-          "PLAYBOOK_FORBIDDEN",
+          "PROCEDURE_FORBIDDEN",
           `LLM patch refused: ${forbid.reason ?? "forbidden"}`,
         );
       }
@@ -243,31 +243,31 @@ function applyPatchToPlaybook(
   // insert_steps
   if (patch.kind === "insert_steps") {
     // Validate each step shape against the schema by spinning up a temp
-    // playbook around the steps.
-    const probe: PlaybookDef = {
+    // procedure around the steps.
+    const probe: ProcedureDef = {
       schema_version: 1,
-      name: state.playbook.name,
+      name: state.procedure.name,
       description: "_probe_",
       kind: "leaf",
       steps: patch.steps,
     };
-    const result = validatePlaybook(probe);
+    const result = validateProcedure(probe);
     if (!result.valid) {
       throw new CodedError(
-        "PLAYBOOK_RESUME_INVALID",
+        "PROCEDURE_RESUME_INVALID",
         `inserted steps failed validation: ${(result.errors ?? []).join("; ")}`,
       );
     }
 
     // Forbidden check each step.
     for (const step of patch.steps) {
-      const forbid = checkForbidden(state.playbook.forbidden, {
+      const forbid = checkForbidden(state.procedure.forbidden, {
         action: step.do,
         locator: step.locator,
       });
       if (!forbid.allowed) {
         throw new CodedError(
-          "PLAYBOOK_FORBIDDEN",
+          "PROCEDURE_FORBIDDEN",
           `inserted step ${step.id} refused: ${forbid.reason ?? "forbidden"}`,
         );
       }
@@ -278,5 +278,5 @@ function applyPatchToPlaybook(
   }
 
   // Exhaustive — TS knows give_up was peeled off above.
-  throw new CodedError("PLAYBOOK_RESUME_INVALID", "unknown patch kind");
+  throw new CodedError("PROCEDURE_RESUME_INVALID", "unknown patch kind");
 }

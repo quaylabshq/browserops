@@ -1,5 +1,5 @@
 /**
- * Retrying expect-predicate evaluator for the playbook execute loop.
+ * Retrying expect-predicate evaluator for the procedure execute loop.
  *
  * `evaluateExpect` is the one-shot check: given an ExpectDef and an
  * Observation snapshot, returns matched/reason.
@@ -8,7 +8,7 @@
  * interval until the predicate matches or `timeout_ms` elapses. Returns
  * the last evaluation either way.
  */
-import type { PlaybookExpectDef, PageEffect } from "@browserops/shared";
+import type { ExpectDef, PageEffect } from "@browserops/shared";
 import { parseSerialisedRegex } from "@browserops/shared";
 
 /**
@@ -52,7 +52,7 @@ function matchPattern(value: string, pattern: string): boolean {
 }
 
 export function evaluateExpect(
-  expect: PlaybookExpectDef | undefined,
+  expect: ExpectDef | undefined,
   observed: Observation | undefined,
 ): ExpectCheck {
   if (expect === undefined || expect === null) return { matched: true };
@@ -187,7 +187,7 @@ export interface PollResult {
  * execute loop can use this as the universal step-completion hook.
  */
 export async function pollExpect(
-  expect: PlaybookExpectDef | undefined,
+  expect: ExpectDef | undefined,
   getObservation: () => Promise<Observation | undefined>,
   options?: { now?: () => number; sleep?: (ms: number) => Promise<void> },
 ): Promise<PollResult> {

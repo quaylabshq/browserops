@@ -1,11 +1,11 @@
 import { describe, it, expect } from "vitest";
 import YAML from "yaml";
-import { mergeHealthIntoPlaybookYaml } from "./health-merge.js";
-import type { PlaybookHealthDef } from "@browserops/shared";
+import { mergeHealthIntoProcedureYaml } from "./health-merge.js";
+import type { HealthDef } from "@browserops/shared";
 
 const baseYaml = `schema_version: 1
 name: demo.minimal
-description: Minimal leaf playbook.
+description: Minimal leaf procedure.
 kind: leaf
 steps:
   - id: s1
@@ -14,7 +14,7 @@ steps:
       url: https://example.com
 `;
 
-const healthFromOneRun: PlaybookHealthDef = {
+const healthFromOneRun: HealthDef = {
   updated: "2026-05-24T00:00:00Z",
   steps: {
     s1: {
@@ -29,9 +29,9 @@ const healthFromOneRun: PlaybookHealthDef = {
   },
 };
 
-describe("mergeHealthIntoPlaybookYaml", () => {
+describe("mergeHealthIntoProcedureYaml", () => {
   it("inserts a new meta.health block when meta is absent", () => {
-    const out = mergeHealthIntoPlaybookYaml(baseYaml, healthFromOneRun);
+    const out = mergeHealthIntoProcedureYaml(baseYaml, healthFromOneRun);
     const parsed = YAML.parse(out);
     expect(parsed.meta).toBeDefined();
     expect(parsed.meta.health).toEqual(healthFromOneRun);
@@ -46,7 +46,7 @@ describe("mergeHealthIntoPlaybookYaml", () => {
   last_verified: "2026-04-02T00:00:00Z"
   status: trusted
 `;
-    const out = mergeHealthIntoPlaybookYaml(yamlWithMeta, healthFromOneRun);
+    const out = mergeHealthIntoProcedureYaml(yamlWithMeta, healthFromOneRun);
     const parsed = YAML.parse(out);
     expect(parsed.meta.created).toBe("2026-04-01T00:00:00Z");
     expect(parsed.meta.last_verified).toBe("2026-04-02T00:00:00Z");
@@ -70,7 +70,7 @@ describe("mergeHealthIntoPlaybookYaml", () => {
         last_tier: 1
         last_ref: 12
 `;
-    const newHealth: PlaybookHealthDef = {
+    const newHealth: HealthDef = {
       updated: "2026-05-24T00:00:00Z",
       steps: {
         s1: {
@@ -84,7 +84,7 @@ describe("mergeHealthIntoPlaybookYaml", () => {
         },
       },
     };
-    const out = mergeHealthIntoPlaybookYaml(yamlWithHealth, newHealth);
+    const out = mergeHealthIntoProcedureYaml(yamlWithHealth, newHealth);
     const parsed = YAML.parse(out);
     expect(parsed.meta.health).toEqual(newHealth);
   });
@@ -107,7 +107,7 @@ describe("mergeHealthIntoPlaybookYaml", () => {
         ambiguous_resolves: 0
         target_changed: 0
 `;
-    const newHealth: PlaybookHealthDef = {
+    const newHealth: HealthDef = {
       updated: "2026-05-24T00:00:00Z",
       steps: {
         s1: {
@@ -119,14 +119,14 @@ describe("mergeHealthIntoPlaybookYaml", () => {
         // s2 not updated in this run
       },
     };
-    const out = mergeHealthIntoPlaybookYaml(yamlMulti, newHealth);
+    const out = mergeHealthIntoProcedureYaml(yamlMulti, newHealth);
     const parsed = YAML.parse(out);
     expect(parsed.meta.health.steps.s1.runs).toBe(6);
     expect(parsed.meta.health.steps.s2.runs).toBe(3); // preserved
   });
 
   it("is a no-op when the new health has zero step updates", () => {
-    const out = mergeHealthIntoPlaybookYaml(baseYaml, {
+    const out = mergeHealthIntoProcedureYaml(baseYaml, {
       updated: "2026-05-24T00:00:00Z",
       steps: {},
     });

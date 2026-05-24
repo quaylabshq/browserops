@@ -1,39 +1,39 @@
 /**
  * Builds and manages the procedure index (index.json).
  *
- * The index is a denormalized manifest that lets list/search operate without
- * re-parsing every procedure.yaml. It is rebuilt on startup when missing or
- * stale, and after every mutating operation (save, delete, promote).
+ * Mirrors procedures/index-builder.ts with the procedure entry shape —
+ * adds `side_effects[]` to the manifest entry so search results can be
+ * filtered by safety class.
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import YAML from "yaml";
 import { tokenize } from "@browserops/shared";
-import type { ProcedureDef } from "@browserops/shared";
-import { indexPath } from "./paths.js";
-import { readProcedureYaml } from "./store.js";
-import { atomicWriteFile } from "./store.js";
+import type { ProcedureDef, SideEffectClass } from "@browserops/shared";
+import { readProcedureYaml, atomicWriteFile } from "./store.js";
 import { validateProcedure } from "./validator.js";
 
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
 
-export interface ManifestEntry {
+export interface ProcedureManifestEntry {
   /** Path relative to the proceduresRoot. */
   path: string;
   kind: "leaf" | "composite";
   domain: string | null;
   description: string;
-  /** Input names only. */
+  /** Optional one-line goal. */
+  goal?: string;
   inputs: string[];
   triggers: string[];
   tags: string[];
+  side_effects: SideEffectClass[];
   /** null = top-level shared; else composite owner name. */
   owner: string | null;
-  /** Composites only: names of referenced procedures. */
+  /** Composites only: names of referenced sub-procedures. */
   uses?: string[];
-  /** Composites with subs only: names of sub-procedures. */
+  /** Composites with subs: names of sub-procedures. */
   subs?: string[];
   /** Reverse index: names of composites that reference this procedure. */
   usedBy: string[];
@@ -43,34 +43,26 @@ export interface ManifestEntry {
   status: "draft" | "trusted";
 }
 
-export interface Manifest {
+export interface ProcedureManifest {
   version: 1;
-  updated: string; // ISO 8601
-  procedures: Record<string, ManifestEntry>;
+  updated: string;
+  procedures: Record<string, ProcedureManifestEntry>;
 }
 
 // ---------------------------------------------------------------------------
-// Internal helpers
+// Helpers
 // ---------------------------------------------------------------------------
 
-/** Directories under root that are never composite owners. */
 const SKIP_DIRS = new Set(["shared", ".git"]);
 
-/** True when a directory name should be skipped during enumeration. */
 function isSkippedDir(name: string): boolean {
   return SKIP_DIRS.has(name) || name.startsWith(".");
 }
 
-/**
- * Enumerates child directory names directly under `dir`.
- * Returns an empty array if `dir` does not exist.
- */
 async function listSubdirs(dir: string): Promise<string[]> {
   try {
     const entries = await fs.readdir(dir, { withFileTypes: true });
-    return entries
-      .filter((e) => e.isDirectory())
-      .map((e) => e.name);
+    return entries.filter((e) => e.isDirectory()).map((e) => e.name);
   } catch (err) {
     const nodeErr = err as NodeJS.ErrnoException;
     if (nodeErr.code === "ENOENT") return [];
@@ -78,12 +70,6 @@ async function listSubdirs(dir: string): Promise<string[]> {
   }
 }
 
-/**
- * Reads and parses a single procedure.yaml.
- *
- * Returns the parsed object on success, or `null` on any error (with a
- * warning printed to stderr).
- */
 async function tryParseProcedure(
   absYamlPath: string,
 ): Promise<ProcedureDef | null> {
@@ -92,7 +78,7 @@ async function tryParseProcedure(
     text = await readProcedureYaml(absYamlPath);
   } catch {
     process.stderr.write(
-      `[index-builder] warn: could not read ${absYamlPath} — skipping\n`,
+      `[procedures-index-builder] warn: could not read ${absYamlPath} — skipping\n`,
     );
     return null;
   }
@@ -102,7 +88,7 @@ async function tryParseProcedure(
     parsed = YAML.parse(text);
   } catch (e) {
     process.stderr.write(
-      `[index-builder] warn: YAML parse error in ${absYamlPath}: ${(e as Error).message} — skipping\n`,
+      `[procedures-index-builder] warn: YAML parse error in ${absYamlPath}: ${(e as Error).message} — skipping\n`,
     );
     return null;
   }
@@ -111,7 +97,7 @@ async function tryParseProcedure(
   if (!result.valid) {
     const errs = (result.errors ?? []).join("; ");
     process.stderr.write(
-      `[index-builder] warn: schema invalid in ${absYamlPath}: ${errs} — skipping\n`,
+      `[procedures-index-builder] warn: schema invalid in ${absYamlPath}: ${errs} — skipping\n`,
     );
     return null;
   }
@@ -119,96 +105,74 @@ async function tryParseProcedure(
   return parsed as ProcedureDef;
 }
 
-/**
- * Builds the pre-tokenized tokens array for a procedure.
- *
- * Tokenizes the union of: name parts (split on `.`), description,
- * triggers, tags, input names, and domain. Deduplicates.
- */
-function buildTokens(proc: ProcedureDef): string[] {
+function buildTokens(pb: ProcedureDef): string[] {
   const parts: string[] = [
-    // Name parts split on dot (e.g. "gmail.send_email" → "gmail", "send_email")
-    ...proc.name.split("."),
-    proc.description,
-    ...(proc.triggers ?? []),
-    ...(proc.tags ?? []),
-    ...Object.keys(proc.inputs ?? {}),
-    ...(proc.domain ? [proc.domain] : []),
+    ...pb.name.split("."),
+    pb.description,
+    pb.goal ?? "",
+    ...(pb.triggers ?? []),
+    ...(pb.tags ?? []),
+    ...Object.keys(pb.inputs ?? {}),
+    ...(pb.domain ? [pb.domain] : []),
   ];
-
   const allTokens = parts.flatMap((p) => tokenize(p));
   return [...new Set(allTokens)];
 }
 
-/**
- * Builds one ManifestEntry from a parsed procedure.
- *
- * `relPath` is relative to the procedures root.
- * `owner`   is the composite name or null.
- * `subsNames` is populated by the caller for composite entries.
- */
 function buildEntry(
-  proc: ProcedureDef,
+  pb: ProcedureDef,
   relPath: string,
   owner: string | null,
   subsNames?: string[],
-): ManifestEntry {
-  const status: "draft" | "trusted" = proc.meta?.status ?? "draft";
+): ProcedureManifestEntry {
+  const status: "draft" | "trusted" = pb.meta?.status ?? "draft";
 
-  const entry: ManifestEntry = {
+  const entry: ProcedureManifestEntry = {
     path: relPath,
-    kind: proc.kind,
-    domain: proc.domain ?? null,
-    description: proc.description,
-    inputs: Object.keys(proc.inputs ?? {}),
-    triggers: proc.triggers ?? [],
-    tags: proc.tags ?? [],
+    kind: pb.kind,
+    domain: pb.domain ?? null,
+    description: pb.description,
+    inputs: Object.keys(pb.inputs ?? {}),
+    triggers: pb.triggers ?? [],
+    tags: pb.tags ?? [],
+    side_effects: pb.side_effects ?? [],
     owner,
-    usedBy: [], // populated in second pass
-    tokens: buildTokens(proc),
+    usedBy: [],
+    tokens: buildTokens(pb),
     status,
   };
 
-  if (proc.kind === "composite") {
-    entry.uses = proc.uses ?? [];
-    if (subsNames && subsNames.length > 0) {
-      entry.subs = subsNames;
-    }
+  if (pb.goal !== undefined) entry.goal = pb.goal;
+
+  if (pb.kind === "composite") {
+    entry.uses = pb.uses ?? [];
+    if (subsNames && subsNames.length > 0) entry.subs = subsNames;
   }
 
   return entry;
 }
 
 // ---------------------------------------------------------------------------
-// scanTree
+// scanTree / buildIndex / writeIndex / readIndex / ensureIndex
 // ---------------------------------------------------------------------------
 
-/**
- * Walks the procedure tree rooted at `root` and produces a Manifest.
- *
- * Pass 1: enumerate all procedure.yaml files, parse + validate, build entries.
- * Pass 2: populate `usedBy` by reverse-indexing each composite's `uses:`.
- */
-export async function scanTree(root: string): Promise<Manifest> {
-  const procedures: Record<string, ManifestEntry> = {};
+export async function scanTree(root: string): Promise<ProcedureManifest> {
+  const procedures: Record<string, ProcedureManifestEntry> = {};
 
-  // ---------- Pass 1a: shared/ directory (top-level shared procedures) ----------
-
+  // Shared/ tree
   const sharedRoot = path.join(root, "shared");
   const sharedDirs = await listSubdirs(sharedRoot);
 
   for (const dirEntry of sharedDirs) {
     const absYaml = path.join(sharedRoot, dirEntry, "procedure.yaml");
-    const proc = await tryParseProcedure(absYaml);
-    if (!proc) continue;
+    const pb = await tryParseProcedure(absYaml);
+    if (!pb) continue;
 
     const relPath = path.join("shared", dirEntry, "procedure.yaml");
-    const entry = buildEntry(proc, relPath, null);
-    procedures[proc.name] = entry;
+    procedures[pb.name] = buildEntry(pb, relPath, null);
   }
 
-  // ---------- Pass 1b: top-level composite directories ----------
-
+  // Top-level composite dirs
   let topDirs: string[];
   try {
     const entries = await fs.readdir(root, { withFileTypes: true });
@@ -227,54 +191,48 @@ export async function scanTree(root: string): Promise<Manifest> {
   for (const compositeDir of topDirs) {
     const compositeAbs = path.join(root, compositeDir);
 
-    // Read composite procedure.yaml
     const compositeYaml = path.join(compositeAbs, "procedure.yaml");
-    const compositeProc = await tryParseProcedure(compositeYaml);
+    const compositePb = await tryParseProcedure(compositeYaml);
 
-    // Enumerate subs/ regardless — they belong to this composite
     const subsRoot = path.join(compositeAbs, "subs");
     const subDirs = await listSubdirs(subsRoot);
     const subsNames: string[] = [];
 
     for (const subDir of subDirs) {
       const subYaml = path.join(subsRoot, subDir, "procedure.yaml");
-      const subProc = await tryParseProcedure(subYaml);
-      if (!subProc) continue;
+      const subPb = await tryParseProcedure(subYaml);
+      if (!subPb) continue;
 
       const subRelPath = path.join(compositeDir, "subs", subDir, "procedure.yaml");
-      const subEntry = buildEntry(
-        subProc,
+      procedures[subPb.name] = buildEntry(
+        subPb,
         subRelPath,
-        compositeProc ? compositeProc.name : compositeDir,
+        compositePb ? compositePb.name : compositeDir,
       );
-      procedures[subProc.name] = subEntry;
-      subsNames.push(subProc.name);
+      subsNames.push(subPb.name);
     }
 
-    if (!compositeProc) continue;
+    if (!compositePb) continue;
 
     const compositeRelPath = path.join(compositeDir, "procedure.yaml");
-    const compositeEntry = buildEntry(
-      compositeProc,
+    procedures[compositePb.name] = buildEntry(
+      compositePb,
       compositeRelPath,
       null,
       subsNames,
     );
-    procedures[compositeProc.name] = compositeEntry;
   }
 
-  // ---------- Pass 2: reverse-index usedBy ----------
-
+  // Reverse index usedBy
   for (const [name, entry] of Object.entries(procedures)) {
     if (entry.kind !== "composite" || !entry.uses) continue;
-
     for (const ref of entry.uses) {
       const refEntry = procedures[ref];
       if (refEntry !== undefined) {
         refEntry.usedBy.push(name);
       } else {
         process.stderr.write(
-          `[index-builder] warn: composite "${name}" references unknown procedure "${ref}" in uses:\n`,
+          `[procedures-index-builder] warn: composite "${name}" references unknown procedure "${ref}" in uses:\n`,
         );
       }
     }
@@ -287,59 +245,30 @@ export async function scanTree(root: string): Promise<Manifest> {
   };
 }
 
-// ---------------------------------------------------------------------------
-// buildIndex
-// ---------------------------------------------------------------------------
-
-/**
- * Builds and returns the full manifest for `root`.
- *
- * Thin wrapper around `scanTree`; the distinction is preserved for future
- * caching (e.g. partial incremental updates).
- */
-export async function buildIndex(root: string): Promise<Manifest> {
+export async function buildIndex(root: string): Promise<ProcedureManifest> {
   return scanTree(root);
 }
 
-// ---------------------------------------------------------------------------
-// writeIndex
-// ---------------------------------------------------------------------------
-
-/**
- * Atomically writes `manifest` as `index.json` inside `root`.
- */
 export async function writeIndex(
   root: string,
-  manifest: Manifest,
+  manifest: ProcedureManifest,
 ): Promise<void> {
   const absIndexPath = path.join(root, "index.json");
   await atomicWriteFile(absIndexPath, JSON.stringify(manifest, null, 2));
 }
 
-// ---------------------------------------------------------------------------
-// readIndex
-// ---------------------------------------------------------------------------
-
-/**
- * Reads and parses `index.json` from `root`.
- *
- * Returns `null` if the file is missing or malformed.
- */
-export async function readIndex(root: string): Promise<Manifest | null> {
+export async function readIndex(root: string): Promise<ProcedureManifest | null> {
   const absIndexPath = path.join(root, "index.json");
 
   let text: string;
   try {
     text = await fs.readFile(absIndexPath, "utf8");
-  } catch (err) {
-    const nodeErr = err as NodeJS.ErrnoException;
-    if (nodeErr.code === "ENOENT") return null;
+  } catch {
     return null;
   }
 
   try {
-    const parsed = JSON.parse(text) as Manifest;
-    // Basic sanity: must have version and procedures fields.
+    const parsed = JSON.parse(text) as ProcedureManifest;
     if (typeof parsed !== "object" || parsed === null) return null;
     if (parsed.version !== 1) return null;
     if (typeof parsed.procedures !== "object") return null;
@@ -349,28 +278,11 @@ export async function readIndex(root: string): Promise<Manifest | null> {
   }
 }
 
-// ---------------------------------------------------------------------------
-// ensureIndex
-// ---------------------------------------------------------------------------
-
-/**
- * Startup-path helper: ensures the procedures tree exists and the index is
- * fresh.
- *
- * Algorithm:
- *   1. mkdir -p `root`.
- *   2. Read current index. If missing → build + write + return.
- *   3. Compare index mtime against every procedure.yaml mtime.
- *      If any yaml is newer → rebuild + write + return.
- *   4. Otherwise return the existing index (no rebuild).
- */
-export async function ensureIndex(root: string): Promise<Manifest> {
-  // 1. Ensure root exists.
+export async function ensureIndex(root: string): Promise<ProcedureManifest> {
   await fs.mkdir(root, { recursive: true });
 
   const absIndexPath = path.join(root, "index.json");
 
-  // 2. Read existing index.
   const existing = await readIndex(root);
   if (!existing) {
     const manifest = await buildIndex(root);
@@ -378,13 +290,11 @@ export async function ensureIndex(root: string): Promise<Manifest> {
     return manifest;
   }
 
-  // 3. Check index mtime vs procedure.yaml mtimes.
   let indexMtime: number;
   try {
     const stat = await fs.stat(absIndexPath);
     indexMtime = stat.mtimeMs;
   } catch {
-    // index disappeared between readIndex and stat — rebuild.
     const manifest = await buildIndex(root);
     await writeIndex(root, manifest);
     return manifest;
@@ -400,15 +310,10 @@ export async function ensureIndex(root: string): Promise<Manifest> {
   return existing;
 }
 
-/**
- * Returns true if any `procedure.yaml` file under `root` has an mtime
- * strictly greater than `thresholdMs`.
- */
 async function isAnyYamlNewerThan(
   root: string,
   thresholdMs: number,
 ): Promise<boolean> {
-  // Walk shared/
   const sharedRoot = path.join(root, "shared");
   const sharedDirs = await listSubdirs(sharedRoot);
   for (const d of sharedDirs) {
@@ -417,7 +322,6 @@ async function isAnyYamlNewerThan(
     }
   }
 
-  // Walk top-level composite dirs
   let topDirs: string[] = [];
   try {
     const entries = await fs.readdir(root, { withFileTypes: true });
@@ -434,7 +338,6 @@ async function isAnyYamlNewerThan(
     if (await yamlNewerThan(path.join(compositeAbs, "procedure.yaml"), thresholdMs)) {
       return true;
     }
-    // Check subs
     const subsRoot = path.join(compositeAbs, "subs");
     const subDirs = await listSubdirs(subsRoot);
     for (const s of subDirs) {
@@ -447,7 +350,6 @@ async function isAnyYamlNewerThan(
   return false;
 }
 
-/** Returns true if the file exists and its mtime > thresholdMs. */
 async function yamlNewerThan(
   absPath: string,
   thresholdMs: number,

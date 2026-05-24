@@ -1,15 +1,15 @@
 /**
- * In-memory playbook execution state.
+ * In-memory procedure execution state.
  *
- * Holds suspended runs that are waiting for a `playbooks_resume` call from
+ * Holds suspended runs that are waiting for a `procedures_resume` call from
  * the agent (LLM fallback flow). Each execution has a 5-minute TTL —
  * stale entries are evicted lazily on `getState`.
  *
  * Per-process: state does NOT survive a bridge restart. A resume after
- * restart surfaces PLAYBOOK_RESUME_EXPIRED so the caller doesn't silently
+ * restart surfaces PROCEDURE_RESUME_EXPIRED so the caller doesn't silently
  * lose work.
  */
-import type { PlaybookDef } from "@browserops/shared";
+import type { ProcedureDef } from "@browserops/shared";
 import type { StepResult, DivergenceInfo } from "./execute-types.js";
 
 export const EXECUTION_TTL_MS = 5 * 60 * 1000;
@@ -23,7 +23,7 @@ export interface ExecutionBudget {
 
 export interface ExecutionState {
   execution_id: string;
-  playbook: PlaybookDef;
+  procedure: ProcedureDef;
   tab_id: string;
   /** Caller-supplied input map, post-substitution. */
   inputs: Record<string, unknown>;
@@ -57,7 +57,7 @@ function pruneStale(): void {
 }
 
 export interface CreateStateInput {
-  playbook: PlaybookDef;
+  procedure: ProcedureDef;
   tab_id: string;
   inputs: Record<string, unknown>;
   paused_at: number;
@@ -73,7 +73,7 @@ export function createState(input: CreateStateInput): ExecutionState {
   const now = Date.now();
   const state: ExecutionState = {
     execution_id: nextId(),
-    playbook: input.playbook,
+    procedure: input.procedure,
     tab_id: input.tab_id,
     inputs: input.inputs,
     paused_at: input.paused_at,

@@ -1,5 +1,5 @@
 /**
- * Auto-demote on save: when overwriting an existing playbook with a
+ * Auto-demote on save: when overwriting an existing procedure with a
  * meta.health block that shouldDemoteFromHealth flags, the save handler
  * must refuse the bump_success=trusted flip and instead persist as
  * status:draft with `demoted: true` in the result.
@@ -11,18 +11,18 @@ import YAML from "yaml";
 import { handleSave, handleGet } from "./handlers.js";
 
 let tmpDir: string;
-const ORIGINAL_ENV = process.env["BROWSEROPS_PLAYBOOKS_DIR"];
+const ORIGINAL_ENV = process.env["BROWSEROPS_PROCEDURES_DIR"];
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(
     path.join(import.meta.dirname ?? __dirname, ".pbdemote-test-"),
   );
-  process.env["BROWSEROPS_PLAYBOOKS_DIR"] = tmpDir;
+  process.env["BROWSEROPS_PROCEDURES_DIR"] = tmpDir;
 });
 
 afterEach(async () => {
-  if (ORIGINAL_ENV === undefined) delete process.env["BROWSEROPS_PLAYBOOKS_DIR"];
-  else process.env["BROWSEROPS_PLAYBOOKS_DIR"] = ORIGINAL_ENV;
+  if (ORIGINAL_ENV === undefined) delete process.env["BROWSEROPS_PROCEDURES_DIR"];
+  else process.env["BROWSEROPS_PROCEDURES_DIR"] = ORIGINAL_ENV;
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
@@ -48,7 +48,7 @@ async function writeWithHealth(opts: {
   // Write health directly into the YAML on disk, then save again with
   // overwrite + bump_success — the handler should see the bad health
   // and refuse to mark trusted.
-  const filePath = path.join(tmpDir, "shared", "gmail.demote_test", "playbook.yaml");
+  const filePath = path.join(tmpDir, "shared", "gmail.demote_test", "procedure.yaml");
   const text = await fs.readFile(filePath, "utf8");
   const doc = YAML.parse(text) as Record<string, unknown>;
   const meta = (doc["meta"] as Record<string, unknown>) ?? {};
@@ -130,7 +130,7 @@ describe("handleSave — preserves meta.health across overwrite", () => {
       yaml: baseYaml,
       overwrite: true,
     });
-    const filePath = path.join(tmpDir, "shared", "gmail.demote_test", "playbook.yaml");
+    const filePath = path.join(tmpDir, "shared", "gmail.demote_test", "procedure.yaml");
     const text = await fs.readFile(filePath, "utf8");
     const doc = YAML.parse(text);
     expect(doc.meta.health).toBeDefined();

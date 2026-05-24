@@ -5,12 +5,12 @@ import {
   shouldDemoteFromHealth,
   type ResolutionRecord,
 } from "./health.js";
-import type { PlaybookHealthDef } from "@browserops/shared";
+import type { HealthDef } from "@browserops/shared";
 
 /**
  * Pure-function tests for the drift-health recorder. The recorder takes
- * the previous PlaybookHealthDef + a ResolutionRecord and returns the
- * updated PlaybookHealthDef. No side effects, no I/O.
+ * the previous HealthDef + a ResolutionRecord and returns the
+ * updated HealthDef. No side effects, no I/O.
  *
  * Auto-demote contract:
  *   - relocate-rate > 0.4 across at least 5 runs → demote
@@ -23,12 +23,12 @@ const t0 = "2026-05-24T00:00:00Z";
 const t1 = "2026-05-25T00:00:00Z";
 
 function recordN(
-  start: PlaybookHealthDef,
+  start: HealthDef,
   step: string,
   record: ResolutionRecord,
   n: number,
   at: string = t1,
-): PlaybookHealthDef {
+): HealthDef {
   let out = start;
   for (let i = 0; i < n; i++) out = recordResolution(out, step, record, at);
   return out;
@@ -105,7 +105,7 @@ describe("recordResolution — incremental updates", () => {
 });
 
 describe("shouldDemoteFromHealth", () => {
-  it("does not demote a fresh-from-bump_success playbook (no health yet)", () => {
+  it("does not demote a fresh-from-bump_success procedure (no health yet)", () => {
     expect(shouldDemoteFromHealth(undefined)).toBe(false);
   });
 
