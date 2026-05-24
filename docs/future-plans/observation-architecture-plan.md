@@ -908,7 +908,7 @@ representation given page characteristics and intent.
 - **What**: Calls augmented a11y, then the bridge-side box-drawing
   renderer. Returns `{ text, ref_map }` as payload.
 - **Commit**: `feat(extension): implement structure mode in browser_observe`
-- [ ] Done
+- [x] Done
 
 #### 3.3.6 — Mode: auto (heuristic)
 

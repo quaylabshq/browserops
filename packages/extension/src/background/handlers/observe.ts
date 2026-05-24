@@ -266,6 +266,30 @@ export function registerObserveHandler(router: Router, opts: ObserveOpts): void 
       return { representation, observation_token, payload, page_meta };
     }
 
+    if (mode === "structure") {
+      // The bridge applies the box-drawing renderer on the way out (see
+      // mcp-server.ts wiring in substep 3.3.8). We emit the augmented
+      // a11y payload with `_render: "box_drawing"` so the bridge knows
+      // to transform.
+      const { payload } = await modeText(chromeTabId, scopeMode);
+      const taggedPayload = { _render: "box_drawing", ...(payload as Record<string, unknown>) };
+      const observation_token = cacheObservation({
+        tab_id: chromeTabId,
+        css_pixel_dims: page_meta.viewport_dims,
+        screenshot_dims: page_meta.viewport_dims,
+        scale: 1,
+        scroll: page_meta.scroll,
+        dpr: page_meta.dpr,
+        representation: "box_drawing",
+      });
+      return {
+        representation: "box_drawing" as const,
+        observation_token,
+        payload: taggedPayload,
+        page_meta,
+      };
+    }
+
     if (mode === "visual") {
       const v = await modeVisual(chromeTabId, page_meta);
       const observation_token = cacheObservation({
