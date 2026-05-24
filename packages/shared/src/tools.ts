@@ -2563,6 +2563,18 @@ const locatorInputSchema: JSONSchemaObject = {
   properties: {
     role: { type: "string", minLength: 1, maxLength: 40 },
     name: { type: "string", minLength: 1, maxLength: 400 },
+    aria_label: { type: "string", minLength: 1, maxLength: 400 },
+    data_testid: { type: "string", minLength: 1, maxLength: 200 },
+    href: { type: "string", minLength: 1, maxLength: 400 },
+    attr: {
+      type: "object",
+      additionalProperties: false,
+      required: ["name", "value"] as const,
+      properties: {
+        name: { type: "string", minLength: 1, maxLength: 80 },
+        value: { type: "string", minLength: 1, maxLength: 400 },
+      },
+    },
     has_text: { type: "string", minLength: 1, maxLength: 400 },
     has_text_not: { type: "string", minLength: 1, maxLength: 400 },
     in_frame: { type: "string", minLength: 1, maxLength: 400 },
@@ -2628,6 +2640,76 @@ const browserLocate: ToolDef = {
     "LOCATOR_AMBIGUOUS",
     "ELEMENT_NOT_ACTIONABLE",
   ] as const,
+} as const;
+
+const browserProposeLocator: ToolDef = {
+  name: "browser_propose_locator",
+  feature: "playbooks",
+  description:
+    "Author-time helper: given a target ref in the tab's current a11y snapshot, propose the smallest, highest-stability-tier Locator descriptor that resolves to exactly that element. " +
+    "Walks a candidate ladder — tier 1 (aria_label / data_testid / href / attr) → tier 2 (role+name composites) → tier 3 (nth, flagged fragile). " +
+    "Returns the chosen descriptor plus tier, unique flag, fragile flag, warnings, and the full candidate trace. " +
+    "Use this from the browserops-playbook skill (or any procedure-authoring flow) so saved locators are measured-unique, not eyeballed. " +
+    'REQUIRED ARGUMENTS: {"tab_id": "<id>", "ref": <number>}. A prior browser_read (a11y_tree, augment:true) on the same tab is required to populate the ref-cache.',
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["tab_id", "ref"] as const,
+    properties: {
+      tab_id: tabIdSchema,
+      ref: {
+        type: "integer",
+        minimum: 1,
+        description: "The ref id (from browser_read) of the target element.",
+      },
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["unique", "locator", "tier", "fragile", "warnings", "candidates"] as const,
+    properties: {
+      unique: {
+        type: "boolean",
+        description: "True when the chosen locator resolved to exactly the target ref.",
+      },
+      locator: {
+        ...locatorInputSchema,
+        description: "Chosen descriptor — the smallest, highest-tier candidate that worked.",
+      },
+      tier: {
+        enum: [1, 2, 3] as const,
+        description:
+          "Stability tier of the chosen descriptor. 1=author-controlled (aria_label/data_testid/href/attr/role), 2=text-derived (name/has_text), 3=fragile (nth).",
+      },
+      fragile: {
+        type: "boolean",
+        description: "True when only the tier-3 (nth) candidate matched.",
+      },
+      warnings: {
+        type: "array",
+        items: { type: "string", maxLength: 400 },
+        description: "Author-facing warnings (e.g. 'fell through to nth — descriptor is fragile').",
+      },
+      candidates: {
+        type: "array",
+        description: "Full trace of considered candidates with their match counts. Debug-grade.",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["locator", "matches", "tier"] as const,
+          properties: {
+            locator: locatorInputSchema,
+            matches: { type: "integer", minimum: 0 },
+            tier: { enum: [1, 2, 3] as const },
+          },
+        },
+      },
+    },
+  },
+  action_weight: 0,
+  risky: "never",
+  errorCodes: [...BASE_CODES, ...TAB_CODES, "LOCATOR_NOT_FOUND", "REF_NOT_FOUND"] as const,
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -2772,6 +2854,7 @@ export const TOOL_DEFS: readonly ToolDef[] = [
   memoryGet,
   memoryDelete,
   browserLocate,
+  browserProposeLocator,
   playbooksSearch,
   playbooksGet,
   playbooksSave,

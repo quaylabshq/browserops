@@ -50,10 +50,10 @@ describe("TOOL_DEFS catalogue", () => {
   });
 
   it("procedures_*/memory_*/playbooks_* are feature-gated; browser_* is mostly ungated", () => {
-    // browser_locate is the one browser_* tool gated behind playbooks
-    // (it powers the playbooks runtime; agents shouldn't see it when the
-    // feature is off).
-    const browserGated = new Set(["browser_locate"]);
+    // browser_locate + browser_propose_locator are the browser_* tools
+    // gated behind playbooks (they power the playbooks runtime; agents
+    // shouldn't see them when the feature is off).
+    const browserGated = new Set(["browser_locate", "browser_propose_locator"]);
     for (const t of TOOL_DEFS) {
       if (t.name.startsWith("procedures_")) {
         expect(t.feature).toBe("procedures");
@@ -135,6 +135,41 @@ describe("browser_read schema", () => {
     expect(outProps?.total_length?.type).toBe("integer");
     expect(outProps?.matched_selector?.type).toBe("boolean");
     expect(outProps?.next_start).toBeDefined();
+  });
+});
+
+describe("browser_propose_locator schema", () => {
+  const tool = TOOL_DEF_MAP["browser_propose_locator"];
+  const inProps = tool?.inputSchema.properties as
+    | Record<string, Record<string, unknown>>
+    | undefined;
+  const outProps = tool?.outputSchema.properties as
+    | Record<string, Record<string, unknown>>
+    | undefined;
+
+  it("exists in the tool catalogue and is gated behind playbooks", () => {
+    expect(tool).toBeDefined();
+    expect(tool?.feature).toBe("playbooks");
+  });
+
+  it("requires tab_id and ref", () => {
+    expect(tool?.inputSchema.required).toEqual(["tab_id", "ref"]);
+    expect(inProps?.tab_id?.type).toBe("string");
+    expect(inProps?.ref?.type).toBe("integer");
+    expect(inProps?.ref?.minimum).toBe(1);
+  });
+
+  it("output schema names locator, tier, unique, fragile, warnings", () => {
+    expect(outProps?.locator).toBeDefined();
+    expect(outProps?.tier?.enum).toEqual([1, 2, 3]);
+    expect(outProps?.unique?.type).toBe("boolean");
+    expect(outProps?.fragile?.type).toBe("boolean");
+    expect(outProps?.warnings?.type).toBe("array");
+  });
+
+  it("is a read-only observation tool — action_weight 0 and risky never", () => {
+    expect(tool?.action_weight).toBe(0);
+    expect(tool?.risky).toBe("never");
   });
 });
 
