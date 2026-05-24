@@ -235,6 +235,12 @@ function playbooksSection(enabledFeatures: ReadonlySet<FeatureName>): Lines {
     "- Playbooks compose two ways: playbook_call steps invoke another",
     "  playbook in-process, and procedure_call steps invoke a saved",
     "  procedure. Procedures can also call playbooks back.",
+    "- Locator authoring: call `browser_propose_locator` (after a",
+    "  browser_read on the tab) to get the smallest, highest-stability-tier",
+    "  descriptor for a target ref. Prefer the proposed descriptor over",
+    "  hand-written {role, name} pairs — tier-1 fields (aria_label,",
+    "  data_testid, href, attr) survive UI rebuilds; tier-3 (nth) is",
+    "  flagged fragile.",
   ];
 }
 
