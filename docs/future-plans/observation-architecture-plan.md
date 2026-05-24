@@ -886,7 +886,7 @@ representation given page characteristics and intent.
 - **Files**: create `packages/extension/src/background/handlers/observe.ts`
 - **Behavior**: route by `mode` to specific implementations.
 - **Commit**: `feat(extension): scaffold browser_observe handler`
-- [ ] Done
+- [x] Done
 
 #### 3.3.3 — Mode: text (forced augmented a11y)
 
