@@ -2149,6 +2149,104 @@ const releaseTab: ToolDef = {
 // Public catalogue
 // ---------------------------------------------------------------------------
 
+// Adaptive read tool — picks the cheapest viable representation given
+// page characteristics and intent. See the observation-architecture plan.
+const observe: ToolDef = {
+  name: "browser_observe",
+  description:
+    "Adaptive page observation. Returns the cheapest representation (augmented a11y, screenshot, box-drawing summary, or diff) given page size, canvas density, and stated intent. Default mode 'auto' picks based on the page; specify 'text'|'visual'|'structure'|'diff' to force a representation.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["tab_id"] as const,
+    properties: {
+      tab_id: tabIdSchema,
+      mode: {
+        enum: ["auto", "text", "visual", "structure", "diff"] as const,
+        default: "auto",
+        description:
+          "Representation selector. 'auto' (default) chooses based on page characteristics. 'text' = augmented a11y; 'visual' = action-grade screenshot; 'structure' = box-drawing layout summary; 'diff' = changes since the supplied observation_token.",
+      },
+      scope: {
+        type: "string",
+        pattern: "^(viewport|document|ref:.+)$",
+        default: "viewport",
+        description:
+          "Restrict the observation to a slice of the page (same shape as browser_read).",
+      },
+      budget_tokens: {
+        type: "integer",
+        minimum: 100,
+        maximum: 100000,
+        description:
+          "Optional token budget. When set, 'auto' picks the largest representation that fits.",
+      },
+      since: {
+        type: "string",
+        description:
+          "Previous observation_token. Required for mode='diff'; optional for 'auto' (the heuristic may emit a diff when the prior representation is comparable).",
+      },
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["representation", "observation_token", "page_meta"] as const,
+    properties: {
+      representation: {
+        enum: [
+          "augmented_a11y",
+          "screenshot",
+          "box_drawing",
+          "box_drawing+screenshot",
+          "diff",
+          "screenshot_som",
+        ] as const,
+      },
+      observation_token: { type: "string" },
+      payload: {},
+      page_meta: {
+        type: "object",
+        additionalProperties: false,
+        required: ["url", "title", "scroll", "viewport_dims", "dpr"] as const,
+        properties: {
+          url: { type: "string" },
+          title: { type: "string" },
+          scroll: {
+            type: "object",
+            additionalProperties: false,
+            required: ["x", "y"] as const,
+            properties: {
+              x: { type: "number" },
+              y: { type: "number" },
+            },
+          },
+          viewport_dims: {
+            type: "object",
+            additionalProperties: false,
+            required: ["w", "h"] as const,
+            properties: {
+              w: { type: "number" },
+              h: { type: "number" },
+            },
+          },
+          dpr: { type: "number" },
+        },
+      },
+      warnings: warningsOutputSchema,
+    },
+  },
+  action_weight: 0,
+  risky: "never",
+  errorCodes: [
+    ...BASE_CODES,
+    ...TAB_CODES,
+    ...REF_CODES,
+    "OBSERVATION_TOKEN_INVALID",
+    "CDP_ATTACH_FAILED",
+  ] as const,
+} as const;
+
 export const TOOL_DEFS: readonly ToolDef[] = [
   listTabs,
   currentTab,
@@ -2162,6 +2260,7 @@ export const TOOL_DEFS: readonly ToolDef[] = [
   screenshot,
   read,
   quickRead,
+  observe,
   click,
   clickAt,
   clickByText,
