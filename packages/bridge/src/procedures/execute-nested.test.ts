@@ -3,23 +3,23 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import YAML from "yaml";
 import type { WSBridgeLike } from "../mcp-server.js";
-import { buildPlaybookHandlers } from "./handlers.js";
+import { buildProcedureHandlers } from "./handlers.js";
 import { _resetForTests } from "./state.js";
 
 let tmpDir: string;
-const ORIGINAL_ENV = process.env["BROWSEROPS_PLAYBOOKS_DIR"];
+const ORIGINAL_ENV = process.env["BROWSEROPS_PROCEDURES_DIR"];
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(
     path.join(import.meta.dirname ?? __dirname, ".pbnest-test-"),
   );
-  process.env["BROWSEROPS_PLAYBOOKS_DIR"] = tmpDir;
+  process.env["BROWSEROPS_PROCEDURES_DIR"] = tmpDir;
   _resetForTests();
 });
 
 afterEach(async () => {
-  if (ORIGINAL_ENV === undefined) delete process.env["BROWSEROPS_PLAYBOOKS_DIR"];
-  else process.env["BROWSEROPS_PLAYBOOKS_DIR"] = ORIGINAL_ENV;
+  if (ORIGINAL_ENV === undefined) delete process.env["BROWSEROPS_PROCEDURES_DIR"];
+  else process.env["BROWSEROPS_PROCEDURES_DIR"] = ORIGINAL_ENV;
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
@@ -73,9 +73,9 @@ function emptyPageEffect() {
 }
 
 describe("nested execution", () => {
-  it("playbook calls another playbook in-process", async () => {
+  it("procedure calls another procedure in-process", async () => {
     // Inner: just navigate
-    await writeYaml("shared/inner/playbook.yaml", {
+    await writeYaml("shared/inner/procedure.yaml", {
       schema_version: 1,
       name: "inner.flow",
       description: "inner flow",
@@ -85,7 +85,7 @@ describe("nested execution", () => {
       ],
     });
     // Outer composite: calls inner
-    await writeYaml("composite_outer/playbook.yaml", {
+    await writeYaml("composite_outer/procedure.yaml", {
       schema_version: 1,
       name: "outer.flow",
       description: "outer flow",
@@ -94,22 +94,22 @@ describe("nested execution", () => {
       steps: [
         {
           id: "s1",
-          do: "playbook_call",
+          do: "procedure_call",
           with: { name: "inner.flow", tab_id: "{{tab_id}}", inputs: {} },
         },
       ],
     });
 
     const ws = stubWsBridge([
-      // Single navigate call from inner playbook
+      // Single navigate call from inner procedure
       {
         method: "browser_navigate",
         response: { ok: true, page_effect: emptyPageEffect() },
       },
     ]);
-    const handlers = buildPlaybookHandlers(ws);
+    const handlers = buildProcedureHandlers(ws);
 
-    const result = await handlers["playbooks_execute"]!({
+    const result = await handlers["procedures_execute"]!({
       name: "outer.flow",
       tab_id: "t_1",
       inputs: {},

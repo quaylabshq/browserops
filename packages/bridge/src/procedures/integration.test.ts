@@ -1,5 +1,5 @@
 /**
- * End-to-end integration: drives the full playbooks_* tool surface against
+ * End-to-end integration: drives the full procedures_* tool surface against
  * a stub WSBridge, mirroring how mcp-server.ts would route calls.
  */
 import * as fs from "node:fs/promises";
@@ -7,23 +7,23 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import YAML from "yaml";
 import type { WSBridgeLike } from "../mcp-server.js";
-import { buildPlaybookHandlers } from "./handlers.js";
+import { buildProcedureHandlers } from "./handlers.js";
 import { _resetForTests } from "./state.js";
 
 let tmpDir: string;
-const ORIGINAL_ENV = process.env["BROWSEROPS_PLAYBOOKS_DIR"];
+const ORIGINAL_ENV = process.env["BROWSEROPS_PROCEDURES_DIR"];
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(
     path.join(import.meta.dirname ?? __dirname, ".pbint-test-"),
   );
-  process.env["BROWSEROPS_PLAYBOOKS_DIR"] = tmpDir;
+  process.env["BROWSEROPS_PROCEDURES_DIR"] = tmpDir;
   _resetForTests();
 });
 
 afterEach(async () => {
-  if (ORIGINAL_ENV === undefined) delete process.env["BROWSEROPS_PLAYBOOKS_DIR"];
-  else process.env["BROWSEROPS_PLAYBOOKS_DIR"] = ORIGINAL_ENV;
+  if (ORIGINAL_ENV === undefined) delete process.env["BROWSEROPS_PROCEDURES_DIR"];
+  else process.env["BROWSEROPS_PROCEDURES_DIR"] = ORIGINAL_ENV;
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
@@ -65,7 +65,7 @@ function emptyPageEffect() {
   };
 }
 
-const samplePlaybookYaml = YAML.stringify({
+const sampleProcedureYaml = YAML.stringify({
   schema_version: 1,
   name: "demo.ship",
   description: "Demo: navigate then click",
@@ -87,7 +87,7 @@ const samplePlaybookYaml = YAML.stringify({
   ],
 });
 
-describe("end-to-end playbooks via handlers", () => {
+describe("end-to-end procedures via handlers", () => {
   it("save then execute then succeed", async () => {
     const ws = stubWsBridge([
       // step 1: navigate
@@ -110,15 +110,15 @@ describe("end-to-end playbooks via handlers", () => {
         },
       },
     ]);
-    const handlers = buildPlaybookHandlers(ws);
+    const handlers = buildProcedureHandlers(ws);
 
-    const save = (await handlers["playbooks_save"]!({
+    const save = (await handlers["procedures_save"]!({
       name: "demo.ship",
-      yaml: samplePlaybookYaml,
+      yaml: sampleProcedureYaml,
     })) as { saved: boolean };
     expect(save.saved).toBe(true);
 
-    const exec = (await handlers["playbooks_execute"]!({
+    const exec = (await handlers["procedures_execute"]!({
       name: "demo.ship",
       tab_id: "t_1",
       inputs: {},
@@ -150,13 +150,13 @@ describe("end-to-end playbooks via handlers", () => {
         },
       },
     ]);
-    const handlers = buildPlaybookHandlers(ws);
+    const handlers = buildProcedureHandlers(ws);
 
-    await handlers["playbooks_save"]!({
+    await handlers["procedures_save"]!({
       name: "demo.ship",
-      yaml: samplePlaybookYaml,
+      yaml: sampleProcedureYaml,
     });
-    const first = (await handlers["playbooks_execute"]!({
+    const first = (await handlers["procedures_execute"]!({
       name: "demo.ship",
       tab_id: "t_1",
       inputs: {},
@@ -166,7 +166,7 @@ describe("end-to-end playbooks via handlers", () => {
     expect(first.execution_id).toMatch(/^ex_/);
     expect(first.envelope?.step_id).toBe("submit");
 
-    const second = (await handlers["playbooks_resume"]!({
+    const second = (await handlers["procedures_resume"]!({
       execution_id: first.execution_id!,
       patch: {
         kind: "resume_with",
@@ -183,14 +183,14 @@ describe("end-to-end playbooks via handlers", () => {
       { method: "browser_navigate", response: { ok: true, page_effect: emptyPageEffect() } },
       { method: "browser_locate", error: { code: "LOCATOR_NOT_FOUND", message: "x" } },
     ]);
-    const handlers = buildPlaybookHandlers(ws);
+    const handlers = buildProcedureHandlers(ws);
 
-    await handlers["playbooks_save"]!({
+    await handlers["procedures_save"]!({
       name: "demo.ship",
-      yaml: samplePlaybookYaml,
+      yaml: sampleProcedureYaml,
     });
 
-    const result = (await handlers["playbooks_execute"]!({
+    const result = (await handlers["procedures_execute"]!({
       name: "demo.ship",
       tab_id: "t_1",
       inputs: {},

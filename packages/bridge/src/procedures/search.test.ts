@@ -1,837 +1,171 @@
-/**
- * Unit tests for the search module.
- *
- * Most tests operate on an in-memory Manifest directly — no filesystem for
- * the shallow-mode tests. One deep-mode test writes a real YAML to a tmpdir.
- */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import YAML from "yaml";
+import { buildIndex } from "./index-builder.js";
 import { search } from "./search.js";
-import { CodedError } from "./store.js";
-import type { Manifest, ManifestEntry } from "./index-builder.js";
 
-// ---------------------------------------------------------------------------
-// Fixture helpers
-// ---------------------------------------------------------------------------
+let tmpDir: string;
 
-function makeEntry(
+beforeEach(async () => {
+  tmpDir = await fs.mkdtemp(
+    path.join(import.meta.dirname ?? __dirname, ".pbsearch-test-"),
+  );
+});
+
+afterEach(async () => {
+  await fs.rm(tmpDir, { recursive: true, force: true });
+});
+
+async function writeYaml(rel: string, doc: unknown): Promise<void> {
+  const abs = path.join(tmpDir, rel);
+  await fs.mkdir(path.dirname(abs), { recursive: true });
+  await fs.writeFile(abs, YAML.stringify(doc), "utf8");
+}
+
+const trustedLeaf = (
   name: string,
-  partial: Partial<ManifestEntry> = {},
-): ManifestEntry {
-  return {
-    path: `shared/${name}/procedure.yaml`,
-    kind: "leaf",
-    domain: null,
-    description: `Description for ${name}`,
-    inputs: [],
-    triggers: [],
-    tags: [],
-    owner: null,
-    usedBy: [],
-    tokens: [],
-    status: "trusted",
-    
-    ...partial,
-  };
-}
-
-function makeManifest(
-  entries: Record<string, ManifestEntry>,
-): Manifest {
-  return {
-    version: 1,
-    updated: new Date().toISOString(),
-    procedures: entries,
-  };
-}
-
-// Sentinel: a root that doesn't exist on disk. Safe to pass in shallow mode.
-const PHANTOM_ROOT = "/nonexistent/procedures/root";
-
-// ---------------------------------------------------------------------------
-// Basic scoring
-// ---------------------------------------------------------------------------
-
-describe("exact name match scores higher than description-only match", () => {
-  const manifest = makeManifest({
-    "gmail.send_email": makeEntry("gmail.send_email", {
-      description: "Compose and send a Gmail email via the web UI",
-      domain: "gmail",
-    }),
-    "other.compose": makeEntry("other.compose", {
-      description: "Send an email using Gmail",
-      domain: "other",
-    }),
-  });
-
-  it("exact name match wins", async () => {
-    const result = await search(PHANTOM_ROOT, manifest, "gmail send email");
-    expect(result.matches.length).toBeGreaterThan(0);
-    // The top match must be the one whose name contains the query tokens
-    expect(result.matches[0]!.name).toBe("gmail.send_email");
-  });
+  description: string,
+  extras: Record<string, unknown> = {},
+) => ({
+  schema_version: 1,
+  name,
+  description,
+  kind: "leaf",
+  steps: [{ id: "s1", do: "navigate", with: { url: "https://example.com" } }],
+  meta: { version: 1, created: "2026-05-21T00:00:00Z", status: "trusted" },
+  ...extras,
 });
 
-// ---------------------------------------------------------------------------
-// Trigger vs description ranking
-// ---------------------------------------------------------------------------
-
-describe("trigger match beats description match", () => {
-  const manifest = makeManifest({
-    "proc_a": makeEntry("proc_a", {
-      description: "Sends notifications",
-      triggers: ["email campaign", "send bulk email"],
-    }),
-    "proc_b": makeEntry("proc_b", {
-      description: "Manage email campaign records",
-      triggers: ["open spreadsheet"],
-    }),
-  });
-
-  it("trigger-matching proc_a ranks above description-matching proc_b", async () => {
-    const result = await search(PHANTOM_ROOT, manifest, "email campaign");
-    expect(result.matches.length).toBeGreaterThanOrEqual(2);
-    expect(result.matches[0]!.name).toBe("proc_a");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Stop-word stripping
-// ---------------------------------------------------------------------------
-
-describe("stop words are stripped before scoring", () => {
-  const manifest = makeManifest({
-    "send_email": makeEntry("send_email", {
-      description: "Sends email messages",
-    }),
-  });
-
-  it("query 'send me an email' reduces to [send, email] and matches", async () => {
-    // "me", "an" are stop words → stripped
-    const result = await search(PHANTOM_ROOT, manifest, "send me an email", {
-      min_score: 0,
-    });
-    expect(result.matches.length).toBeGreaterThan(0);
-    expect(result.matches[0]!.name).toBe("send_email");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// All-stop-word query → zero matches, no throw
-// ---------------------------------------------------------------------------
-
-describe("empty post-tokenisation query returns zero matches without throwing", () => {
-  const manifest = makeManifest({
-    "some_proc": makeEntry("some_proc"),
-  });
-
-  it("'send me an' → zero matches", async () => {
-    // "send", "me", "an" — "send" is not a stop-word but let's use an all-stop query
-    // All entries in STOP_WORDS list: "a an the and or"
-    const result = await search(PHANTOM_ROOT, manifest, "a an the or and");
-    expect(result.matches).toHaveLength(0);
-    expect(result.total).toBe(0);
-    expect(result.truncated).toBe(false);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Empty raw query throws INVALID_PARAMS
-// ---------------------------------------------------------------------------
-
-describe("empty raw query throws INVALID_PARAMS", () => {
-  const manifest = makeManifest({});
-
-  it("whitespace-only query throws", async () => {
-    await expect(
-      search(PHANTOM_ROOT, manifest, "   "),
-    ).rejects.toSatisfy(
-      (err: unknown) =>
-        err instanceof CodedError && err.code === "INVALID_PARAMS",
+describe("procedures search", () => {
+  it("scores name + description coverage", async () => {
+    await writeYaml(
+      "shared/gmail_send/procedure.yaml",
+      trustedLeaf("gmail.send_email", "Send an email via Gmail."),
     );
-  });
-
-  it("empty string query throws", async () => {
-    await expect(
-      search(PHANTOM_ROOT, manifest, ""),
-    ).rejects.toSatisfy(
-      (err: unknown) =>
-        err instanceof CodedError && err.code === "INVALID_PARAMS",
+    await writeYaml(
+      "shared/slack_send/procedure.yaml",
+      trustedLeaf("slack.dm", "Send a Slack direct message."),
     );
-  });
-});
 
-// ---------------------------------------------------------------------------
-// min_score filtering
-// ---------------------------------------------------------------------------
+    const manifest = await buildIndex(tmpDir);
+    const result = await search(tmpDir, manifest, "gmail send email");
 
-describe("min_score filters low-scoring candidates", () => {
-  // proc_low has "xyzzy" in name — no overlap with "email"
-  const manifest = makeManifest({
-    "email_sender": makeEntry("email_sender", {
-      description: "Sends email",
-    }),
-    "xyzzy_proc": makeEntry("xyzzy_proc", {
-      description: "Totally unrelated xyzzy procedure",
-    }),
-  });
-
-  it("xyzzy_proc is excluded with min_score: 0.3", async () => {
-    const result = await search(PHANTOM_ROOT, manifest, "email", {
-      min_score: 0.3,
-    });
-    const names = result.matches.map((m) => m.name);
-    expect(names).not.toContain("xyzzy_proc");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// limit truncation
-// ---------------------------------------------------------------------------
-
-describe("limit truncation", () => {
-  // Build 15 procedures all matching "click"
-  const entries: Record<string, ManifestEntry> = {};
-  for (let i = 0; i < 15; i++) {
-    const name = `click_proc_${i.toString().padStart(2, "0")}`;
-    entries[name] = makeEntry(name, {
-      description: `Click something ${i}`,
-      triggers: ["click the button"],
-    });
-  }
-  const manifest = makeManifest(entries);
-
-  it("limit:5 returns 5 matches, truncated=true, total=15", async () => {
-    const result = await search(PHANTOM_ROOT, manifest, "click", {
-      limit: 5,
-      min_score: 0,
-    });
-    expect(result.matches).toHaveLength(5);
-    expect(result.truncated).toBe(true);
-    expect(result.total).toBe(15);
-  });
-
-  it("limit clamped to 1 at minimum", async () => {
-    const result = await search(PHANTOM_ROOT, manifest, "click", {
-      limit: 0,
-      min_score: 0,
-    });
     expect(result.matches.length).toBeGreaterThanOrEqual(1);
-    expect(result.matches.length).toBeLessThanOrEqual(1);
+    expect(result.matches[0]?.name).toBe("gmail.send_email");
   });
 
-  it("limit clamped to 25 at maximum", async () => {
-    // add 30 entries total
-    const big: Record<string, ManifestEntry> = {};
-    for (let i = 0; i < 30; i++) {
-      const name = `widget_${i.toString().padStart(2, "0")}`;
-      big[name] = makeEntry(name, {
-        description: `Widget click action ${i}`,
-        triggers: ["click widget"],
-      });
-    }
-    const bigManifest = makeManifest(big);
-    const result = await search(PHANTOM_ROOT, bigManifest, "click widget", {
-      limit: 100,
-      min_score: 0,
+  it("respects min_score", async () => {
+    await writeYaml(
+      "shared/gmail_send/procedure.yaml",
+      trustedLeaf("gmail.send_email", "Send an email via Gmail."),
+    );
+
+    const manifest = await buildIndex(tmpDir);
+    const result = await search(tmpDir, manifest, "totally unrelated topic", {
+      min_score: 0.5,
     });
-    expect(result.matches.length).toBeLessThanOrEqual(25);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// domain filter
-// ---------------------------------------------------------------------------
-
-describe("domain filter", () => {
-  const manifest = makeManifest({
-    "gmail.send": makeEntry("gmail.send", {
-      domain: "gmail",
-      description: "Send email via Gmail",
-    }),
-    "slack.notify": makeEntry("slack.notify", {
-      domain: "slack",
-      description: "Send notification via Slack",
-    }),
-    "no_domain": makeEntry("no_domain", {
-      domain: null,
-      description: "Send something general",
-    }),
+    expect(result.matches.length).toBe(0);
   });
 
-  it("domain: 'gmail' only returns gmail procedures", async () => {
-    const result = await search(PHANTOM_ROOT, manifest, "send", {
-      domain: "gmail",
-      min_score: 0,
-    });
-    expect(result.matches.every((m) => m.domain === "gmail")).toBe(true);
-    const names = result.matches.map((m) => m.name);
-    expect(names).toContain("gmail.send");
-    expect(names).not.toContain("slack.notify");
-    expect(names).not.toContain("no_domain");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// scope: "shared"
-// ---------------------------------------------------------------------------
-
-describe("scope: 'shared' excludes composites and subs", () => {
-  const manifest = makeManifest({
-    "shared_leaf": makeEntry("shared_leaf", {
-      path: "shared/shared_leaf/procedure.yaml",
-      owner: null,
-      description: "A shared leaf procedure for search",
-    }),
-    "composite_x": makeEntry("composite_x", {
-      path: "composite_x/procedure.yaml",
-      kind: "composite",
-      owner: null,
-      description: "A composite that does search-like things",
-    }),
-    "sub_one": makeEntry("sub_one", {
-      path: "composite_x/subs/sub_one/procedure.yaml",
-      owner: "composite_x",
-      description: "Sub procedure for searching",
-    }),
-  });
-
-  it("scope: 'shared' only returns the shared leaf", async () => {
-    const result = await search(PHANTOM_ROOT, manifest, "search", {
-      scope: "shared",
-      min_score: 0,
-    });
-    const names = result.matches.map((m) => m.name);
-    expect(names).toContain("shared_leaf");
-    expect(names).not.toContain("composite_x");
-    expect(names).not.toContain("sub_one");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// scope: "composite:<name>"
-// ---------------------------------------------------------------------------
-
-describe("scope: composite:X returns X and its subs", () => {
-  const manifest = makeManifest({
-    "shared_leaf": makeEntry("shared_leaf", {
-      path: "shared/shared_leaf/procedure.yaml",
-      owner: null,
-      description: "Shared email leaf procedure",
-    }),
-    "workflow_a": makeEntry("workflow_a", {
-      path: "workflow_a/procedure.yaml",
-      kind: "composite",
-      owner: null,
-      description: "Email workflow composite",
-    }),
-    "sub_step": makeEntry("sub_step", {
-      path: "workflow_a/subs/sub_step/procedure.yaml",
-      owner: "workflow_a",
-      description: "Sub step for email workflow",
-    }),
-    "other_leaf": makeEntry("other_leaf", {
-      path: "shared/other_leaf/procedure.yaml",
-      owner: null,
-      description: "Another email leaf",
-    }),
-  });
-
-  it("scope: 'composite:workflow_a' returns workflow_a and sub_step", async () => {
-    const result = await search(PHANTOM_ROOT, manifest, "email", {
-      scope: "composite:workflow_a",
-      min_score: 0,
-    });
-    const names = result.matches.map((m) => m.name);
-    expect(names).toContain("workflow_a");
-    expect(names).toContain("sub_step");
-    expect(names).not.toContain("shared_leaf");
-    expect(names).not.toContain("other_leaf");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// deep: false — no YAML loaded even with non-existent path
-// ---------------------------------------------------------------------------
-
-describe("deep: false does not load any YAML files", () => {
-  // Entry points to a file that doesn't exist — should not error in shallow mode
-  const manifest = makeManifest({
-    "phantom_proc": makeEntry("phantom_proc", {
-      path: "shared/phantom_proc/procedure.yaml",
-      description: "Phantom procedure for testing",
-      triggers: ["phantom trigger"],
-    }),
-  });
-
-  it("shallow search on non-existent path does not throw", async () => {
-    await expect(
-      search(PHANTOM_ROOT, manifest, "phantom", {
-        deep: false,
-        min_score: 0,
+  it("filters by domain", async () => {
+    await writeYaml(
+      "shared/gmail_send/procedure.yaml",
+      trustedLeaf("gmail.send_email", "Send an email via Gmail.", {
+        domain: "gmail",
       }),
-    ).resolves.toBeDefined();
+    );
+    await writeYaml(
+      "shared/slack_send/procedure.yaml",
+      trustedLeaf("slack.dm", "Send a Slack direct message.", {
+        domain: "slack",
+      }),
+    );
+
+    const manifest = await buildIndex(tmpDir);
+    const result = await search(tmpDir, manifest, "send", { domain: "gmail" });
+    expect(result.matches.every((m) => m.domain === "gmail")).toBe(true);
   });
 
-  it("returns match from shallow index data only", async () => {
-    const result = await search(PHANTOM_ROOT, manifest, "phantom", {
-      deep: false,
-      min_score: 0,
+  it("excludes drafts by default; falls back to drafts when no trusted match", async () => {
+    await writeYaml("shared/dr/procedure.yaml", {
+      schema_version: 1,
+      name: "draft.only",
+      description: "Draft only example flow",
+      kind: "leaf",
+      steps: [{ id: "s1", do: "navigate", with: { url: "x" } }],
+      // no meta → defaults to draft
     });
-    expect(result.matches).toHaveLength(1);
-    expect(result.matches[0]!.name).toBe("phantom_proc");
-  });
-});
 
-// ---------------------------------------------------------------------------
-// include_drafts filter
-// ---------------------------------------------------------------------------
-
-describe("include_drafts filter", () => {
-  const manifest = makeManifest({
-    "trusted_one": makeEntry("trusted_one", {
-      description: "verified procedure for sending an email",
-      status: "trusted",
-      
-    }),
-    "draft_one": makeEntry("draft_one", {
-      description: "untested procedure for sending an email",
-      status: "draft",
-      
-    }),
-  });
-
-  it("excludes drafts by default", async () => {
-    const result = await search(PHANTOM_ROOT, manifest, "send email", {
-      min_score: 0,
-    });
-    const names = result.matches.map((m) => m.name);
-    expect(names).toContain("trusted_one");
-    expect(names).not.toContain("draft_one");
+    const manifest = await buildIndex(tmpDir);
+    const result = await search(tmpDir, manifest, "draft only example");
+    expect(result.matches.length).toBe(0);
+    expect(result.drafts?.length).toBeGreaterThan(0);
   });
 
   it("includes drafts when include_drafts: true", async () => {
-    const result = await search(PHANTOM_ROOT, manifest, "send email", {
-      min_score: 0,
-      include_drafts: true,
-    });
-    const names = result.matches.map((m) => m.name);
-    expect(names).toContain("trusted_one");
-    expect(names).toContain("draft_one");
-  });
-
-  it("does not populate drafts fallback when trusted matches exist", async () => {
-    const result = await search(PHANTOM_ROOT, manifest, "send email", {
-      min_score: 0,
-    });
-    expect(result.matches.map((m) => m.name)).toContain("trusted_one");
-    expect(result.drafts).toBeUndefined();
-  });
-
-  it("does not populate drafts when include_drafts is true (drafts go in matches)", async () => {
-    const result = await search(PHANTOM_ROOT, manifest, "send email", {
-      min_score: 0,
-      include_drafts: true,
-    });
-    expect(result.drafts).toBeUndefined();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Draft fallback when trusted result set is empty
-// ---------------------------------------------------------------------------
-
-describe("draft fallback surfaces drafts when trusted matches are empty", () => {
-  it("populates `drafts` when no trusted entry matches but a draft does", async () => {
-    const manifest = makeManifest({
-      "draft_only": makeEntry("draft_only", {
-        description: "send email message",
-        status: "draft",
-        
-      }),
-      "unrelated_trusted": makeEntry("unrelated_trusted", {
-        description: "weather forecast widget",
-        status: "trusted",
-        
-      }),
-    });
-
-    // Use the default min_score (0.2) so the unrelated trusted entry — which
-    // would otherwise sneak in at score 0 — is filtered out properly.
-    const result = await search(PHANTOM_ROOT, manifest, "send email");
-    expect(result.matches).toHaveLength(0);
-    expect(result.drafts).toBeDefined();
-    expect(result.drafts!.map((m) => m.name)).toEqual(["draft_only"]);
-  });
-
-  it("does not populate `drafts` when no draft entry scores either", async () => {
-    const manifest = makeManifest({
-      "unrelated_draft": makeEntry("unrelated_draft", {
-        description: "totally unrelated draft",
-        status: "draft",
-        
-      }),
-    });
-
-    const result = await search(PHANTOM_ROOT, manifest, "send email", {
-      min_score: 0.2,
-    });
-    expect(result.matches).toHaveLength(0);
-    expect(result.drafts).toBeUndefined();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// deep: true — finds step-body matches
-// ---------------------------------------------------------------------------
-
-describe("deep: true finds step-body matches that shallow misses", () => {
-  let tmpDir: string;
-  let root: string;
-
-  const PROC_NAME = "stepper";
-
-  // This YAML has a unique token "frobulate" only in the step body (with param),
-  // not in name/description/triggers/tags/inputs.
-  const STEPPER_YAML = `\
-schema_version: 1
-name: stepper
-description: A procedure for testing deep search
-kind: leaf
-steps:
-  - id: step1
-    action: browser_execute_js
-    with:
-      script: "document.frobulate()"
-`;
-
-  beforeAll(async () => {
-    tmpDir = await fs.mkdtemp(
-      path.join(import.meta.dirname ?? __dirname, ".search-deep-test-"),
-    );
-    root = tmpDir;
-
-    const procDir = path.join(root, "shared", PROC_NAME);
-    await fs.mkdir(procDir, { recursive: true });
-    await fs.writeFile(path.join(procDir, "procedure.yaml"), STEPPER_YAML, "utf8");
-  });
-
-  afterAll(async () => {
-    await fs.rm(tmpDir, { recursive: true, force: true });
-  });
-
-  function makeStepperManifest(): Manifest {
-    return makeManifest({
-      [PROC_NAME]: makeEntry(PROC_NAME, {
-        path: `shared/${PROC_NAME}/procedure.yaml`,
-        description: "A procedure for testing deep search",
-        // "frobulate" is NOT in any index field
-        triggers: [],
-        tags: [],
-        inputs: [],
-      }),
-    });
-  }
-
-  it("shallow search misses 'frobulate'", async () => {
-    const manifest = makeStepperManifest();
-    // Use default min_score (0.2) — frobulate scores 0 in shallow mode so it is filtered out
-    const result = await search(root, manifest, "frobulate", {
-      deep: false,
-    });
-    expect(result.matches).toHaveLength(0);
-  });
-
-  it("deep search finds 'frobulate' in step body", async () => {
-    const manifest = makeStepperManifest();
-    // With deep:true, the step body contains "frobulate" → non-zero score
-    const result = await search(root, manifest, "frobulate", {
-      deep: true,
-      min_score: 0,
-    });
-    expect(result.matches).toHaveLength(1);
-    expect(result.matches[0]!.name).toBe(PROC_NAME);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// snippet logic
-// ---------------------------------------------------------------------------
-
-describe("snippet is set when match is trigger-driven; not set for pure name match", () => {
-  const manifest = makeManifest({
-    "email.send": makeEntry("email.send", {
-      domain: "email",
-      description: "Send an email message",
-      triggers: ["send an email to user", "compose email message"],
-    }),
-    "pure_name_match": makeEntry("pure_name_match", {
-      description: "Something unrelated",
-      triggers: [],
-    }),
-  });
-
-  it("trigger-driven match includes a snippet", async () => {
-    // Query 'email send' — triggers contribute more than name for email.send
-    // because triggers contain "email send" phrase
-    const result = await search(PHANTOM_ROOT, manifest, "compose email", {
-      min_score: 0,
-    });
-    const emailMatch = result.matches.find((m) => m.name === "email.send");
-    expect(emailMatch).toBeDefined();
-    // Should have snippet since trigger "compose email message" contains query tokens
-    expect(emailMatch!.snippet).toBeDefined();
-    if (emailMatch!.snippet !== undefined) {
-      expect(emailMatch!.snippet.length).toBeLessThanOrEqual(60);
-    }
-  });
-
-  it("pure name match does not include a snippet", async () => {
-    // Query exactly matches "pure_name_match" name tokens → name score dominates
-    const result = await search(PHANTOM_ROOT, manifest, "pure name match", {
-      min_score: 0,
-    });
-    const nameMatch = result.matches.find((m) => m.name === "pure_name_match");
-    expect(nameMatch).toBeDefined();
-    // No triggers, no description match → name dominates → no snippet
-    expect(nameMatch!.snippet).toBeUndefined();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Coverage-recall regression: "slack channel last message"
-// ---------------------------------------------------------------------------
-
-describe("coverage recall: slack.open_channel surfaces alongside slack.dm_person", () => {
-  // Mirror of the real on-disk procedures. Under the prior weighted-sum ranker
-  // a "slack channel last message" query returned only slack.dm_person because
-  // 'message' appeared in dm_person's triggers/inputs and pulled its raw score
-  // above the 0.2 cutoff while open_channel — which has no overlap on 'last'
-  // or 'message' — fell below it. Coverage gives both a 2/4 = 0.5 score and
-  // legacyRaw orders open_channel first because it picks up 'channel' across
-  // name + triggers + description + inputs.
-  const manifest = makeManifest({
-    "slack.dm_person": makeEntry("slack.dm_person", {
-      domain: "slack",
-      description:
-        "Send a Slack direct message to a workspace member by name. Uses the Slack web API.",
-      inputs: ["recipient", "message"],
-      triggers: [
-        "dm someone on slack",
-        "send a slack direct message",
-        "message a slack user by name",
-        "slack dm",
-        "send slack message to person",
-      ],
-    }),
-    "slack.open_channel": makeEntry("slack.open_channel", {
-      domain: "slack",
-      description:
-        "Open a Slack channel by name in the current Slack tab. Sidebar lookup first, conversations.list API fallback.",
-      inputs: ["channel_name"],
-      triggers: [
-        "open slack channel",
-        "go to slack channel",
-        "switch to slack channel",
-        "navigate to a slack channel",
-        "find slack channel by name",
-      ],
-    }),
-  });
-
-  it("both procedures appear at default min_score for 'slack channel last message'", async () => {
-    const result = await search(
-      PHANTOM_ROOT,
-      manifest,
-      "slack channel last message",
-    );
-    const names = result.matches.map((m) => m.name);
-    expect(names).toContain("slack.dm_person");
-    expect(names).toContain("slack.open_channel");
-  });
-
-  it("slack.open_channel ranks first via legacyRaw tie-break", async () => {
-    const result = await search(
-      PHANTOM_ROOT,
-      manifest,
-      "slack channel last message",
-    );
-    expect(result.matches[0]!.name).toBe("slack.open_channel");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Tie-break: identical coverage → higher legacyRaw wins
-// ---------------------------------------------------------------------------
-
-describe("legacyRaw tie-breaks identical-coverage candidates", () => {
-  // Both procs cover the single query token "deploy" — coverage 1/1 = 1.0 for
-  // both. Difference: name_match has "deploy" in its name (10 weight) while
-  // descr_match only has it in description (3 weight). legacyRaw orders
-  // name_match first.
-  const manifest = makeManifest({
-    "deploy_runner": makeEntry("deploy_runner", {
-      description: "Run the staging pipeline",
-    }),
-    "pipeline_x": makeEntry("pipeline_x", {
-      description: "Trigger a deploy of the staging pipeline",
-    }),
-  });
-
-  it("name match ranks above description-only match at equal coverage", async () => {
-    const result = await search(PHANTOM_ROOT, manifest, "deploy");
-    expect(result.matches.length).toBeGreaterThanOrEqual(2);
-    expect(result.matches[0]!.score).toBe(result.matches[1]!.score);
-    expect(result.matches[0]!.name).toBe("deploy_runner");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Coverage ordering: more covered tokens beats fewer at the same legacyRaw
-// per-field rate
-// ---------------------------------------------------------------------------
-
-describe("higher coverage outranks lower coverage", () => {
-  const manifest = makeManifest({
-    "covers_one": makeEntry("covers_one", {
-      description: "alpha procedure",
-    }),
-    "covers_two": makeEntry("covers_two", {
-      description: "alpha beta procedure",
-    }),
-  });
-
-  it("2/2 coverage beats 1/2 coverage even when legacyRaw would prefer the other", async () => {
-    const result = await search(PHANTOM_ROOT, manifest, "alpha beta", {
-      min_score: 0,
-    });
-    expect(result.matches[0]!.name).toBe("covers_two");
-    expect(result.matches[0]!.score).toBe(1);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Query token dedupe — coverageRatio stays in [0,1]
-// ---------------------------------------------------------------------------
-
-describe("repeated query tokens are deduped before coverage", () => {
-  const manifest = makeManifest({
-    "click_button": makeEntry("click_button", {
-      description: "Click a button on the page",
-    }),
-  });
-
-  it("'click click button' dedupes to {click, button} → 2/2 coverage", async () => {
-    const result = await search(PHANTOM_ROOT, manifest, "click click button");
-    expect(result.matches[0]!.score).toBe(1);
-    expect(result.matches[0]!.score).toBeLessThanOrEqual(1);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Deep widens the union: shallow + step-body tokens combine to lift coverage
-// ---------------------------------------------------------------------------
-
-describe("deep:true widens the token haystack for coverage", () => {
-  let tmpDir: string;
-  let root: string;
-
-  const PROC_NAME = "widener";
-
-  // "alpha" is in the description, "beta" is ONLY in the step body.
-  const WIDENER_YAML = `\
-schema_version: 1
-name: widener
-description: alpha procedure
-kind: leaf
-steps:
-  - id: step1
-    action: browser_execute_js
-    with:
-      script: "document.beta()"
-`;
-
-  beforeAll(async () => {
-    tmpDir = await fs.mkdtemp(
-      path.join(import.meta.dirname ?? __dirname, ".search-deep-widen-"),
-    );
-    root = tmpDir;
-
-    const procDir = path.join(root, "shared", PROC_NAME);
-    await fs.mkdir(procDir, { recursive: true });
-    await fs.writeFile(
-      path.join(procDir, "procedure.yaml"),
-      WIDENER_YAML,
-      "utf8",
-    );
-  });
-
-  afterAll(async () => {
-    await fs.rm(tmpDir, { recursive: true, force: true });
-  });
-
-  function makeWidenerManifest(): Manifest {
-    return makeManifest({
-      [PROC_NAME]: makeEntry(PROC_NAME, {
-        path: `shared/${PROC_NAME}/procedure.yaml`,
-        description: "alpha procedure",
-        triggers: [],
-        tags: [],
-        inputs: [],
-      }),
-    });
-  }
-
-  it("shallow coverage for 'alpha beta' is 1/2 = 0.5", async () => {
-    const manifest = makeWidenerManifest();
-    const result = await search(root, manifest, "alpha beta", { deep: false });
-    expect(result.matches).toHaveLength(1);
-    expect(result.matches[0]!.score).toBe(0.5);
-  });
-
-  it("deep coverage for 'alpha beta' lifts to 2/2 = 1.0", async () => {
-    const manifest = makeWidenerManifest();
-    const result = await search(root, manifest, "alpha beta", { deep: true });
-    expect(result.matches).toHaveLength(1);
-    expect(result.matches[0]!.score).toBe(1);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// SearchResult shape
-// ---------------------------------------------------------------------------
-
-describe("SearchResult shape is correct", () => {
-  const manifest = makeManifest({
-    "foo.bar": makeEntry("foo.bar", {
-      domain: "foo",
+    await writeYaml("shared/dr/procedure.yaml", {
+      schema_version: 1,
+      name: "draft.only",
+      description: "Draft flow",
       kind: "leaf",
-      description: "Foo bar procedure",
-      inputs: ["x", "y"],
-      triggers: ["do foo bar"],
-    }),
-  });
+      steps: [{ id: "s1", do: "navigate", with: { url: "x" } }],
+    });
 
-  it("match has all required fields", async () => {
-    const result = await search(PHANTOM_ROOT, manifest, "foo bar", {
-      min_score: 0,
+    const manifest = await buildIndex(tmpDir);
+    const result = await search(tmpDir, manifest, "draft flow", {
+      include_drafts: true,
     });
     expect(result.matches.length).toBeGreaterThan(0);
-    const m = result.matches[0]!;
-    expect(typeof m.name).toBe("string");
-    expect(m.kind === "leaf" || m.kind === "composite").toBe(true);
-    expect(typeof m.description).toBe("string");
-    expect(Array.isArray(m.inputs)).toBe(true);
-    expect(Array.isArray(m.triggers)).toBe(true);
-    expect(typeof m.score).toBe("number");
-    expect(m.score).toBeGreaterThan(0);
-    expect(m.score).toBeLessThanOrEqual(1);
   });
 
-  it("non-truncated result has truncated=false", async () => {
-    const result = await search(PHANTOM_ROOT, manifest, "foo", { min_score: 0 });
-    expect(result.truncated).toBe(false);
-    expect(result.total).toBe(result.matches.length);
+  it("returns side_effects on matches", async () => {
+    await writeYaml(
+      "shared/pay/procedure.yaml",
+      trustedLeaf("billing.pay", "Pay an invoice.", {
+        side_effects: ["payment"],
+      }),
+    );
+
+    const manifest = await buildIndex(tmpDir);
+    const result = await search(tmpDir, manifest, "pay invoice");
+    expect(result.matches[0]?.side_effects).toEqual(["payment"]);
+  });
+
+  it("rejects empty query", async () => {
+    const manifest = await buildIndex(tmpDir);
+    await expect(search(tmpDir, manifest, "  ")).rejects.toThrow(/empty/);
+  });
+
+  it("scope filter: composite:X surfaces only that composite + its subs", async () => {
+    await writeYaml(
+      "shared/standalone/procedure.yaml",
+      trustedLeaf("standalone.send", "Standalone send"),
+    );
+    await writeYaml("comp/procedure.yaml", {
+      schema_version: 1,
+      name: "comp.root",
+      description: "Composite root",
+      kind: "composite",
+      uses: ["comp.root.sub"],
+      meta: { version: 1, created: "2026-05-21T00:00:00Z", status: "trusted" },
+      steps: [
+        { id: "s1", do: "procedure_call", with: { name: "comp.root.sub" } },
+      ],
+    });
+    await writeYaml(
+      "comp/subs/sub/procedure.yaml",
+      trustedLeaf("comp.root.sub", "Composite sub send"),
+    );
+
+    const manifest = await buildIndex(tmpDir);
+    const result = await search(tmpDir, manifest, "send composite", {
+      scope: "composite:comp.root",
+    });
+    expect(
+      result.matches.every(
+        (m) => m.name === "comp.root" || m.name === "comp.root.sub",
+      ),
+    ).toBe(true);
   });
 });

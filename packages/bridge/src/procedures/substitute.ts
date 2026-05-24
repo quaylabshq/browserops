@@ -1,5 +1,5 @@
 /**
- * Variable substitution for playbook step parameters.
+ * Variable substitution for procedure step parameters.
  *
  * Recognised placeholder forms:
  *   {{tab_id}}        → inputs.tab_id

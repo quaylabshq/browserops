@@ -6,12 +6,12 @@
  * `shouldDemoteFromHealth` to decide whether to flip
  * `status: trusted → status: draft` when persisting.
  *
- * No I/O. The caller threads the resulting PlaybookHealthDef back into
- * the playbook YAML when it writes to disk.
+ * No I/O. The caller threads the resulting HealthDef back into
+ * the procedure YAML when it writes to disk.
  */
 import type {
-  PlaybookHealthDef,
-  PlaybookStepHealth,
+  HealthDef,
+  StepHealth,
   LocatorStabilityTier,
 } from "@browserops/shared";
 
@@ -32,20 +32,20 @@ const RELOCATE_MIN_RUNS = 5;
 const FRAGILE_RELOCATE_RATE_THRESHOLD = 0.1;
 const TARGET_CHANGE_MIN_RUNS = 3;
 
-export function emptyHealth(updated: string): PlaybookHealthDef {
+export function emptyHealth(updated: string): HealthDef {
   return { updated, steps: {} };
 }
 
 /**
  * Fold a single ResolutionRecord into the health block for `stepId`.
- * Returns a new PlaybookHealthDef — the input is not mutated.
+ * Returns a new HealthDef — the input is not mutated.
  */
 export function recordResolution(
-  prev: PlaybookHealthDef,
+  prev: HealthDef,
   stepId: string,
   record: ResolutionRecord,
   at: string,
-): PlaybookHealthDef {
+): HealthDef {
   const existing = prev.steps[stepId];
   const prevRuns = existing?.runs ?? 0;
   const prevAvg = existing?.avg_match_count ?? record.match_count;
@@ -63,7 +63,7 @@ export function recordResolution(
       ? 1
       : 0;
 
-  const next: PlaybookStepHealth = {
+  const next: StepHealth = {
     runs: nextRuns,
     relocates: (existing?.relocates ?? 0) + relocateInc,
     ambiguous_resolves: (existing?.ambiguous_resolves ?? 0) + ambiguousInc,
@@ -81,11 +81,11 @@ export function recordResolution(
 
 /**
  * True when at least one step's health signals warrant demoting the
- * playbook from trusted to draft on the next save. Pure rule-based check
+ * procedure from trusted to draft on the next save. Pure rule-based check
  * over the health block.
  */
 export function shouldDemoteFromHealth(
-  health: PlaybookHealthDef | undefined,
+  health: HealthDef | undefined,
 ): boolean {
   if (health === undefined) return false;
   for (const step of Object.values(health.steps)) {
@@ -94,7 +94,7 @@ export function shouldDemoteFromHealth(
   return false;
 }
 
-function isStepDegraded(step: PlaybookStepHealth): boolean {
+function isStepDegraded(step: StepHealth): boolean {
   // Relocate-rate signal — primary metric of drift.
   if (step.runs >= RELOCATE_MIN_RUNS) {
     const rate = step.relocates / step.runs;

@@ -1,5 +1,5 @@
 /**
- * Shared result/divergence types for the playbook execute loop.
+ * Shared result/divergence types for the procedure execute loop.
  *
  * Lifted out of execute.ts so state.ts can reference them without a
  * circular import (state ↔ execute would otherwise loop).

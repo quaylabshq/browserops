@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { PlaybookStepDef } from "@browserops/shared";
+import type { StepDef } from "@browserops/shared";
 import { applyRetry, applyRelocate } from "./fallback.js";
 
 describe("applyRetry", () => {
   it("returns retry while attempts remain", () => {
-    const step: PlaybookStepDef = {
+    const step: StepDef = {
       id: "s1",
       do: "click",
       fallback: { strategy: "retry", retry: { attempts: 3, backoff_ms: 100 } },
@@ -16,7 +16,7 @@ describe("applyRetry", () => {
   });
 
   it("gives up at the configured attempts cap", () => {
-    const step: PlaybookStepDef = {
+    const step: StepDef = {
       id: "s1",
       do: "click",
       fallback: { strategy: "retry", retry: { attempts: 2 } },
@@ -25,7 +25,7 @@ describe("applyRetry", () => {
   });
 
   it("uses defaults when retry config missing", () => {
-    const step: PlaybookStepDef = { id: "s1", do: "click", fallback: { strategy: "retry" } };
+    const step: StepDef = { id: "s1", do: "click", fallback: { strategy: "retry" } };
     const d = applyRetry(step, 0);
     expect(d.action).toBe("retry");
     expect(d.backoff_ms).toBeGreaterThan(0);
@@ -34,7 +34,7 @@ describe("applyRetry", () => {
 
 describe("applyRelocate", () => {
   it("drops role when widen_role is true", () => {
-    const step: PlaybookStepDef = {
+    const step: StepDef = {
       id: "s1",
       do: "click",
       locator: { role: "button", name: "Send" },
@@ -47,7 +47,7 @@ describe("applyRelocate", () => {
   });
 
   it("relaxes anchored regex name when widen_name is true", () => {
-    const step: PlaybookStepDef = {
+    const step: StepDef = {
       id: "s1",
       do: "click",
       locator: { role: "button", name: "/^send$/i" },
@@ -59,7 +59,7 @@ describe("applyRelocate", () => {
   });
 
   it("adds has_text from goal when consider_text is true", () => {
-    const step: PlaybookStepDef = {
+    const step: StepDef = {
       id: "s1",
       do: "click",
       goal: "Click the Schedule send button to defer the message",
@@ -72,7 +72,7 @@ describe("applyRelocate", () => {
   });
 
   it("gives up when no widening produces a change", () => {
-    const step: PlaybookStepDef = {
+    const step: StepDef = {
       id: "s1",
       do: "click",
       locator: { name: "Send" },
@@ -84,7 +84,7 @@ describe("applyRelocate", () => {
   });
 
   it("gives up when relocate config missing", () => {
-    const step: PlaybookStepDef = {
+    const step: StepDef = {
       id: "s1",
       do: "click",
       locator: { role: "button", name: "Send" },

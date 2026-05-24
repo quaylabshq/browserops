@@ -4,14 +4,13 @@ import { ERROR_CODES } from "./errors.js";
 import { KNOWN_FEATURES } from "./features.js";
 
 describe("TOOL_DEFS catalogue", () => {
-  it("every tool name is prefixed browser_, procedures_, playbooks_, or memory_ and unique", () => {
+  it("every tool name is prefixed browser_, procedures_, or memory_ and unique", () => {
     const names = TOOL_DEFS.map((t) => t.name);
     expect(new Set(names).size).toBe(names.length);
     for (const n of names)
       expect(
         n.startsWith("browser_") ||
           n.startsWith("procedures_") ||
-          n.startsWith("playbooks_") ||
           n.startsWith("memory_"),
       ).toBe(true);
   });
@@ -49,9 +48,9 @@ describe("TOOL_DEFS catalogue", () => {
     }
   });
 
-  it("procedures_*/memory_*/playbooks_* are feature-gated; browser_* is mostly ungated", () => {
+  it("procedures_*/memory_* are feature-gated; browser_* is mostly ungated", () => {
     // browser_locate + browser_propose_locator are the browser_* tools
-    // gated behind playbooks (they power the playbooks runtime; agents
+    // gated behind `procedures` (they power the procedure runtime; agents
     // shouldn't see them when the feature is off).
     const browserGated = new Set(["browser_locate", "browser_propose_locator"]);
     for (const t of TOOL_DEFS) {
@@ -59,10 +58,8 @@ describe("TOOL_DEFS catalogue", () => {
         expect(t.feature).toBe("procedures");
       } else if (t.name.startsWith("memory_")) {
         expect(t.feature).toBe("memory");
-      } else if (t.name.startsWith("playbooks_")) {
-        expect(t.feature).toBe("playbooks");
       } else if (browserGated.has(t.name)) {
-        expect(t.feature).toBe("playbooks");
+        expect(t.feature).toBe("procedures");
       } else {
         expect(t.feature).toBeUndefined();
       }
@@ -147,9 +144,9 @@ describe("browser_propose_locator schema", () => {
     | Record<string, Record<string, unknown>>
     | undefined;
 
-  it("exists in the tool catalogue and is gated behind playbooks", () => {
+  it("exists in the tool catalogue and is gated behind procedures", () => {
     expect(tool).toBeDefined();
-    expect(tool?.feature).toBe("playbooks");
+    expect(tool?.feature).toBe("procedures");
   });
 
   it("requires tab_id and ref", () => {
@@ -295,8 +292,8 @@ describe("procedures_search", () => {
     expect(tool?.risky).toBe("never");
   });
 
-  it("errorCodes contains PROC_NOT_FOUND", () => {
-    expect(tool?.errorCodes).toContain("PROC_NOT_FOUND");
+  it("errorCodes contains PROCEDURE_NOT_FOUND", () => {
+    expect(tool?.errorCodes).toContain("PROCEDURE_NOT_FOUND");
   });
 
   it("requires query", () => {
@@ -328,8 +325,8 @@ describe("procedures_get", () => {
     expect(tool?.risky).toBe("never");
   });
 
-  it("errorCodes contains PROC_NOT_FOUND", () => {
-    expect(tool?.errorCodes).toContain("PROC_NOT_FOUND");
+  it("errorCodes contains PROCEDURE_NOT_FOUND", () => {
+    expect(tool?.errorCodes).toContain("PROCEDURE_NOT_FOUND");
   });
 
   it("requires name", () => {
@@ -352,8 +349,8 @@ describe("procedures_save", () => {
     expect(tool?.risky).toBe("never");
   });
 
-  it("errorCodes contains PROC_NOT_FOUND", () => {
-    expect(tool?.errorCodes).toContain("PROC_NOT_FOUND");
+  it("errorCodes contains PROCEDURE_NOT_FOUND", () => {
+    expect(tool?.errorCodes).toContain("PROCEDURE_NOT_FOUND");
   });
 
   it("requires name and yaml", () => {
@@ -386,8 +383,8 @@ describe("procedures_delete", () => {
     expect(tool?.risky).toBe("never");
   });
 
-  it("errorCodes contains PROC_NOT_FOUND", () => {
-    expect(tool?.errorCodes).toContain("PROC_NOT_FOUND");
+  it("errorCodes contains PROCEDURE_NOT_FOUND", () => {
+    expect(tool?.errorCodes).toContain("PROCEDURE_NOT_FOUND");
   });
 
   it("requires name", () => {

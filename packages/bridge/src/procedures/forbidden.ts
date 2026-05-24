@@ -1,15 +1,15 @@
 /**
  * Forbidden-locator + forbidden-action guard.
  *
- * Runs before every dispatch the playbook engine emits — including
- * dispatches from LLM-proposed remediation patches in playbooks_resume.
+ * Runs before every dispatch the procedure engine emits — including
+ * dispatches from LLM-proposed remediation patches in procedures_resume.
  * Centralised here so the resume path cannot bypass author-declared
  * safety bars.
  */
 import type {
-  PlaybookForbiddenDef,
+  ForbiddenDef,
   Locator,
-  PlaybookStepDef,
+  StepDef,
 } from "@browserops/shared";
 import { matchString } from "./match-string.js";
 
@@ -30,7 +30,7 @@ export interface ForbiddenCheckResult {
  * forbidden block. Returns `{allowed: true}` when no rule applies.
  */
 export function checkForbidden(
-  forbidden: PlaybookForbiddenDef | undefined,
+  forbidden: ForbiddenDef | undefined,
   input: ForbiddenCheckInput,
 ): ForbiddenCheckResult {
   if (forbidden === undefined || forbidden === null) return { allowed: true };
@@ -44,7 +44,7 @@ export function checkForbidden(
   ) {
     return {
       allowed: false,
-      reason: `action ${JSON.stringify(input.action)} is in the playbook's forbidden.actions list`,
+      reason: `action ${JSON.stringify(input.action)} is in the procedure's forbidden.actions list`,
     };
   }
 
@@ -127,8 +127,8 @@ function patternsOverlap(a: string, b: string): boolean {
  * step automatically.
  */
 export function checkForbiddenForStep(
-  forbidden: PlaybookForbiddenDef | undefined,
-  step: PlaybookStepDef,
+  forbidden: ForbiddenDef | undefined,
+  step: StepDef,
 ): ForbiddenCheckResult {
   return checkForbidden(forbidden, {
     action: step.do,

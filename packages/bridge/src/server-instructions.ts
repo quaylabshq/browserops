@@ -172,75 +172,47 @@ const risky: Lines = [
 function proceduresSection(enabledFeatures: ReadonlySet<FeatureName>): Lines {
   if (!enabledFeatures.has("procedures")) {
     return [
-      "Procedure memory is opt-in via `browserops feature enable procedures`",
-      "(then `browserops restart`). With the feature off, the agent has only",
-      "the always-on browser_* tools — plan flows from scratch each time.",
+      "Procedures are opt-in via `browserops feature enable procedures` (then",
+      "`browserops restart`). With the feature off, the agent has only the",
+      "always-on browser_* tools — plan flows from scratch each time. Enabling",
+      "procedures unlocks: semantic locators, retrying expect predicates,",
+      "per-step LLM-fallback ladder via procedures_resume, drift-health",
+      "auto-demote, and the browserops-teach skill for autonomous authoring.",
     ];
   }
   return [
-    "Procedure memory:",
-    "- Procedures are named, parameterized, reusable action graphs living in",
-    "  `~/browserops/procedures/`. Before planning any browser task, call",
-    "  `procedures_search(<tokens from user's request>)` once. If the top match",
-    "  has score >= 0.5, load it with `procedures_get` and run its steps. If",
-    "  multiple matches are relevant (common for composite tasks like",
-    '  "email posthog users" — both posthog and gmail procedures), load all of',
-    "  them; they are meant to compose.",
-    "- `list`/`search` return metadata only; `get` returns the YAML body. Do",
-    "  not dump the full catalogue — scope via `domain` or `scope` when you",
-    "  can narrow.",
-    "- A composite procedure declares `uses: [...]`. After a `get`, fetch each",
-    "  name in `uses:` (parallel `get` calls) — that loads the full pack for",
-    "  execution.",
-    "- If no match clears threshold, plan from scratch, then offer",
-    "  `procedures_save` at the end.",
-    "- You interpret and execute procedures yourself by calling the",
-    "  `browser_*` primitives in their `steps:` — the bridge does not run",
-    "  procedures.",
-    "- Never take a screenshot to verify a step that declares `wait_for`.",
-    "  Only screenshot on error or unexpected state.",
-  ];
-}
-
-function playbooksSection(enabledFeatures: ReadonlySet<FeatureName>): Lines {
-  if (!enabledFeatures.has("playbooks")) {
-    return [
-      "Playbooks are opt-in via `browserops feature enable playbooks` (then",
-      "`browserops restart`). They layer semantic locators, auto-wait, retrying",
-      "expect predicates, and a per-step LLM-fallback ladder on top of the core",
-      "browser_* tools. Off by default.",
-    ];
-  }
-  return [
-    "Playbooks:",
-    "- Playbooks are deterministic-first browser flows with retrying expect",
-    "  predicates and per-step fallback strategies. Each step has a semantic",
-    "  locator descriptor ({role, name, has_text, nth, ...}) that re-resolves",
-    "  against the live a11y tree each step — no stale-ref class of bugs.",
-    "- Before authoring a flow, call `playbooks_search` (then `playbooks_get`)",
-    "  to find a trusted match. If score >= 0.5, run via `playbooks_execute`",
+    "Procedures:",
+    "- Procedures are deterministic-first browser flows in `~/browserops/procedures/`.",
+    "  Each step has a semantic locator descriptor ({role, name, aria_label,",
+    "  data_testid, href, attr, has_text, nth, ...}) that re-resolves against",
+    "  the live a11y tree each step — no stale-ref class of bugs.",
+    "- Before authoring a flow, call `procedures_search` (then `procedures_get`)",
+    "  to find a trusted match. If score >= 0.5, run via `procedures_execute`",
     "  with the matching inputs.",
-    "- `playbooks_execute` either completes, halts (strict failure), or returns",
+    "- `procedures_execute` either completes, halts (strict failure), or returns",
     '  `{"status":"needs_assist", "execution_id", "envelope"}` — the envelope',
     "  carries the step goal, last attempt, remaining-steps preview, and the",
-    "  playbook's safety constraints. Inspect it and call `playbooks_resume`",
+    "  procedure's safety constraints. Inspect it and call `procedures_resume`",
     "  with a patch: resume_with{locator?, params?}, insert_steps{steps[]},",
     "  or give_up{reason}.",
-    "- Every patch step flows through the playbook's forbidden{locators,",
+    "- Every patch step flows through the procedure's forbidden{locators,",
     "  actions} guard — the LLM cannot bypass author-declared safety bars",
     "  via the resume path.",
     "- Strict mode (strict:true) refuses every LLM fallback even if a step",
     "  declares it. Use for batch / CI runs and any execution that should be",
-    "  reproducible.",
-    "- Playbooks compose two ways: playbook_call steps invoke another",
-    "  playbook in-process, and procedure_call steps invoke a saved",
-    "  procedure. Procedures can also call playbooks back.",
-    "- Locator authoring: call `browser_propose_locator` (after a",
-    "  browser_read on the tab) to get the smallest, highest-stability-tier",
-    "  descriptor for a target ref. Prefer the proposed descriptor over",
-    "  hand-written {role, name} pairs — tier-1 fields (aria_label,",
-    "  data_testid, href, attr) survive UI rebuilds; tier-3 (nth) is",
-    "  flagged fragile.",
+    "  reproducible. Also used by the authoring flow before bump_success:true.",
+    "- Composites: a `do: procedure_call` step recurses into another saved",
+    "  procedure in-process (no extension round-trip).",
+    "- Locator authoring: call `browser_propose_locator` (after a browser_read",
+    "  on the tab) to get the smallest, highest-stability-tier descriptor for",
+    "  a target ref. Prefer the proposed descriptor over hand-written",
+    "  {role, name} pairs — tier-1 fields (aria_label, data_testid, href,",
+    "  attr) survive UI rebuilds; tier-3 (nth) is flagged fragile.",
+    "- Drift health is auto-recorded into meta.health after every run. On",
+    "  procedures_save({bump_success:true}), the runtime refuses the trusted",
+    "  flip when drift exceeds threshold — the response carries",
+    "  {demoted:true, demote_reason:'...'} and the save persists as draft",
+    "  until the failing locator is re-authored.",
   ];
 }
 
@@ -278,7 +250,6 @@ export function buildServerInstructions(
     clicking,
     risky,
     proceduresSection(enabledFeatures),
-    playbooksSection(enabledFeatures),
     memorySection(enabledFeatures),
   ].filter((b) => b.length > 0);
 

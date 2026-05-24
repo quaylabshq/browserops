@@ -3,23 +3,23 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import YAML from "yaml";
 import type { WSBridgeLike } from "../mcp-server.js";
-import { makePlaybookExecutor } from "./execute.js";
+import { makeProcedureExecutor } from "./execute.js";
 import { _resetForTests } from "./state.js";
 
 let tmpDir: string;
-const ORIGINAL_ENV = process.env["BROWSEROPS_PLAYBOOKS_DIR"];
+const ORIGINAL_ENV = process.env["BROWSEROPS_PROCEDURES_DIR"];
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(
     path.join(import.meta.dirname ?? __dirname, ".pbfb-test-"),
   );
-  process.env["BROWSEROPS_PLAYBOOKS_DIR"] = tmpDir;
+  process.env["BROWSEROPS_PROCEDURES_DIR"] = tmpDir;
   _resetForTests();
 });
 
 afterEach(async () => {
-  if (ORIGINAL_ENV === undefined) delete process.env["BROWSEROPS_PLAYBOOKS_DIR"];
-  else process.env["BROWSEROPS_PLAYBOOKS_DIR"] = ORIGINAL_ENV;
+  if (ORIGINAL_ENV === undefined) delete process.env["BROWSEROPS_PROCEDURES_DIR"];
+  else process.env["BROWSEROPS_PROCEDURES_DIR"] = ORIGINAL_ENV;
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
@@ -77,9 +77,9 @@ function emptyPageEffect() {
   };
 }
 
-describe("playbook fallback ladder", () => {
+describe("procedure fallback ladder", () => {
   it("retry strategy succeeds on second attempt", async () => {
-    await writeYaml("shared/r/playbook.yaml", {
+    await writeYaml("shared/r/procedure.yaml", {
       schema_version: 1,
       name: "r.click",
       description: "retry demo",
@@ -123,14 +123,14 @@ describe("playbook fallback ladder", () => {
         response: { clicked: true, page_effect: emptyPageEffect() },
       },
     ]);
-    const exec = makePlaybookExecutor(ws);
+    const exec = makeProcedureExecutor(ws);
     const result = await exec({ name: "r.click", tab_id: "t_1", inputs: {} });
     expect(result.completed).toBe(true);
     expect(result.step_results[0]?.resolved_by).toBe("retry");
   });
 
   it("relocate strategy widens role then succeeds", async () => {
-    await writeYaml("shared/rl/playbook.yaml", {
+    await writeYaml("shared/rl/procedure.yaml", {
       schema_version: 1,
       name: "rl.click",
       description: "relocate demo",
@@ -168,14 +168,14 @@ describe("playbook fallback ladder", () => {
         response: { clicked: true, page_effect: emptyPageEffect() },
       },
     ]);
-    const exec = makePlaybookExecutor(ws);
+    const exec = makeProcedureExecutor(ws);
     const result = await exec({ name: "rl.click", tab_id: "t_1", inputs: {} });
     expect(result.completed).toBe(true);
     expect(result.step_results[0]?.resolved_by).toBe("relocate");
   });
 
   it("llm strategy halts with needs_assist envelope", async () => {
-    await writeYaml("shared/llm/playbook.yaml", {
+    await writeYaml("shared/llm/procedure.yaml", {
       schema_version: 1,
       name: "llm.click",
       description: "llm demo",
@@ -196,7 +196,7 @@ describe("playbook fallback ladder", () => {
         error: { code: "LOCATOR_NOT_FOUND", message: "no match" },
       },
     ]);
-    const exec = makePlaybookExecutor(ws);
+    const exec = makeProcedureExecutor(ws);
     const result = await exec({ name: "llm.click", tab_id: "t_1", inputs: {} });
 
     expect(result.completed).toBe(false);
@@ -207,7 +207,7 @@ describe("playbook fallback ladder", () => {
   });
 
   it("strict mode refuses llm fallback even when step declares it", async () => {
-    await writeYaml("shared/strict/playbook.yaml", {
+    await writeYaml("shared/strict/procedure.yaml", {
       schema_version: 1,
       name: "strict.click",
       description: "strict demo",
@@ -228,7 +228,7 @@ describe("playbook fallback ladder", () => {
         error: { code: "LOCATOR_NOT_FOUND", message: "no match" },
       },
     ]);
-    const exec = makePlaybookExecutor(ws);
+    const exec = makeProcedureExecutor(ws);
     const result = await exec({
       name: "strict.click",
       tab_id: "t_1",
@@ -242,7 +242,7 @@ describe("playbook fallback ladder", () => {
   });
 
   it("relocate_then_llm escalates to needs_assist when relocate also fails", async () => {
-    await writeYaml("shared/rtl/playbook.yaml", {
+    await writeYaml("shared/rtl/procedure.yaml", {
       schema_version: 1,
       name: "rtl.click",
       description: "relocate_then_llm demo",
@@ -272,7 +272,7 @@ describe("playbook fallback ladder", () => {
         error: { code: "LOCATOR_NOT_FOUND", message: "still no match" },
       },
     ]);
-    const exec = makePlaybookExecutor(ws);
+    const exec = makeProcedureExecutor(ws);
     const result = await exec({
       name: "rtl.click",
       tab_id: "t_1",
