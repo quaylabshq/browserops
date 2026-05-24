@@ -39,7 +39,7 @@ export interface FeatureMetadata {
 export const FEATURE_METADATA: Record<FeatureName, FeatureMetadata> = {
   procedures: {
     description:
-      "Procedure memory — search/save/run named, parameterised action graphs from ~/browserops/procedures/. Also gates the browserops-teach skill, which authors new procedures autonomously.",
+      "Procedure memory — deterministic-first browser flows with semantic locators (auto-resolved via browser_propose_locator), retrying expect predicates, per-step LLM-fallback ladder (resume via procedures_resume), and drift-health auto-demote. Stored at ~/browserops/procedures/. Authored via the browserops-teach skill.",
     stability: "experimental",
     default: false,
   },

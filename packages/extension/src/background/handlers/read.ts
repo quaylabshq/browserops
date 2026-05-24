@@ -508,6 +508,42 @@ function injectedA11yWalk(
       const t = el.getAttribute("type");
       if (t !== null) attrs["type"] = t;
     }
+    // Tier-1 stable attributes — mirror of extractTier1Attrs() in
+    // ../../lib/tier1-attrs.ts. MAIN-world injection cannot close over
+    // outer helpers, so the rules are inlined here. Keep in sync.
+    const T1_MAX = 400;
+    const T1_FORM = ["INPUT", "SELECT", "TEXTAREA", "BUTTON", "FIELDSET", "FORM"];
+    const ariaLabel = el.getAttribute("aria-label");
+    if (ariaLabel !== null && ariaLabel.length > 0) {
+      attrs["aria-label"] = ariaLabel.slice(0, T1_MAX);
+    }
+    const dataTestid = el.getAttribute("data-testid");
+    if (dataTestid !== null && dataTestid.length > 0) {
+      attrs["data-testid"] = dataTestid.slice(0, T1_MAX);
+    }
+    const dataTest = el.getAttribute("data-test");
+    if (dataTest !== null && dataTest.length > 0) {
+      attrs["data-test"] = dataTest.slice(0, T1_MAX);
+    }
+    const dataQa = el.getAttribute("data-qa");
+    if (dataQa !== null && dataQa.length > 0) {
+      attrs["data-qa"] = dataQa.slice(0, T1_MAX);
+    }
+    // href was already captured above for <a>; mirror also covers <link>,
+    // <area>, etc. Don't overwrite if already set.
+    if (attrs["href"] === undefined) {
+      const href = el.getAttribute("href");
+      if (href !== null && href.length > 0) {
+        attrs["href"] = href.slice(0, T1_MAX);
+      }
+    }
+    // name on real form controls only (skip legacy <a name=...> anchors).
+    if (T1_FORM.indexOf(el.tagName.toUpperCase()) !== -1) {
+      const n = el.getAttribute("name");
+      if (n !== null && n.length > 0) {
+        attrs["name"] = n.slice(0, T1_MAX);
+      }
+    }
     return attrs;
   };
 

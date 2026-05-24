@@ -22,14 +22,18 @@ export const ERROR_CODES = [
   "FEATURE_DISABLED",
   "TOOL_DISABLED",
   "INTERNAL",
-  // Procedure-memory errors (plan 06)
-  "PROC_NOT_FOUND",
-  "PROC_ALREADY_EXISTS",
-  "PROC_SCHEMA_INVALID",
-  "PROC_IN_USE",
-  "PROC_OWNER_INVALID",
-  "PROC_DOMAIN_INVALID",
+  // Chained-action / step-execution errors
   "CHAINED_ACTION_FAILED",
+  // Procedure errors (unified runtime)
+  "PROCEDURE_NOT_FOUND",
+  "PROCEDURE_ALREADY_EXISTS",
+  "PROCEDURE_SCHEMA_INVALID",
+  "PROCEDURE_IN_USE",
+  "PROCEDURE_OWNER_INVALID",
+  "PROCEDURE_RESUME_EXPIRED",
+  "PROCEDURE_RESUME_INVALID",
+  "PROCEDURE_BUDGET_EXCEEDED",
+  "PROCEDURE_FORBIDDEN",
   "REPEATED_FAILURE",
   // Cross-agent memory store errors
   "MEMORY_NOT_FOUND",
@@ -38,6 +42,10 @@ export const ERROR_CODES = [
   // Observation architecture (plan: observation-architecture)
   "OBSERVATION_TOKEN_INVALID",
   "COORDS_OUT_OF_SCREENSHOT_BOUNDS",
+  // Locator resolver errors
+  "LOCATOR_NOT_FOUND",
+  "LOCATOR_AMBIGUOUS",
+  "ELEMENT_NOT_ACTIONABLE",
 ] as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[number];

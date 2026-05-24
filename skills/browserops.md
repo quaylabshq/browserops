@@ -245,14 +245,33 @@ Common chord recipes:
 
 - **Never save an untested procedure.** Run it end-to-end in the session, fix what breaks, then save.
 - A procedure is trusted only once it has been saved with `bump_success: true` (which flips status:draft → status:trusted) *and* the live UI still matches what you verified.
+- **Drift auto-demotes.** On `procedures_save({bump_success:true})`, the runtime checks the prior `meta.health` and refuses the trusted flip when drift exceeds threshold (`relocates/runs > 0.4` across ≥5 runs, `target_changed > 0` across ≥3 runs, or `last_tier=3` + `relocates/runs > 0.1`). The response carries `{demoted:true, demote_reason:"..."}` and the procedure persists as draft until the failing locator is re-authored. Surface the demote_reason to the user — don't claim success.
 
-### `procedures_execute`
+### `procedures_execute` / `procedures_resume`
 
-- Replays a saved procedure step-by-step, checking expected effects at each step. Halts on divergence. Use when reproducing a flaky flow for debugging, when the user wants a dry-run before committing, or as the verification step after authoring a draft.
+Runs a saved procedure step by step. Each step resolves a semantic locator against the live a11y tree (via `browser_locate`), polls a retrying `expect:` predicate, and applies the per-step fallback ladder (`strict | retry | relocate | relocate_then_llm | llm`) on divergence.
+
+- **`procedures_execute({name, tab_id, inputs?, strict?})`** — `strict:true` refuses every LLM fallback even if a step declares one. Use for batch / CI / post-authoring verification before `bump_success: true`. Result is one of:
+  - `{completed:true, status:"completed"}` — all steps + verify passed.
+  - `{status:"halted", divergence}` — strict failure; no LLM fallback available.
+  - `{status:"needs_assist", execution_id, envelope}` — paused awaiting a `procedures_resume` patch.
+  - `{status:"gave_up"}` — terminal after a `give_up` patch.
+- **`procedures_resume(execution_id, patch)`** when the result is `needs_assist`:
+  - small fix (label changed): `{kind:"resume_with", with:{locator:{...}}}`
+  - dialog/banner blocked the step: `{kind:"insert_steps", steps:[{...}]}`
+  - genuine blocker: `{kind:"give_up", reason}`
+  - Every patch step still flows through the procedure's `forbidden{locators, actions}` guard — your `resume_with` cannot bypass it.
+
+**Locator authoring helpers** (also gated behind `procedures`):
+
+- **`browser_locate({tab_id, locator})`** — resolves a Locator descriptor (role / name / aria_label / data_testid / href / attr / has_text / nth / ...) against the tab's current a11y snapshot. Returns all matching refs. The executor calls this internally before every step; you rarely call it directly.
+- **`browser_propose_locator({tab_id, ref})`** — author-time helper. Given a target ref (from `browser_read`), returns the smallest, highest-stability-tier descriptor that resolves uniquely. Tier-1 fields (`aria_label`, `data_testid`, `href`, `attr`) are author/contract-controlled and survive UI rebuilds; tier-3 (`nth`) is flagged fragile. Prefer the proposed descriptor over hand-written `{role, name}` pairs — text-derived names churn.
+
+**Composition:** a `do: procedure_call` step recurses into another saved procedure in-process (no extension round-trip). Caveat: `tab_id` must be threaded through `with.inputs` of the procedure_call step — top-level `tab_id` is ignored on the recursive call.
 
 ### Authoring new procedures (`browserops-teach` skill)
 
-- For "learn to do X then remember it" requests, switch to the **`browserops-teach` skill** at `~/.claude/skills/browserops-teach/SKILL.md` — it owns the autonomous flow end-to-end (pre-flight reuse check, the three hard safety gates, the per-app safe-dummy registry, the in-context YAML authoring, the goal-grounded verification predicate). Don't drive the flow from this file.
+- For "learn / teach / save / remember a flow" requests, switch to the **`browserops-teach` skill** at `~/.claude/skills/browserops-teach/SKILL.md` — it owns the autonomous flow end-to-end (pre-flight reuse check, the three hard safety gates, the per-app safe-dummy registry, the `browser_propose_locator`-driven YAML authoring, strict-mode verification + external goal predicate, drift-health-aware promotion). Don't drive the flow from this file.
 - Always run `procedures_search` first. The skill is for new flows; an existing trusted procedure scoring ≥0.5 wins by default.
 
 ### `memory_save` / `memory_search` / `memory_get` / `memory_delete`

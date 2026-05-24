@@ -8,16 +8,16 @@ const set = (...names: FeatureName[]) =>
 describe("buildServerInstructions — procedures gating", () => {
   it("includes the Procedure memory section when procedures is enabled", () => {
     const out = buildServerInstructions(set("procedures"));
-    expect(out).toContain("Procedure memory:");
+    expect(out).toContain("Procedures:");
     expect(out).toContain("procedures_search");
     expect(out).toContain("procedures_get");
     expect(out).toContain("procedures_save");
   });
 
-  it("omits the Procedure memory section when procedures is disabled", () => {
+  it("omits the Procedures section when procedures is disabled", () => {
     const out = buildServerInstructions(set());
-    expect(out).not.toContain("Procedure memory:");
-    expect(out).toContain("Procedure memory is opt-in");
+    expect(out).not.toContain("Procedures:\n");
+    expect(out).toContain("Procedures are opt-in");
     expect(out).toContain("browserops feature enable procedures");
   });
 
@@ -67,6 +67,18 @@ describe("buildServerInstructions — memory gating", () => {
     const out = buildServerInstructions(set());
     expect(out).not.toContain("memory_save");
     expect(out).not.toContain("Cross-agent memory:");
+  });
+});
+
+describe("buildServerInstructions — procedures resume gating", () => {
+  it("describes procedures_resume + drift health when procedures is enabled", () => {
+    const out = buildServerInstructions(set("procedures"));
+    expect(out).toContain("Procedures:");
+    expect(out).toContain("procedures_search");
+    expect(out).toContain("procedures_execute");
+    expect(out).toContain("procedures_resume");
+    expect(out).toContain("browser_propose_locator");
+    expect(out).toContain("meta.health");
   });
 });
 
