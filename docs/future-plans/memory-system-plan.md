@@ -333,7 +333,7 @@ must pass before committing.
   (search-before-save + `merge_into`, privacy/behavior-only, one record per
   capture, scope choice), cross-session trace fetch via main agent's session_id.
   Commit: `feat(skill): add browserops-scribe capture guide`
-  - [ ] Done
+  - [x] Done
 - **7.2** Add the capture orchestration rule + scribe spawn (background, haiku) to
   `skills/browserops.md` (on roadblock always; on task-done for non-trivial flows).
   Commit: `feat(skill): add memory capture orchestration rule`
