@@ -170,7 +170,7 @@ must pass before committing.
   - [x] Done
 - **1.4 Verify** typecheck + lint + shared tests. (No code; fixes only.)
   Commit: `chore(memory): phase 1 verify`
-  - [ ] Done
+  - [x] Done
 
 ## Phase 2 — Store rewrite (two stores + index + guards + migration)
 
