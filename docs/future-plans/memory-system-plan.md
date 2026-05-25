@@ -257,7 +257,7 @@ must pass before committing.
   - [x] Done
 - **4.6 Verify** full workspace typecheck + lint + tests (legacy now gone).
   Commit: `chore(memory): phase 4 verify`
-  - [ ] Done
+  - [x] Done
 
 ## Phase 5 — Session trace + roadblock signals
 

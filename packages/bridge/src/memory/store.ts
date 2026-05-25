@@ -845,23 +845,6 @@ function validateFrontmatter(raw: unknown): LegacyFrontmatter {
 // Legacy markdown read path — used only by migrate.ts
 // ---------------------------------------------------------------------------
 
-function serializeLegacyFrontmatter(meta: LegacyFrontmatter, body: string): string {
-  const fm = YAML.stringify({
-    name: meta.name,
-    description: meta.description,
-    type: meta.type,
-    source: meta.source,
-    created: meta.created,
-    updated: meta.updated,
-  }).trimEnd();
-  const trimmedBody = body.replace(/\s+$/, "");
-  return `---\n${fm}\n---\n\n${trimmedBody}\n`;
-}
-
-// Suppress lint about unused serializeLegacyFrontmatter — it stays for symmetry
-// with parseFrontmatter (future migration write-back, if needed).
-void serializeLegacyFrontmatter;
-
 /**
  * Read a legacy .md memory file. Used exclusively by migrate.ts.
  * Returns a LegacyEntry with the frontmatter metadata and body.
