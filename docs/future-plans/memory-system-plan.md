@@ -285,7 +285,7 @@ must pass before committing.
   - [x] Done
 - **5.6** Tests: ring eviction, cross-session read, signal detection thresholds.
   Commit: `test(memory): trace buffer and capture signals`
-  - [ ] Done
+  - [x] Done
 - **5.7 Verify.**
   Commit: `chore(memory): phase 5 verify`
   - [ ] Done
