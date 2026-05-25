@@ -145,7 +145,7 @@ prints the manual checklist. Keep it optional and side-effect-free.
   - [x] Done
 - **2.3** `search.eval.ts` — capability D (ranking, filters, confidence/decay).
   Commit: `feat(evals): search + confidence/decay evals (D)`
-  - [ ] Done
+  - [x] Done
 - **2.4** `delivery.eval.ts` — capability E (prime/suppress/re-nudge, digest).
   Commit: `feat(evals): hybrid delivery state-machine evals (E)`
   - [ ] Done
