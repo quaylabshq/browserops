@@ -148,7 +148,7 @@ prints the manual checklist. Keep it optional and side-effect-free.
   - [x] Done
 - **2.4** `delivery.eval.ts` — capability E (prime/suppress/re-nudge, digest).
   Commit: `feat(evals): hybrid delivery state-machine evals (E)`
-  - [ ] Done
+  - [x] Done
 - **2.5** `signals.eval.ts` + `trace.eval.ts` — capabilities F, G. Commit:
   `feat(evals): capture-signal + trace-buffer evals (F,G)`
   - [ ] Done
