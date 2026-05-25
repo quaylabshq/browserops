@@ -337,7 +337,7 @@ must pass before committing.
 - **7.2** Add the capture orchestration rule + scribe spawn (background, haiku) to
   `skills/browserops.md` (on roadblock always; on task-done for non-trivial flows).
   Commit: `feat(skill): add memory capture orchestration rule`
-  - [ ] Done
+  - [x] Done
 - **7.3** Register `browserops-scribe` in the skill sync manifest (locate where
   `browserops`/`browserops-teach` are listed for `browserops sync skills`).
   Commit: `feat(skill): register browserops-scribe for sync`

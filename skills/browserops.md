@@ -274,28 +274,53 @@ Runs a saved procedure step by step. Each step resolves a semantic locator again
 - For "learn / teach / save / remember a flow" requests, switch to the **`browserops-teach` skill** at `~/.claude/skills/browserops-teach/SKILL.md` — it owns the autonomous flow end-to-end (pre-flight reuse check, the three hard safety gates, the per-app safe-dummy registry, the `browser_propose_locator`-driven YAML authoring, strict-mode verification + external goal predicate, drift-health-aware promotion). Don't drive the flow from this file.
 - Always run `procedures_search` first. The skill is for new flows; an existing trusted procedure scoring ≥0.5 wins by default.
 
-### `memory_save` / `memory_search` / `memory_get` / `memory_delete`
+### Memory tools (`memory_save` / `memory_search` / `memory_get` / `memory_delete` / `memory_session_trace` / `memory_list_for_origin`)
 
-> **Experimental — opt-in.** Gated behind the `memory` feature; off by default. Tools only appear in the catalogue once the user has run `browserops feature enable memory`. With the feature off, surface "the user hasn't enabled cross-agent memory" and continue without it.
+> **On by default.** The `memory` feature is enabled by default — all six tools appear in the catalogue without any opt-in. The store lives at `~/browserops/memory/` (two sub-stores: `global/` for cross-site knowledge, `sites/<origin>/` for per-site knowledge) and is readable by every MCP client.
 
-A small store at `~/browserops/memory/<name>.md` that any MCP client can read or write. The point is **cross-agent persistence**: a lesson saved here from a Claude Code session is visible to a Cursor or Zed session opening the same browserops bridge later. Treat it as the deliberate, shared layer above Claude Code's own auto-memory at `~/.claude/projects/.../memory/` (which stays Claude-only by definition).
+Records are structured YAML (`MemoryRecord`, `schema_version: 1`) — not free-form markdown. Each record has a `scope` (`global` | `site`), a `kind` (`blocker` | `affordance` | `gotcha` | `selector` | `lesson`), a `title` (≤120 chars, shown in the primer index), and a `detail` block whose fields match the kind (`wall`+`door` for blockers, `note` for affordances/gotchas/lessons, `locator` for selectors).
 
-**When to reach for it.** Save a memory through `memory_save` when the lesson is:
-
-- About browserops behavior, browser-flow gotchas, or selectors that survive across sessions.
-- Useful to a different agent (Cursor, Zed, custom SDK) that might pick up the same browserops bridge.
-- Stable enough to outlive the current conversation.
-
-**When *not* to.** If the lesson is genuinely Claude-private — keybinding preferences, response-style quirks, anything a Cursor session would never use — leave it in the auto-memory store. Don't pollute the shared store.
+**Delivery.** Global records arrive once per session in `initialize.result.instructions` as a confidence-ranked digest. Per-site records arrive inline on the first tool response for a new origin as `site_context` (a terse title-only primer, ≤5 lines). Neither channel requires any agent action — they arrive automatically.
 
 **Per-tool quick reference:**
 
-- `memory_save({name, description, type, body, replace?})` — `name` matches `^[a-z][a-z0-9._-]{0,79}$`; `type` is one of `user | feedback | project | reference`. Duplicate names reject with `MEMORY_ALREADY_EXISTS` unless `replace:true`. Returns `{saved, path, created}`.
-- `memory_search({query, type?, limit?, min_score?})` — coverage-based ranker over name/description/type/body. Returns metadata-only matches (`name`, `description`, `type`, `score`, `snippet`). `min_score` defaults to 0.2 — drop to 0.1 when looking for soft matches, leave alone for high-confidence hits.
-- `memory_get({name})` — returns `{meta, body, path}`. Call after `memory_search` once you've decided which entry to use.
-- `memory_delete({name})` — removes the file. `MEMORY_NOT_FOUND` if it doesn't exist.
+- `memory_save({record, merge_into?, replace?})` — persist a `MemoryRecord`. On create without `merge_into`, the store runs a similarity check and returns `possible_duplicate:{name,score}` instead of writing when a near-duplicate exists. Pass `merge_into:<name>` to merge; `replace:true` to overwrite by name.
+- `memory_search({query, scope?, origin?, kind?, limit?, min_score?})` — confidence-first ranked search. Returns `{matches, total, truncated}` with `name, title, scope, kind, origin?, score, confidence, snippet` per match.
+- `memory_get({name})` — fetch the full record. Call after `memory_search` once you know which entry to use.
+- `memory_delete({name})` — remove a record. `MEMORY_NOT_FOUND` if absent.
+- `memory_session_trace({tab_id?, session_id?, limit?})` — recent trace entries for a session (tool calls, errors, effect summaries). Used by the scribe subagent to reconstruct what happened.
+- `memory_list_for_origin({origin, kind?, min_confidence?, limit?})` — all site-scoped records for an origin, confidence-ranked.
 
-**Search before saving.** Before writing a new memory, run `memory_search` on the same tokens — if a similar entry already exists, prefer `replace:true` over creating a near-duplicate.
+### Memory capture (auto-capture orchestration rule)
+
+The bridge detects roadblocks and surfaces a `capture_hint` field on tool responses; it also delivers per-site primers as `site_context`. Both signals are passive — the **agent** decides when to act.
+
+**When to spawn the `browserops-scribe` subagent:**
+
+1. **Roadblock (always):** a tool response carries `capture_hint`. Spawn the scribe immediately in the background, in parallel with any user-facing work.
+2. **Task completion (non-trivial flows only):** a multi-step browser flow finished successfully. Skip for trivial flows (single navigate, passive read, or a flow already covered by a procedure).
+
+**How to spawn:**
+
+```
+Spawn sub-agent (haiku, background) — run the browserops-scribe skill.
+Brief:
+- tab_id: <t_id>
+- session_id: <current session_id>
+- origin: <scheme://host[:port]>
+- outcome: roadblock | completed
+- goal: <one-line description of what the main flow was trying to do>
+Report captured record name or "no capture needed".
+```
+
+Capture runs in **parallel** — never block or delay the user flow to wait for it. The scribe is haiku-class; its cost is negligible relative to the main flow.
+
+**The scribe does the rest.** It fetches the trace via `memory_session_trace`, searches for existing records, authors one `MemoryRecord`, and saves (or merges). You do not need to call any memory tools yourself for capture — that is the scribe's job.
+
+**Do not spawn the scribe if:**
+- `memory_session_trace` is absent from the tool catalogue (memory feature disabled — `FEATURE_DISABLED` return would hint the user to enable it).
+- The flow was a pure read with no state change.
+- A `capture_hint` was already handled for the same origin in this turn.
 
 ---
 
