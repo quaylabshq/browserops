@@ -288,7 +288,7 @@ must pass before committing.
   - [x] Done
 - **5.7 Verify.**
   Commit: `chore(memory): phase 5 verify`
-  - [ ] Done
+  - [x] Done
 
 ## Phase 6 — Hybrid delivery
 
