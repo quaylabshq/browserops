@@ -27,6 +27,8 @@ import {
   saveRecord,
 } from "./store.js";
 import { searchRecordsWithConfidence } from "./search.js";
+import type { TraceBuffer, TraceEntry } from "./trace.js";
+import type { TabRegistry } from "../tab-registry.js";
 
 // ---------------------------------------------------------------------------
 // Param coercion helpers
@@ -298,16 +300,51 @@ export async function handleMemoryListForOrigin(
 }
 
 // ---------------------------------------------------------------------------
-// memory_session_trace — STUB (Phase 5.3 implements the real trace buffer)
-// TODO(phase5): replace this stub with actual TraceBuffer lookup
+// memory_session_trace — real implementation (Phase 5.3)
+//
+// Accepts {tab_id?, session_id?, limit?}.
+//
+//  • If session_id is given, it is used directly.
+//  • If tab_id is given (and no session_id), the tab registry is consulted
+//    to find the owning session. This allows the memory-scribe subagent
+//    (which runs in its own session) to fetch the originating session's
+//    trace by the tab_id the user already knows.
+//  • If neither is given, returns an empty list.
 // ---------------------------------------------------------------------------
 
-export async function handleMemorySessionTrace(
-  _raw: Record<string, unknown>,
-): Promise<{ entries: unknown[] }> {
-  // TODO(phase5): resolve tab_id → session_id via tab registry;
-  // look up TraceBuffer for the session; return recent entries.
-  return { entries: [] };
+export interface SessionTraceResult {
+  entries: TraceEntry[];
+  session_id?: string;
+}
+
+export function buildMemorySessionTraceHandler(
+  traceBuffer: TraceBuffer | undefined,
+  tabs: TabRegistry | undefined,
+): (raw: Record<string, unknown>) => Promise<SessionTraceResult> {
+  return async function handleMemorySessionTrace(
+    raw: Record<string, unknown>,
+  ): Promise<SessionTraceResult> {
+    const limit = optionalNumber(raw, "limit");
+
+    // Resolve session_id
+    let sessionId = optionalString(raw, "session_id");
+    const tabId = optionalString(raw, "tab_id");
+
+    if (!sessionId && tabId && tabs) {
+      // Look up the tab record to find its owning session.
+      const rec = tabs.get(tabId);
+      if (rec?.owner_session_id) {
+        sessionId = rec.owner_session_id;
+      }
+    }
+
+    if (!sessionId || !traceBuffer) {
+      return { entries: [] };
+    }
+
+    const entries = traceBuffer.recent(sessionId, limit ?? 50);
+    return { entries, session_id: sessionId };
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -316,11 +353,26 @@ export async function handleMemorySessionTrace(
 
 type HandlerFn = (raw: Record<string, unknown>) => Promise<unknown>;
 
-export const MEMORY_HANDLERS: Record<string, HandlerFn> = {
-  memory_save: handleMemorySave,
-  memory_search: handleMemorySearch,
-  memory_get: handleMemoryGet,
-  memory_delete: handleMemoryDelete,
-  memory_list_for_origin: handleMemoryListForOrigin,
-  memory_session_trace: handleMemorySessionTrace,
-};
+/**
+ * Build the full memory handler map, wiring the real session-trace handler
+ * when traceBuffer and tabs are provided.
+ */
+export function buildMemoryHandlers(
+  traceBuffer?: TraceBuffer,
+  tabs?: TabRegistry,
+): Record<string, HandlerFn> {
+  return {
+    memory_save: handleMemorySave,
+    memory_search: handleMemorySearch,
+    memory_get: handleMemoryGet,
+    memory_delete: handleMemoryDelete,
+    memory_list_for_origin: handleMemoryListForOrigin,
+    memory_session_trace: buildMemorySessionTraceHandler(traceBuffer, tabs),
+  };
+}
+
+/**
+ * Default handler map (no trace buffer — stub returns empty).
+ * Kept for backwards compat with tests that import MEMORY_HANDLERS directly.
+ */
+export const MEMORY_HANDLERS: Record<string, HandlerFn> = buildMemoryHandlers();

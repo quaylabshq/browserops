@@ -30,7 +30,7 @@ import type { TabRecord, TabRegistry } from "./tab-registry.js";
 import type { Logger } from "./logger.js";
 import type { TraceWriter } from "./trace-writer.js";
 import { buildProcedureHandlers } from "./procedures/handlers.js";
-import { MEMORY_HANDLERS } from "./memory/handlers.js";
+import { buildMemoryHandlers } from "./memory/handlers.js";
 import { TraceBuffer, type TraceEntry } from "./memory/trace.js";
 import { buildServerInstructions } from "./server-instructions.js";
 import { createPromptRegistry } from "./prompts.js";
@@ -233,7 +233,7 @@ export class McpBridgeServer {
   constructor(deps: McpBridgeDeps) {
     this.deps = deps;
     this.procedureHandlers = buildProcedureHandlers(deps.wsBridge);
-    this.memoryHandlers = MEMORY_HANDLERS;
+    this.memoryHandlers = buildMemoryHandlers(deps.traceBuffer, deps.tabs);
     this.commonProps = buildCommonProps({ bridgeVersion: deps.version });
 
     const ajv = new Ajv({ allErrors: true, strict: false, useDefaults: true });

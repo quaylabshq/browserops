@@ -11,12 +11,12 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  buildMemorySessionTraceHandler,
   handleMemoryDelete,
   handleMemoryGet,
   handleMemoryListForOrigin,
   handleMemorySave,
   handleMemorySearch,
-  handleMemorySessionTrace,
 } from "./handlers.js";
 import { CodedError } from "./store.js";
 import type { MemoryRecord } from "@browserops/shared";
@@ -221,9 +221,10 @@ describe("handleMemoryListForOrigin (v2)", () => {
   });
 });
 
-describe("handleMemorySessionTrace (stub)", () => {
-  it("returns empty entries (stub)", async () => {
-    const result = await handleMemorySessionTrace({ session_id: "s_test" });
+describe("handleMemorySessionTrace (no buffer)", () => {
+  it("returns empty entries when no trace buffer is provided", async () => {
+    const handler = buildMemorySessionTraceHandler(undefined, undefined);
+    const result = await handler({ session_id: "s_test" });
     expect(result.entries).toEqual([]);
   });
 });

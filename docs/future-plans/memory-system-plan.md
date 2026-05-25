@@ -273,7 +273,7 @@ must pass before committing.
 - **5.3** Implement the `memory_session_trace` handler ({`tab_id?`|`session_id?`,
   `limit?`} → recent entries; tab_id resolves to its session).
   Commit: `feat(memory): memory_session_trace handler`
-  - [ ] Done
+  - [x] Done
 - **5.4** New `packages/bridge/src/memory/capture-signals.ts`: detect roadblock
   clusters over recent trace (error codes, `WRITE_NOT_REFLECTED`, no-op effect
   after an action, `browser_wait_for` timeout, repeated retries, `USER_DECLINED`).
