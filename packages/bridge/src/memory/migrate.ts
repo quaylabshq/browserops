@@ -18,7 +18,7 @@ import * as path from "node:path";
 import { MEMORY_NAME_REGEX, type MemoryRecord } from "@browserops/shared";
 import {
   memoriesRoot,
-  readMemory,
+  readLegacyMemory,
   saveRecord,
 } from "./store.js";
 
@@ -64,9 +64,9 @@ export async function migrateLegacyMarkdown(): Promise<MigrationResult> {
     const dstPath = path.join(legacyDir, filename);
 
     // Read and parse the legacy entry
-    let entry: Awaited<ReturnType<typeof readMemory>>;
+    let entry: Awaited<ReturnType<typeof readLegacyMemory>>;
     try {
-      entry = await readMemory(name);
+      entry = await readLegacyMemory(name);
     } catch (err) {
       result.errors.push({
         name,

@@ -1,14 +1,24 @@
+/**
+ * Tests for the v2 memory store (Phase 4.4+).
+ *
+ * The legacy saveMemory/readMemory/deleteMemory/listMemoryEntries API was
+ * removed in Phase 4.4. This file covers the v2 CRUD (saveRecord / readRecord /
+ * deleteRecord / listRecords) and the readLegacyMemory migration helper.
+ */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   CodedError,
-  deleteMemory,
-  listMemoryEntries,
+  deleteRecord,
+  globalRecordPath,
+  listRecords,
   memoryFilePath,
-  readMemory,
-  saveMemory,
+  readLegacyMemory,
+  readRecord,
+  saveRecord,
 } from "./store.js";
+import type { MemoryRecord } from "@browserops/shared";
 
 let tmpRoot: string;
 
@@ -24,86 +34,164 @@ afterEach(async () => {
   await fs.rm(tmpRoot, { recursive: true, force: true });
 });
 
-const BASE = {
-  description: "round trip",
-  type: "feedback" as const,
-  body: "Body line one.\n",
+const BASE_RECORD: MemoryRecord = {
+  schema_version: 1,
+  name: "lesson.terse",
+  scope: "global",
+  kind: "lesson",
+  title: "User prefers terse responses",
+  detail: { note: "Keep responses under three sentences." },
 };
 
-describe("saveMemory + readMemory round-trip", () => {
-  it("creates a file with valid frontmatter and returns created:true", async () => {
-    const result = await saveMemory({ ...BASE, name: "alpha" });
-    expect(result.created).toBe(true);
-    expect(result.entry.path).toBe(memoryFilePath("alpha"));
+const SITE_RECORD: MemoryRecord = {
+  schema_version: 1,
+  name: "notion.compose",
+  scope: "site",
+  origin: "https://www.notion.so",
+  kind: "blocker",
+  title: "Notion compose loses focus",
+  detail: {
+    wall: "First click often does nothing.",
+    door: "Double-click or wait 500ms.",
+  },
+};
 
-    const round = await readMemory("alpha");
-    expect(round.meta.name).toBe("alpha");
-    expect(round.meta.description).toBe("round trip");
-    expect(round.meta.type).toBe("feedback");
-    expect(round.meta.source).toBe("mcp-tool");
-    expect(round.body).toBe("Body line one.\n");
+describe("saveRecord + readRecord round-trip", () => {
+  it("creates a global YAML record and returns created:true", async () => {
+    const result = await saveRecord({ record: BASE_RECORD });
+    expect(result.created).toBe(true);
+    expect(result.path).toBe(globalRecordPath(BASE_RECORD.name));
+
+    const round = await readRecord(BASE_RECORD.name, "global");
+    expect(round.name).toBe(BASE_RECORD.name);
+    expect(round.kind).toBe("lesson");
+    expect(round.scope).toBe("global");
+    expect(round.detail.note).toBe("Keep responses under three sentences.");
+  });
+
+  it("creates a site-scoped YAML record", async () => {
+    const result = await saveRecord({ record: SITE_RECORD });
+    expect(result.created).toBe(true);
+
+    const round = await readRecord(SITE_RECORD.name, "site", SITE_RECORD.origin);
+    expect(round.scope).toBe("site");
+    expect(round.origin).toBe("https://www.notion.so");
   });
 
   it("preserves created timestamp on overwrite, advances updated", async () => {
-    const first = await saveMemory({ ...BASE, name: "beta" });
-    const createdFirst = first.entry.meta.created;
+    const first = await saveRecord({ record: BASE_RECORD });
+    const createdFirst = first.record.meta?.created;
 
     await new Promise((r) => setTimeout(r, 5));
 
-    const second = await saveMemory({
-      ...BASE,
-      name: "beta",
-      body: "Updated body.\n",
-      replace: true,
-    });
+    const updated: MemoryRecord = { ...BASE_RECORD, title: "Updated title" };
+    const second = await saveRecord({ record: updated, replace: true });
     expect(second.created).toBe(false);
-    expect(second.entry.meta.created).toBe(createdFirst);
-    expect(second.entry.meta.updated >= createdFirst).toBe(true);
+    expect(second.record.meta?.created).toBe(createdFirst);
   });
 });
 
-describe("saveMemory error mapping", () => {
-  it("rejects an invalid name with INVALID_PARAMS", async () => {
-    await expect(
-      saveMemory({ ...BASE, name: "Has Caps" }),
-    ).rejects.toSatisfy(
-      (err: unknown) =>
-        err instanceof CodedError && err.code === "INVALID_PARAMS",
-    );
-  });
-
+describe("saveRecord error mapping", () => {
   it("rejects a duplicate name without replace:true with MEMORY_ALREADY_EXISTS", async () => {
-    await saveMemory({ ...BASE, name: "gamma" });
-    await expect(saveMemory({ ...BASE, name: "gamma" })).rejects.toSatisfy(
+    await saveRecord({ record: BASE_RECORD });
+    await expect(saveRecord({ record: BASE_RECORD })).rejects.toSatisfy(
       (err: unknown) =>
         err instanceof CodedError && err.code === "MEMORY_ALREADY_EXISTS",
     );
   });
 
   it("accepts replace:true on an existing name", async () => {
-    await saveMemory({ ...BASE, name: "delta" });
-    const second = await saveMemory({
-      ...BASE,
-      name: "delta",
-      body: "Replaced.",
+    await saveRecord({ record: BASE_RECORD });
+    const second = await saveRecord({
+      record: { ...BASE_RECORD, title: "New title" },
       replace: true,
     });
     expect(second.created).toBe(false);
   });
+});
 
-  it("rejects an empty description with INVALID_PARAMS", async () => {
-    await expect(
-      saveMemory({ ...BASE, name: "epsilon", description: "   " }),
-    ).rejects.toSatisfy(
+describe("readRecord error mapping", () => {
+  it("throws MEMORY_NOT_FOUND when the file does not exist", async () => {
+    await expect(readRecord("ghost", "global")).rejects.toSatisfy(
       (err: unknown) =>
-        err instanceof CodedError && err.code === "INVALID_PARAMS",
+        err instanceof CodedError && err.code === "MEMORY_NOT_FOUND",
     );
   });
 });
 
-describe("readMemory error mapping", () => {
+describe("deleteRecord", () => {
+  it("removes the file and returns the path", async () => {
+    await saveRecord({ record: BASE_RECORD });
+    const result = await deleteRecord(BASE_RECORD.name, "global");
+    expect(result.path).toContain(BASE_RECORD.name);
+    await expect(readRecord(BASE_RECORD.name, "global")).rejects.toSatisfy(
+      (err: unknown) =>
+        err instanceof CodedError && err.code === "MEMORY_NOT_FOUND",
+    );
+  });
+
   it("throws MEMORY_NOT_FOUND when the file does not exist", async () => {
-    await expect(readMemory("ghost")).rejects.toSatisfy(
+    await expect(deleteRecord("never", "global")).rejects.toSatisfy(
+      (err: unknown) =>
+        err instanceof CodedError && err.code === "MEMORY_NOT_FOUND",
+    );
+  });
+});
+
+describe("listRecords", () => {
+  it("returns [] when the root directory does not exist", async () => {
+    await fs.rm(tmpRoot, { recursive: true, force: true });
+    const result = await listRecords();
+    expect(result).toEqual([]);
+  });
+
+  it("returns parsed records sorted by name", async () => {
+    const z: MemoryRecord = { ...BASE_RECORD, name: "zeta.one", title: "Zeta unique terse record" };
+    const a: MemoryRecord = { ...BASE_RECORD, name: "alpha.one", title: "Alpha unique verbose record" };
+    const m: MemoryRecord = { ...BASE_RECORD, name: "mu.one", title: "Mu unique concise record" };
+    await saveRecord({ record: z });
+    await saveRecord({ record: a });
+    await saveRecord({ record: m });
+    const records = await listRecords({ scope: "global" });
+    expect(records.map((r) => r.name)).toEqual(["alpha.one", "mu.one", "zeta.one"]);
+  });
+
+  it("filters by scope", async () => {
+    await saveRecord({ record: BASE_RECORD });
+    await saveRecord({ record: SITE_RECORD });
+    const globals = await listRecords({ scope: "global" });
+    expect(globals.every((r) => r.scope === "global")).toBe(true);
+    const sites = await listRecords({ scope: "site" });
+    expect(sites.every((r) => r.scope === "site")).toBe(true);
+  });
+});
+
+describe("readLegacyMemory (migration helper)", () => {
+  const LEGACY_TEXT = [
+    "---",
+    "name: feedback-terse",
+    "description: user wants terse responses",
+    "type: feedback",
+    "source: mcp-tool",
+    "created: 2026-01-01T00:00:00.000Z",
+    "updated: 2026-01-01T00:00:00.000Z",
+    "---",
+    "",
+    "Keep responses short.",
+  ].join("\n");
+
+  it("parses a valid legacy .md file", async () => {
+    await fs.writeFile(memoryFilePath("feedback-terse"), LEGACY_TEXT, "utf8");
+    const entry = await readLegacyMemory("feedback-terse");
+    expect(entry.meta.name).toBe("feedback-terse");
+    expect(entry.meta.description).toBe("user wants terse responses");
+    expect(entry.meta.type).toBe("feedback");
+    expect(entry.body).toBe("Keep responses short.");
+    expect(entry.path).toBe(memoryFilePath("feedback-terse"));
+  });
+
+  it("throws MEMORY_NOT_FOUND for a missing file", async () => {
+    await expect(readLegacyMemory("ghost")).rejects.toSatisfy(
       (err: unknown) =>
         err instanceof CodedError && err.code === "MEMORY_NOT_FOUND",
     );
@@ -111,7 +199,7 @@ describe("readMemory error mapping", () => {
 
   it("throws MEMORY_SCHEMA_INVALID when the file has no frontmatter", async () => {
     await fs.writeFile(memoryFilePath("malformed"), "no frontmatter here", "utf8");
-    await expect(readMemory("malformed")).rejects.toSatisfy(
+    await expect(readLegacyMemory("malformed")).rejects.toSatisfy(
       (err: unknown) =>
         err instanceof CodedError && err.code === "MEMORY_SCHEMA_INVALID",
     );
@@ -131,59 +219,9 @@ describe("readMemory error mapping", () => {
       "body",
     ].join("\n");
     await fs.writeFile(memoryFilePath("bad-type"), text, "utf8");
-    await expect(readMemory("bad-type")).rejects.toSatisfy(
+    await expect(readLegacyMemory("bad-type")).rejects.toSatisfy(
       (err: unknown) =>
         err instanceof CodedError && err.code === "MEMORY_SCHEMA_INVALID",
     );
-  });
-});
-
-describe("deleteMemory", () => {
-  it("removes the file and returns the path", async () => {
-    await saveMemory({ ...BASE, name: "to-delete" });
-    const result = await deleteMemory("to-delete");
-    expect(result.path).toBe(memoryFilePath("to-delete"));
-    await expect(readMemory("to-delete")).rejects.toSatisfy(
-      (err: unknown) =>
-        err instanceof CodedError && err.code === "MEMORY_NOT_FOUND",
-    );
-  });
-
-  it("throws MEMORY_NOT_FOUND when the file does not exist", async () => {
-    await expect(deleteMemory("never")).rejects.toSatisfy(
-      (err: unknown) =>
-        err instanceof CodedError && err.code === "MEMORY_NOT_FOUND",
-    );
-  });
-});
-
-describe("listMemoryEntries", () => {
-  it("returns [] when the root directory does not exist", async () => {
-    await fs.rm(tmpRoot, { recursive: true, force: true });
-    const result = await listMemoryEntries();
-    expect(result).toEqual([]);
-  });
-
-  it("returns parsed entries sorted by name", async () => {
-    await saveMemory({ ...BASE, name: "zeta" });
-    await saveMemory({ ...BASE, name: "alpha" });
-    await saveMemory({ ...BASE, name: "mu" });
-    const entries = await listMemoryEntries();
-    expect(entries.map((e) => e.meta.name)).toEqual(["alpha", "mu", "zeta"]);
-  });
-
-  it("skips files whose frontmatter cannot be parsed", async () => {
-    await saveMemory({ ...BASE, name: "good" });
-    await fs.writeFile(memoryFilePath("broken"), "no frontmatter", "utf8");
-    const entries = await listMemoryEntries();
-    expect(entries.map((e) => e.meta.name)).toEqual(["good"]);
-  });
-
-  it("ignores non-.md files and names that don't match the pattern", async () => {
-    await saveMemory({ ...BASE, name: "valid" });
-    await fs.writeFile(path.join(tmpRoot, "notes.txt"), "ignored", "utf8");
-    await fs.writeFile(path.join(tmpRoot, "Bad-Caps.md"), "ignored", "utf8");
-    const entries = await listMemoryEntries();
-    expect(entries.map((e) => e.meta.name)).toEqual(["valid"]);
   });
 });

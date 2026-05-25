@@ -250,7 +250,7 @@ must pass before committing.
   `packages/shared/src/memory.ts` and any now-dead legacy parse paths in
   `store.ts`. Confirm nothing references them (`tsc` is the proof).
   Commit: `refactor(memory): drop legacy frontmatter types`
-  - [ ] Done
+  - [x] Done
 - **4.5** Tests: tools/list exposure with feature default-on, tools/call dispatch,
   `FEATURE_DISABLED` only when explicitly disabled.
   Commit: `test(memory): tool dispatch and default-on gating`

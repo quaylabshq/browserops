@@ -1,48 +1,24 @@
 /**
  * Ranker for the v2 memory store.
  *
- * Supports scope/origin/kind filters and token-coverage ranking.
+ * Supports scope/origin/kind filters and confidence-first ranking.
  *
- * Ranking: confidence-first when a `confidenceOf` function is provided
- * (Phase 3.2 wires this); falls back to token-coverage + legacyRaw
- * tie-break when no confidence function is given.
+ * Ranking: confidence-first (Phase 3.2 wired), then token-coverage,
+ * then legacyRaw tie-break.
  *
- * Legacy MemoryEntry search (searchMemories) is preserved for backward
- * compatibility with the old markdown-based store tests and the legacy
- * handlers path.
- *
- * Phase 3.2: `searchRecordsWithConfidence` is the bridge-facing call site —
+ * `searchRecordsWithConfidence` is the bridge-facing call site —
  * it wraps `searchRecords` with the confidence model pre-wired so callers
  * don't need to import confidence.ts separately.
+ *
+ * Note: the legacy `searchMemories` (MemoryEntry / markdown) was removed in
+ * Phase 4.4 together with the shared legacy types.
  */
 import {
   tokenize,
-  type MemoryEntry,
   type MemoryKind,
   type MemoryRecord,
   type MemoryScope,
-  type MemorySearchMatch,
-  type MemoryType,
 } from "@browserops/shared";
-
-// ---------------------------------------------------------------------------
-// Legacy search (MemoryEntry / markdown) — preserved for backward compat
-// ---------------------------------------------------------------------------
-
-export interface MemorySearchOptions {
-  /** Filter to entries with this type. */
-  type?: MemoryType;
-  /** Maximum results to return. Default 10, clamped to [1, 25]. */
-  limit?: number;
-  /** Minimum score threshold. Default 0.2, clamped to [0, 1]. */
-  min_score?: number;
-}
-
-export interface MemorySearchResult {
-  matches: MemorySearchMatch[];
-  total: number;
-  truncated: boolean;
-}
 
 const SNIPPET_MAX = 120;
 
@@ -54,81 +30,6 @@ function overlap(queryTokens: string[], target: Set<string>): number {
   let n = 0;
   for (const t of queryTokens) if (target.has(t)) n++;
   return n;
-}
-
-function bodySnippet(body: string): string {
-  const trimmed = body.trim().replace(/\s+/g, " ");
-  return trimmed.length <= SNIPPET_MAX ? trimmed : trimmed.slice(0, SNIPPET_MAX - 1) + "…";
-}
-
-export function searchMemories(
-  entries: MemoryEntry[],
-  query: string,
-  options?: MemorySearchOptions,
-): MemorySearchResult {
-  const queryTokens = Array.from(new Set(tokenize(query)));
-  if (queryTokens.length === 0) return { matches: [], total: 0, truncated: false };
-
-  const limit = Math.min(25, Math.max(1, options?.limit ?? 10));
-  const minScore = Math.min(1, Math.max(0, options?.min_score ?? 0.2));
-  const typeFilter = options?.type;
-
-  interface Scored {
-    match: MemorySearchMatch;
-    legacyRaw: number;
-  }
-  const scored: Scored[] = [];
-
-  for (const entry of entries) {
-    if (typeFilter !== undefined && entry.meta.type !== typeFilter) continue;
-
-    const nameTokens = tokenSet(entry.meta.name.split(/[._-]/).join(" "));
-    const descTokens = tokenSet(entry.meta.description);
-    const bodyTokens = tokenSet(entry.body);
-    const typeTokens = tokenSet(entry.meta.type);
-
-    const fromName = overlap(queryTokens, nameTokens);
-    const fromDesc = overlap(queryTokens, descTokens);
-    const fromBody = overlap(queryTokens, bodyTokens);
-    const fromType = overlap(queryTokens, typeTokens);
-
-    const union = new Set<string>();
-    for (const t of nameTokens) union.add(t);
-    for (const t of descTokens) union.add(t);
-    for (const t of bodyTokens) union.add(t);
-    for (const t of typeTokens) union.add(t);
-
-    const coverage = overlap(queryTokens, union);
-    const score = coverage / queryTokens.length;
-    if (score < minScore) continue;
-
-    const legacyRaw = 10 * fromName + 5 * fromDesc + 1 * fromBody + 2 * fromType;
-
-    scored.push({
-      match: {
-        name: entry.meta.name,
-        description: entry.meta.description,
-        type: entry.meta.type,
-        score,
-        snippet: bodySnippet(entry.body),
-      },
-      legacyRaw,
-    });
-  }
-
-  scored.sort((a, b) => {
-    if (b.match.score !== a.match.score) return b.match.score - a.match.score;
-    if (b.legacyRaw !== a.legacyRaw) return b.legacyRaw - a.legacyRaw;
-    return a.match.name < b.match.name ? -1 : a.match.name > b.match.name ? 1 : 0;
-  });
-
-  const total = scored.length;
-  const truncated = total > limit;
-  return {
-    matches: scored.slice(0, limit).map((s) => s.match),
-    total,
-    truncated,
-  };
 }
 
 // ---------------------------------------------------------------------------

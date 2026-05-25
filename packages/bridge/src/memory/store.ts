@@ -18,15 +18,39 @@ import * as path from "node:path";
 import * as YAML from "yaml";
 import {
   MEMORY_NAME_REGEX,
-  MEMORY_TYPES,
-  isMemoryType,
   tokenize,
   validateMemory,
-  type MemoryEntry,
-  type MemoryFrontmatter,
   type MemoryRecord,
-  type MemoryType,
 } from "@browserops/shared";
+
+// ---------------------------------------------------------------------------
+// Local legacy types — used only by the migration parse path (migrate.ts).
+// These were removed from @browserops/shared in Phase 4.4.
+// ---------------------------------------------------------------------------
+
+/** @internal Minimal frontmatter shape for parsing old .md files. */
+interface LegacyFrontmatter {
+  name: string;
+  description: string;
+  type: "user" | "feedback" | "project" | "reference";
+  source: "mcp-tool" | "cli";
+  created: string;
+  updated: string;
+}
+
+/** @internal Full legacy markdown entry: frontmatter + body + path. */
+export interface LegacyEntry {
+  meta: LegacyFrontmatter;
+  body: string;
+  path: string;
+}
+
+const LEGACY_TYPES = ["user", "feedback", "project", "reference"] as const;
+type LegacyType = (typeof LEGACY_TYPES)[number];
+
+function isLegacyType(value: unknown): value is LegacyType {
+  return typeof value === "string" && (LEGACY_TYPES as readonly string[]).includes(value);
+}
 import { confidence } from "./confidence.js";
 
 // ---------------------------------------------------------------------------
@@ -750,7 +774,7 @@ export async function listRecords(
 
 const FRONTMATTER_REGEX = /^---\n([\s\S]*?)\n---\n?([\s\S]*)$/;
 
-function parseFrontmatter(text: string): { meta: MemoryFrontmatter; body: string } {
+function parseFrontmatter(text: string): { meta: LegacyFrontmatter; body: string } {
   const match = FRONTMATTER_REGEX.exec(text);
   if (!match) {
     throw new CodedError(
@@ -772,7 +796,7 @@ function parseFrontmatter(text: string): { meta: MemoryFrontmatter; body: string
   return { meta: validateFrontmatter(parsed), body: bodyRaw.replace(/^\n/, "") };
 }
 
-function validateFrontmatter(raw: unknown): MemoryFrontmatter {
+function validateFrontmatter(raw: unknown): LegacyFrontmatter {
   if (typeof raw !== "object" || raw === null) {
     throw new CodedError(
       "MEMORY_SCHEMA_INVALID",
@@ -789,10 +813,10 @@ function validateFrontmatter(raw: unknown): MemoryFrontmatter {
       );
     }
   }
-  if (!isMemoryType(obj["type"])) {
+  if (!isLegacyType(obj["type"])) {
     throw new CodedError(
       "MEMORY_SCHEMA_INVALID",
-      `frontmatter field "type" must be one of: ${MEMORY_TYPES.join(", ")}`,
+      `frontmatter field "type" must be one of: ${LEGACY_TYPES.join(", ")}`,
     );
   }
   if (obj["source"] !== "mcp-tool" && obj["source"] !== "cli") {
@@ -810,7 +834,7 @@ function validateFrontmatter(raw: unknown): MemoryFrontmatter {
   return {
     name: obj["name"] as string,
     description: obj["description"] as string,
-    type: obj["type"] as MemoryType,
+    type: obj["type"] as LegacyType,
     source: obj["source"] as "mcp-tool" | "cli",
     created: obj["created"] as string,
     updated: obj["updated"] as string,
@@ -818,10 +842,10 @@ function validateFrontmatter(raw: unknown): MemoryFrontmatter {
 }
 
 // ---------------------------------------------------------------------------
-// Legacy CRUD (preserved for backward compatibility and migration)
+// Legacy markdown read path — used only by migrate.ts
 // ---------------------------------------------------------------------------
 
-function serializeFrontmatter(meta: MemoryFrontmatter, body: string): string {
+function serializeLegacyFrontmatter(meta: LegacyFrontmatter, body: string): string {
   const fm = YAML.stringify({
     name: meta.name,
     description: meta.description,
@@ -834,79 +858,15 @@ function serializeFrontmatter(meta: MemoryFrontmatter, body: string): string {
   return `---\n${fm}\n---\n\n${trimmedBody}\n`;
 }
 
-export interface SaveMemoryArgs {
-  name: string;
-  description: string;
-  type: MemoryType;
-  body: string;
-  /** When true, overwrite an existing memory; otherwise rejects with MEMORY_ALREADY_EXISTS. */
-  replace?: boolean;
-  /** Defaults to "mcp-tool" — the CLI passes "cli" instead. */
-  source?: "mcp-tool" | "cli";
-}
+// Suppress lint about unused serializeLegacyFrontmatter — it stays for symmetry
+// with parseFrontmatter (future migration write-back, if needed).
+void serializeLegacyFrontmatter;
 
-export interface SaveMemoryResult {
-  entry: MemoryEntry;
-  /** True when the memory was created, false when an existing one was overwritten. */
-  created: boolean;
-}
-
-export async function saveMemory(args: SaveMemoryArgs): Promise<SaveMemoryResult> {
-  if (!MEMORY_NAME_REGEX.test(args.name)) {
-    throw new CodedError(
-      "INVALID_PARAMS",
-      `memory name "${args.name}" does not match the allowed pattern`,
-    );
-  }
-  if (!isMemoryType(args.type)) {
-    throw new CodedError(
-      "INVALID_PARAMS",
-      `memory type "${args.type}" is not one of: ${MEMORY_TYPES.join(", ")}`,
-    );
-  }
-  if (args.description.trim().length === 0) {
-    throw new CodedError("INVALID_PARAMS", "memory description must be non-empty");
-  }
-
-  const absPath = memoryFilePath(args.name);
-  const existed = await fileExists(absPath);
-
-  if (existed && !args.replace) {
-    throw new CodedError(
-      "MEMORY_ALREADY_EXISTS",
-      `memory "${args.name}" already exists; pass replace:true to overwrite`,
-      { name: args.name, path: absPath },
-    );
-  }
-
-  const now = new Date().toISOString();
-  let created = now;
-  if (existed) {
-    try {
-      const prev = await readMemory(args.name);
-      created = prev.meta.created;
-    } catch {
-      // Existing file unreadable — fall through and rewrite with a fresh `created`.
-    }
-  }
-
-  const meta: MemoryFrontmatter = {
-    name: args.name,
-    description: args.description.trim(),
-    type: args.type,
-    source: args.source ?? "mcp-tool",
-    created,
-    updated: now,
-  };
-  const text = serializeFrontmatter(meta, args.body);
-  await atomicWriteFile(absPath, text);
-  return {
-    entry: { meta, body: args.body, path: absPath },
-    created: !existed,
-  };
-}
-
-export async function readMemory(name: string): Promise<MemoryEntry> {
+/**
+ * Read a legacy .md memory file. Used exclusively by migrate.ts.
+ * Returns a LegacyEntry with the frontmatter metadata and body.
+ */
+export async function readLegacyMemory(name: string): Promise<LegacyEntry> {
   if (!MEMORY_NAME_REGEX.test(name)) {
     throw new CodedError(
       "INVALID_PARAMS",
@@ -933,71 +893,6 @@ export async function readMemory(name: string): Promise<MemoryEntry> {
   }
   const { meta, body } = parseFrontmatter(text);
   return { meta, body, path: absPath };
-}
-
-export async function deleteMemory(name: string): Promise<{ path: string }> {
-  if (!MEMORY_NAME_REGEX.test(name)) {
-    throw new CodedError(
-      "INVALID_PARAMS",
-      `memory name "${name}" does not match the allowed pattern`,
-    );
-  }
-  const absPath = memoryFilePath(name);
-  return withWriteLock(async () => {
-    try {
-      await fs.unlink(absPath);
-    } catch (err) {
-      const nodeErr = err as NodeJS.ErrnoException;
-      if (nodeErr.code === "ENOENT") {
-        throw new CodedError("MEMORY_NOT_FOUND", `memory "${name}" not found`, {
-          name,
-          path: absPath,
-        });
-      }
-      throw new CodedError(
-        "INTERNAL",
-        `failed to delete memory ${absPath}: ${nodeErr.message}`,
-        { path: absPath, cause: nodeErr.code },
-      );
-    }
-    return { path: absPath };
-  });
-}
-
-/**
- * Returns every legacy memory currently on disk, with frontmatter parsed.
- * Files that fail to parse are silently skipped.
- */
-export async function listMemoryEntries(): Promise<MemoryEntry[]> {
-  const root = memoryRoot();
-  let names: string[];
-  try {
-    names = await fs.readdir(root);
-  } catch (err) {
-    const nodeErr = err as NodeJS.ErrnoException;
-    if (nodeErr.code === "ENOENT") return [];
-    throw new CodedError(
-      "INTERNAL",
-      `failed to list memory directory ${root}: ${nodeErr.message}`,
-      { path: root, cause: nodeErr.code },
-    );
-  }
-  const entries: MemoryEntry[] = [];
-  await Promise.all(
-    names.map(async (filename) => {
-      if (!filename.endsWith(".md")) return;
-      const name = filename.slice(0, -3);
-      if (!MEMORY_NAME_REGEX.test(name)) return;
-      try {
-        const entry = await readMemory(name);
-        entries.push(entry);
-      } catch {
-        // Skip unreadable / malformed files.
-      }
-    }),
-  );
-  entries.sort((a, b) => a.meta.name.localeCompare(b.meta.name));
-  return entries;
 }
 
 // ---------------------------------------------------------------------------
