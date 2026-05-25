@@ -164,7 +164,7 @@ prints the manual checklist. Keep it optional and side-effect-free.
 - **3.1** `evals/memory/tasks/*.md` (capture-quality, retrieval-relevance,
   wall-twice-live, privacy) — each with setup, action, and a pass rubric. Commit:
   `docs(evals): agentic memory task specs`
-  - [ ] Done
+  - [x] Done
 - **3.2** `evals/memory/judge.ts` — rubric scorer (LLM if `ANTHROPIC_API_KEY`,
   else manual checklist). Commit: `feat(evals): optional LLM-judge for task specs`
   - [ ] Done
