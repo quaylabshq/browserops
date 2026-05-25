@@ -324,7 +324,7 @@ must pass before committing.
   - [x] Done
 - **6.7 Verify.**
   Commit: `chore(memory): phase 6 verify`
-  - [ ] Done
+  - [x] Done
 
 ## Phase 7 — Capture orchestration (skills)
 
