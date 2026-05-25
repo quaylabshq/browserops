@@ -163,7 +163,7 @@ must pass before committing.
   v2 record and for the two new tool inputs (`memory_session_trace`,
   `memory_list_for_origin`). Additive — leave existing schemas in place.
   Commit: `feat(memory): add JSON schemas for v2 memory tool inputs`
-  - [ ] Done
+  - [x] Done
 - **1.3** Add unit tests for `validateMemory` (scope/origin rule, kind/detail
   coherence, name pattern, caps).
   Commit: `test(memory): cover validateMemory rules`

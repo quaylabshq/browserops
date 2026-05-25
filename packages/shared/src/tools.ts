@@ -2169,6 +2169,152 @@ const memoryDelete: ToolDef = {
   errorCodes: [...BASE_CODES, ...MEMORY_CODES] as const,
 } as const;
 
+// ---------------------------------------------------------------------------
+// v2 memory JSON-Schema builders (additive — legacy schemas above kept until Phase 4)
+// ---------------------------------------------------------------------------
+
+/** JSON-Schema for a MemoryRecord (v2 structured record). */
+export const MEMORY_RECORD_V2_SCHEMA: JSONSchemaObject = {
+  type: "object",
+  additionalProperties: false,
+  required: ["schema_version", "name", "scope", "kind", "title", "detail"] as const,
+  properties: {
+    schema_version: { const: 1 },
+    name: { type: "string", pattern: "^[a-z][a-z0-9._-]{0,79}$" },
+    scope: { enum: ["global", "site"] as const },
+    kind: { enum: ["blocker", "affordance", "gotcha", "selector", "lesson"] as const },
+    title: { type: "string", minLength: 1, maxLength: 120 },
+    origin: { type: "string", maxLength: 500 },
+    origin_wildcard: { type: "boolean" },
+    path_glob: { type: "string", maxLength: 500 },
+    severity: { enum: ["low", "med", "high"] as const },
+    tags: {
+      type: "array",
+      items: { type: "string", maxLength: 64 },
+      maxItems: 10,
+      uniqueItems: true,
+    },
+    detail: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        wall: { type: "string", maxLength: 2000 },
+        door: { type: "string", maxLength: 2000 },
+        note: { type: "string", maxLength: 2000 },
+        locator: {
+          type: "object",
+          description: "Procedures Locator descriptor reused for selector memories.",
+          additionalProperties: true,
+        },
+      },
+    },
+    links: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        procedures: {
+          type: "array",
+          items: { type: "string", maxLength: 80 },
+          maxItems: 20,
+        },
+        memories: {
+          type: "array",
+          items: { type: "string", maxLength: 80 },
+          maxItems: 20,
+        },
+      },
+    },
+    stats: {
+      type: "object",
+      additionalProperties: false,
+      required: ["hits", "resolved", "door_failures", "captures"] as const,
+      properties: {
+        hits: { type: "integer", minimum: 0 },
+        last_hit: { type: "string" },
+        resolved: { type: "integer", minimum: 0 },
+        last_resolved: { type: "string" },
+        door_failures: { type: "integer", minimum: 0 },
+        captures: { type: "integer", minimum: 0 },
+      },
+    },
+    meta: {
+      type: "object",
+      additionalProperties: false,
+      required: ["version", "created", "updated", "source"] as const,
+      properties: {
+        version: { type: "integer", minimum: 1 },
+        created: { type: "string" },
+        updated: { type: "string" },
+        source: { enum: ["scribe", "mcp-tool", "cli"] as const },
+        corroborated: { type: "boolean" },
+      },
+    },
+  },
+  if: { properties: { scope: { const: "site" } } },
+  then: { required: ["origin"] as const },
+} as const;
+
+/** Input schema for memory_session_trace (v2 tool added in Phase 4). */
+export const MEMORY_SESSION_TRACE_INPUT_SCHEMA: JSONSchemaObject = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    tab_id: {
+      type: "string",
+      pattern: "^t_[0-9a-z]+$",
+      description: "Resolve to the session that owns this tab.",
+    },
+    session_id: {
+      type: "string",
+      minLength: 1,
+      maxLength: 128,
+      description: "Explicit session ID (alternative to tab_id).",
+    },
+    limit: {
+      type: "integer",
+      minimum: 1,
+      maximum: 200,
+      default: 50,
+      description: "Maximum number of trace entries to return.",
+    },
+  },
+  anyOf: [
+    { required: ["tab_id"] as const },
+    { required: ["session_id"] as const },
+    {},
+  ],
+} as const;
+
+/** Input schema for memory_list_for_origin (v2 tool added in Phase 4). */
+export const MEMORY_LIST_FOR_ORIGIN_INPUT_SCHEMA: JSONSchemaObject = {
+  type: "object",
+  additionalProperties: false,
+  required: ["origin"] as const,
+  properties: {
+    origin: {
+      type: "string",
+      maxLength: 500,
+      description: "scheme://host[:port] — list all site-scoped memories for this origin.",
+    },
+    kind: {
+      enum: ["blocker", "affordance", "gotcha", "selector", "lesson"] as const,
+      description: "Optional kind filter.",
+    },
+    min_confidence: {
+      type: "number",
+      minimum: 0,
+      maximum: 1,
+      description: "Only return records whose confidence score meets this threshold.",
+    },
+    limit: {
+      type: "integer",
+      minimum: 1,
+      maximum: 100,
+      default: 20,
+    },
+  },
+} as const;
+
 const setSessionName: ToolDef = {
   name: "browser_set_session_name",
   description:
