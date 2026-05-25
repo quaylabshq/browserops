@@ -5,7 +5,8 @@
   "type": "module",
   "description": "Behavioral evals for the browserops memory system — run with `pnpm eval:memory`.",
   "scripts": {
-    "eval": "tsx run.ts"
+    "eval": "tsx run.ts",
+    "judge": "tsx judge.ts"
   },
   "devDependencies": {
     "@browserops/shared": "workspace:*",
