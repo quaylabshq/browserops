@@ -193,7 +193,7 @@ must pass before committing.
   `scope:global, kind:lesson` (`title` from description, `detail.note` from body),
   moving originals to `…/memory/_legacy/`. No-op when the store is empty.
   Commit: `feat(memory): one-time legacy markdown migration`
-  - [ ] Done
+  - [x] Done
 - **2.5** Rewrite `packages/bridge/src/memory/search.ts`: add `scope`/`origin`/
   `kind` filters; rank by confidence first, then token coverage.
   Commit: `feat(memory): scope/origin filters and confidence ranking in search`
