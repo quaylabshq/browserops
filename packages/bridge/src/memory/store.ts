@@ -20,6 +20,7 @@ import {
   MEMORY_NAME_REGEX,
   MEMORY_TYPES,
   isMemoryType,
+  tokenize,
   validateMemory,
   type MemoryEntry,
   type MemoryFrontmatter,
@@ -299,6 +300,68 @@ export function recordFilePath(record: Pick<MemoryRecord, "scope" | "name" | "or
 }
 
 // ---------------------------------------------------------------------------
+// Dedup helpers
+// ---------------------------------------------------------------------------
+
+const DEDUP_THRESHOLD = 0.8;
+
+/** Extract the searchable text from a MemoryRecord for similarity comparison. */
+function recordText(r: MemoryRecord): string {
+  const parts: string[] = [r.title];
+  if (r.detail.wall) parts.push(r.detail.wall);
+  if (r.detail.door) parts.push(r.detail.door);
+  if (r.detail.note) parts.push(r.detail.note);
+  if (r.tags) parts.push(...r.tags);
+  return parts.join(" ");
+}
+
+function tokenSet(s: string): Set<string> {
+  return new Set(tokenize(s));
+}
+
+/**
+ * Jaccard-style similarity over token sets.
+ * score = |intersection| / |union|
+ */
+function tokenSimilarity(a: string, b: string): number {
+  const sa = tokenSet(a);
+  const sb = tokenSet(b);
+  if (sa.size === 0 && sb.size === 0) return 1;
+  if (sa.size === 0 || sb.size === 0) return 0;
+  let intersection = 0;
+  for (const t of sa) {
+    if (sb.has(t)) intersection++;
+  }
+  const union = sa.size + sb.size - intersection;
+  return intersection / union;
+}
+
+/**
+ * Find a possible duplicate among existing records with the same scope+origin.
+ * Returns the best candidate above the threshold, or null if none found.
+ */
+async function findDuplicate(
+  incoming: MemoryRecord,
+): Promise<{ name: string; score: number } | null> {
+  const existing = await listRecords({
+    scope: incoming.scope,
+    origin: incoming.origin,
+  });
+  const incomingText = recordText(incoming);
+  let best: { name: string; score: number } | null = null;
+  for (const rec of existing) {
+    if (rec.name === incoming.name) continue; // same name = same file, not a dup
+    const score = tokenSimilarity(incomingText, recordText(rec));
+    if (score >= DEDUP_THRESHOLD) {
+      if (!best || score > best.score) {
+        best = { name: rec.name, score };
+      }
+    }
+  }
+  return best;
+}
+
+// ---------------------------------------------------------------------------
 // v2 CRUD
 // ---------------------------------------------------------------------------
 
@@ -378,6 +441,20 @@ export async function saveRecord(args: SaveRecordArgs): Promise<SaveRecordResult
       `memory "${record.name}" already exists; pass replace:true to overwrite`,
       { name: record.name, path: absPath },
     );
+  }
+
+  // Dedup check: only on CREATE (not overwrite), and only when not already
+  // naming a merge target. Skip if the name itself already exists (handled above).
+  if (!existed && !replace) {
+    const dup = await findDuplicate(record);
+    if (dup) {
+      return {
+        record,
+        path: absPath,
+        created: false,
+        possible_duplicate: dup,
+      };
+    }
   }
 
   // Preserve created timestamp on overwrite

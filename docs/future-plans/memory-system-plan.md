@@ -184,7 +184,7 @@ must pass before committing.
   same-scope/same-origin record exceeds the similarity threshold and `merge_into`
   is absent, return `{ possible_duplicate: { name, score } }` instead of writing.
   Commit: `feat(memory): dedup guard and merge_into on save`
-  - [ ] Done
+  - [x] Done
 - **2.3** Add a redaction guard: reject records whose `detail.*` contains
   email-shaped / long-digit / obvious-PII strings, with a clear error.
   Commit: `feat(memory): redaction guard rejecting PII in records`
