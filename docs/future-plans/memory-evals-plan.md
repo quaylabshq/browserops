@@ -133,7 +133,7 @@ prints the manual checklist. Keep it optional and side-effect-free.
   Add ONE proof case (`schema.eval.ts` A1: a valid blocker validates) and confirm
   `pnpm eval:memory` runs green end-to-end.
   Commit: `feat(evals): memory eval harness + scorecard runner`
-  - [ ] Done
+  - [x] Done
 
 ## Phase 2 — Deterministic capability evals
 
