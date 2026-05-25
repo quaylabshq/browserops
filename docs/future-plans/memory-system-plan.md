@@ -213,7 +213,7 @@ must pass before committing.
   −door_failures) → [0,1], decay rule, self-heal threshold constants (modeled on
   `packages/bridge/src/procedures/health.ts`).
   Commit: `feat(memory): confidence + decay model`
-  - [ ] Done
+  - [x] Done
 - **3.2** Wire confidence into the store's `index.json` (cache per record) and into
   search ranking (3.1 → used by 2.5's ranker).
   Commit: `feat(memory): persist confidence in index and rank by it`
