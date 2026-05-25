@@ -31,7 +31,7 @@ import type { Logger } from "./logger.js";
 import type { TraceWriter } from "./trace-writer.js";
 import { buildProcedureHandlers } from "./procedures/handlers.js";
 import { buildMemoryHandlers } from "./memory/handlers.js";
-import { TraceBuffer, type TraceEntry } from "./memory/trace.js";
+import type { TraceBuffer, TraceEntry } from "./memory/trace.js";
 import { detectRoadblock, type CaptureHint } from "./memory/capture-signals.js";
 import { buildServerInstructions } from "./server-instructions.js";
 import { createPromptRegistry } from "./prompts.js";
