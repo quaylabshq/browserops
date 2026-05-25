@@ -25,6 +25,8 @@ import { WSBridge } from "./ws-server.js";
 import { ensureIndex } from "./procedures/index-builder.js";
 import { proceduresRoot } from "./procedures/paths.js";
 import { loadConfigFeatures } from "./config.js";
+import { SiteContextManager } from "./memory/delivery.js";
+import { listRecords } from "./memory/store.js";
 
 export interface DaemonRuntime {
   version: string;
@@ -50,6 +52,11 @@ export interface DaemonRuntime {
    * recovers cold starts and reconnects.
    */
   onExtensionReady(handler: () => void): void;
+  /**
+   * Daemon-lifetime SiteContextManager for hybrid memory delivery (Phase 6).
+   * Warmed on page_navigated; consulted by each McpBridgeServer on dispatch.
+   */
+  siteContext: SiteContextManager;
   shutdown(): Promise<void>;
 }
 
@@ -81,6 +88,8 @@ export async function bootDaemonRuntime(opts: BootDaemonRuntimeOptions): Promise
   const extensionReadyListeners: Array<() => void> = [];
   let lastExtensionConnected = false;
 
+  const siteContext = new SiteContextManager();
+
   const enabledFeatures: { current: Set<FeatureName> } = { current: new Set() };
   try {
     const resolved = await loadConfigFeatures();
@@ -110,7 +119,7 @@ export async function bootDaemonRuntime(opts: BootDaemonRuntimeOptions): Promise
     bridgeVersion: opts.version,
     logger,
     onEvent: (name, payload) => {
-      const minted = handleEvent(name, payload, tabs, hooks.onTabClosed, logger);
+      const minted = handleEvent(name, payload, tabs, hooks.onTabClosed, logger, siteContext);
       if (minted) {
         wsBridge
           .callExtension(
@@ -178,6 +187,7 @@ export async function bootDaemonRuntime(opts: BootDaemonRuntimeOptions): Promise
     enabledFeatures,
     riskyMatcher,
     pairCode: wsBridge.pairCode,
+    siteContext,
     get onTabClosed() {
       return hooks.onTabClosed;
     },
@@ -212,6 +222,7 @@ function handleEvent(
   tabs: TabRegistry,
   onTabClosed: (tabId: string) => void,
   logger: Logger,
+  siteContext?: SiteContextManager,
 ): TabRecord | undefined {
   void logger.write({ dir: "ws_event", method: name, payload });
 
@@ -252,6 +263,22 @@ function handleEvent(
       const active = boolField(payload, "active");
       if (active !== undefined) patch.active = active;
       tabs.update(tabId, patch);
+
+      // 6.2 — warm SiteContextManager on navigation so primer data is ready
+      // before the first tool call hits the new origin.
+      if (name === "page_navigated" && url && siteContext) {
+        let origin: string | undefined;
+        try { origin = new URL(url).origin; } catch { /* not a URL */ }
+        if (origin && origin !== "null") {
+          const ctx = siteContext;
+          const org = origin;
+          listRecords({ scope: "site", origin: org }).then(
+            (records) => ctx.warm(org, records),
+            () => { /* best-effort */ },
+          );
+        }
+      }
+
       return undefined;
     }
     default:

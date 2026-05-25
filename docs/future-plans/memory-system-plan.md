@@ -300,7 +300,7 @@ must pass before committing.
 - **6.2** Warm `SiteContextManager` on the `page_navigated` event in
   `packages/bridge/src/daemon-runtime.ts` (preload origin records from index).
   Commit: `feat(memory): warm site context on navigation`
-  - [ ] Done
+  - [x] Done
 - **6.3** In `mcp-server.ts` `dispatch`, after the extension result returns and
   before `reply`, consult `SiteContextManager`: append a `site_context` content
   entry on first resolve of an `UNPRIMED` origin (→ `PRIMED`); suppress thereafter;
