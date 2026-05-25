@@ -947,7 +947,7 @@ representation given page characteristics and intent.
 - **Files**: `packages/bridge/src/mcp-server.ts` — route the new tool to
   the extension via the existing dispatch path.
 - **Commit**: `feat(bridge): route browser_observe through MCP dispatch`
-- [ ] Done
+- [x] Done
 
 ### 3.4 — Phase 3 verification gate
 
