@@ -142,7 +142,7 @@ prints the manual checklist. Keep it optional and side-effect-free.
   - [x] Done
 - **2.2** `store.eval.ts` + `migrate.eval.ts` — capabilities B, C. Commit:
   `feat(evals): store roundtrip, index, migration evals (B,C)`
-  - [ ] Done
+  - [x] Done
 - **2.3** `search.eval.ts` — capability D (ranking, filters, confidence/decay).
   Commit: `feat(evals): search + confidence/decay evals (D)`
   - [ ] Done
