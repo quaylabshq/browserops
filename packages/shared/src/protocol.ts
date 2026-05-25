@@ -126,6 +126,32 @@ export interface Effect {
   duration_ms: number;
 }
 
+/**
+ * Predicate the agent attaches to a state-changing action to assert what
+ * should happen after dispatch. The handler polls the page until the
+ * predicate matches or `timeout_ms` elapses, then returns
+ * `expectation_met: boolean` alongside the usual effect envelope.
+ *
+ * Named `ActionExpectation` (not `ExpectedEffect`) because the procedure-
+ * memory module already exports a differently-shaped `ExpectedEffect`.
+ * Agent-facing tool descriptions still refer to the field as "expected".
+ *
+ * All fields are optional; matching is "all-of" — every present field
+ * must hold for the predicate to be considered met.
+ */
+export interface ActionExpectation {
+  url_matches?: string;
+  new_dialog?: boolean | string;
+  value_contains?: { ref: string; substring: string };
+  mutations_at_least?: number;
+  network_endpoint?: string;
+  focus_to?: string;
+  visual_delta_at_least?: number;
+  title_matches?: string;
+  timeout_ms?: number;
+  poll_interval_ms?: number;
+}
+
 export function isHello(e: unknown): e is Hello {
   return isObj(e) && e.type === "hello";
 }

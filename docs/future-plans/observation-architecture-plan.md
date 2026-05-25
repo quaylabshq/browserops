@@ -1003,7 +1003,8 @@ and spatial filters.
   }
   ```
 - **Commit**: `feat(shared): add ExpectedEffect predicate type`
-- [ ] Done
+- [x] Done — exported as `ActionExpectation` (the procedures module already
+  uses `ExpectedEffect` for a different, narrower predicate shape).
 
 #### 4.1.2 — Predicate matcher
 
