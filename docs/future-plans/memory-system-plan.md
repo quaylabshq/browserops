@@ -201,7 +201,7 @@ must pass before committing.
 - **2.6** Tests: store roundtrip, index build/persist, dedup, redaction, migration,
   filtered search.
   Commit: `test(memory): store roundtrip, index, dedup, migration`
-  - [ ] Done
+  - [x] Done
 - **2.7 Verify** typecheck + lint + bridge tests.
   Commit: `chore(memory): phase 2 verify`
   - [ ] Done

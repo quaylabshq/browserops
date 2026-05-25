@@ -119,24 +119,27 @@ export function withWriteLock<T>(op: () => Promise<T>): Promise<T> {
   });
 }
 
+/** Internal write without the serialize lock — use only inside withWriteLock. */
+async function atomicWriteFileInner(absPath: string, text: string): Promise<void> {
+  const dir = path.dirname(absPath);
+  const tmpPath = `${absPath}.tmp-${process.pid}-${Date.now()}`;
+  await fs.mkdir(dir, { recursive: true });
+  try {
+    await fs.writeFile(tmpPath, text, "utf8");
+    await fs.rename(tmpPath, absPath);
+  } catch (err) {
+    await fs.unlink(tmpPath).catch(() => undefined);
+    const nodeErr = err as NodeJS.ErrnoException;
+    throw new CodedError(
+      "INTERNAL",
+      `failed to write memory: ${absPath}: ${nodeErr.message}`,
+      { path: absPath, cause: nodeErr.code },
+    );
+  }
+}
+
 export async function atomicWriteFile(absPath: string, text: string): Promise<void> {
-  return withWriteLock(async () => {
-    const dir = path.dirname(absPath);
-    const tmpPath = `${absPath}.tmp-${process.pid}-${Date.now()}`;
-    await fs.mkdir(dir, { recursive: true });
-    try {
-      await fs.writeFile(tmpPath, text, "utf8");
-      await fs.rename(tmpPath, absPath);
-    } catch (err) {
-      await fs.unlink(tmpPath).catch(() => undefined);
-      const nodeErr = err as NodeJS.ErrnoException;
-      throw new CodedError(
-        "INTERNAL",
-        `failed to write memory: ${absPath}: ${nodeErr.message}`,
-        { path: absPath, cause: nodeErr.code },
-      );
-    }
-  });
+  return withWriteLock(() => atomicWriteFileInner(absPath, text));
 }
 
 // ---------------------------------------------------------------------------
@@ -178,17 +181,18 @@ async function readIndex(): Promise<MemoryIndex> {
   }
 }
 
-async function writeIndex(index: MemoryIndex): Promise<void> {
+/** Write the index — must be called inside withWriteLock. */
+async function writeIndexInner(index: MemoryIndex): Promise<void> {
   const p = indexPath();
   const text = JSON.stringify(index, null, 2) + "\n";
-  await atomicWriteFile(p, text);
+  await atomicWriteFileInner(p, text);
 }
 
 /**
- * Rebuild the in-memory index by scanning the global/ and sites/ directories.
- * Does not touch confidence (those are computed by Phase 3).
+ * Inner rebuild — must be called inside withWriteLock.
+ * Scans global/ and sites/ directories and writes the index atomically.
  */
-export async function rebuildIndex(): Promise<MemoryIndex> {
+async function rebuildIndexInner(): Promise<MemoryIndex> {
   const root = memoryRoot();
   const existing = await readIndex();
   const index: MemoryIndex = {
@@ -242,8 +246,16 @@ export async function rebuildIndex(): Promise<MemoryIndex> {
     if (nodeErr.code !== "ENOENT") throw err;
   }
 
-  await writeIndex(index);
+  await writeIndexInner(index);
   return index;
+}
+
+/**
+ * Public: rebuild the index, acquiring the write lock.
+ * Does not touch confidence (those are computed by Phase 3).
+ */
+export async function rebuildIndex(): Promise<MemoryIndex> {
+  return withWriteLock(() => rebuildIndexInner());
 }
 
 // ---------------------------------------------------------------------------
@@ -489,8 +501,10 @@ export async function saveRecord(args: SaveRecordArgs): Promise<SaveRecordResult
       },
     };
     const absPath = recordFilePath(merged);
-    await atomicWriteFile(absPath, serializeRecord(merged));
-    await rebuildIndex();
+    await withWriteLock(async () => {
+      await atomicWriteFileInner(absPath, serializeRecord(merged));
+      await rebuildIndexInner();
+    });
     return { record: merged, path: absPath, created: false };
   }
 
@@ -519,14 +533,17 @@ export async function saveRecord(args: SaveRecordArgs): Promise<SaveRecordResult
     }
   }
 
-  // Preserve created timestamp on overwrite
-  let createdAt = now;
+  // Preserve created timestamp:
+  // 1. On overwrite: read the previous record's created timestamp.
+  // 2. On create with an explicit meta.created in the incoming record: honour it.
+  // 3. Otherwise: use now.
+  let createdAt = record.meta?.created ?? now;
   if (existed) {
     try {
       const prev = await readRecord(record.name, record.scope, record.origin);
-      createdAt = prev.meta?.created ?? now;
+      createdAt = prev.meta?.created ?? createdAt;
     } catch {
-      // Existing file unreadable — use fresh timestamp
+      // Existing file unreadable — fall through to the incoming or fresh timestamp.
     }
   }
 
@@ -547,8 +564,10 @@ export async function saveRecord(args: SaveRecordArgs): Promise<SaveRecordResult
     },
   };
 
-  await atomicWriteFile(absPath, serializeRecord(toWrite));
-  await rebuildIndex();
+  await withWriteLock(async () => {
+    await atomicWriteFileInner(absPath, serializeRecord(toWrite));
+    await rebuildIndexInner();
+  });
   return { record: toWrite, path: absPath, created: !existed };
 }
 
@@ -621,7 +640,7 @@ export async function deleteRecord(
         { path: absPath, cause: nodeErr.code },
       );
     }
-    await rebuildIndex();
+    await rebuildIndexInner();
     return { path: absPath };
   });
 }
