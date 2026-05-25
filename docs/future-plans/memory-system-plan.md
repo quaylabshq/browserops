@@ -221,7 +221,7 @@ must pass before committing.
 - **3.3** Tests: confidence math, decay over time, door-failure demotion to
   "fix no longer reliable".
   Commit: `test(memory): confidence, decay, door-failure demotion`
-  - [ ] Done
+  - [x] Done
 - **3.4 Verify.**
   Commit: `chore(memory): phase 3 verify`
   - [ ] Done
