@@ -177,10 +177,10 @@ prints the manual checklist. Keep it optional and side-effect-free.
 - **4.1** Mention `pnpm eval:memory` in `README.md` (verifying memory) and
   `AGENTS.md` ("Where to look" → evals row). Commit:
   `docs: reference memory evals in README and AGENTS`
-  - [ ] Done
+  - [x] Done
 - **4.2** Flip remaining checkboxes; final `pnpm eval:memory` + `pnpm typecheck` +
   `pnpm test`; push branch (updates PR #11). Commit: `docs: complete memory evals plan`
-  - [ ] Done
+  - [x] Done
 
 ---
 
