@@ -158,7 +158,7 @@ must pass before committing.
   `MemorySeverity`, `MemoryStats`, `MemoryRecord` and `validateMemory()`. Import
   `Locator` from `./procedures`. Do **not** remove legacy types yet (kept until 4.4).
   Commit: `feat(memory): add structured MemoryRecord schema + validateMemory`
-  - [ ] Done
+  - [x] Done
 - **1.2** In `packages/shared/src/tools.ts`, **add** JSON-schema builders for the
   v2 record and for the two new tool inputs (`memory_session_trace`,
   `memory_list_for_origin`). Additive — leave existing schemas in place.
