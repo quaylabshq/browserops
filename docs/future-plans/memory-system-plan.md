@@ -341,7 +341,7 @@ must pass before committing.
 - **7.3** Register `browserops-scribe` in the skill sync manifest (locate where
   `browserops`/`browserops-teach` are listed for `browserops sync skills`).
   Commit: `feat(skill): register browserops-scribe for sync`
-  - [ ] Done
+  - [x] Done
 
 ## Phase 8 — Docs + final
 

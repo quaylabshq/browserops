@@ -103,6 +103,7 @@ describe("installClaudeSkill", () => {
 describe("installAllClaudeSkills", () => {
   it("installs every bundled skill in one pass", async () => {
     await writeFixtureSkill("browserops", "# main");
+    await writeFixtureSkill("browserops-scribe", "# scribe");
     await writeFixtureSkill("browserops-teach", "# teach");
     const { results, failed } = await installAllClaudeSkills({
       scope: "project",
@@ -111,6 +112,7 @@ describe("installAllClaudeSkills", () => {
     expect(failed).toEqual([]);
     expect(results.map((r) => r.skillName).sort()).toEqual([
       "browserops",
+      "browserops-scribe",
       "browserops-teach",
     ]);
     for (const r of results) {

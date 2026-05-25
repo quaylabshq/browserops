@@ -59,12 +59,13 @@ describe("runSync default targets", () => {
 describe("runSync skills target", () => {
   it("installs every bundled skill on a fresh home", async () => {
     await writeFixtureSkill("browserops", "# main");
+    await writeFixtureSkill("browserops-scribe", "# scribe");
     await writeFixtureSkill("browserops-teach", "# teach");
     const report = await runSync({ targets: ["skills"] });
     const skillNames = (report.skills?.results ?? [])
       .map((r) => r.skillName)
       .sort();
-    expect(skillNames).toEqual(["browserops", "browserops-teach"]);
+    expect(skillNames).toEqual(["browserops", "browserops-scribe", "browserops-teach"]);
     for (const r of report.skills?.results ?? []) {
       expect(r.changed).toBe(true);
       expect(r.targetPath.startsWith(homeDir)).toBe(true);
