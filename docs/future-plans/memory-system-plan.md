@@ -278,7 +278,7 @@ must pass before committing.
   clusters over recent trace (error codes, `WRITE_NOT_REFLECTED`, no-op effect
   after an action, `browser_wait_for` timeout, repeated retries, `USER_DECLINED`).
   Commit: `feat(memory): roadblock capture-signal detector`
-  - [ ] Done
+  - [x] Done
 - **5.5** Attach `capture_hint = {reason, origin, trace_ref}` to responses in
   `dispatch` when a roadblock cluster fires.
   Commit: `feat(memory): surface capture_hint on tool responses`
