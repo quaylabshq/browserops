@@ -139,7 +139,7 @@ prints the manual checklist. Keep it optional and side-effect-free.
 
 - **2.1** `schema.eval.ts` — capability A (validation + redaction). Commit:
   `feat(evals): schema + redaction evals (A)`
-  - [ ] Done
+  - [x] Done
 - **2.2** `store.eval.ts` + `migrate.eval.ts` — capabilities B, C. Commit:
   `feat(evals): store roundtrip, index, migration evals (B,C)`
   - [ ] Done
