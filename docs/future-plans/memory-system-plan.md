@@ -356,11 +356,11 @@ must pass before committing.
 - **8.3** Flip every `- [ ] Done` to `- [x] Done`; run full `tsc --noEmit` + lint +
   the complete test suite across packages.
   Commit: `docs: complete memory v2 plan`
-  - [ ] Done
+  - [x] Done
 - **8.4** Open one PR for `feat/memory-v2` (no intermediate PRs). PR body
   summarizes the two stores, auto-capture loop, and hybrid delivery; no Claude
   attribution. *(Action step, not a commit.)*
-  - [ ] Done
+  - [x] Done
 
 ---
 
