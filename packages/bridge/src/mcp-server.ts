@@ -34,6 +34,7 @@ import { buildMemoryHandlers } from "./memory/handlers.js";
 import type { TraceBuffer, TraceEntry } from "./memory/trace.js";
 import { detectRoadblock, type CaptureHint } from "./memory/capture-signals.js";
 import { buildServerInstructions } from "./server-instructions.js";
+import type { SiteContextManager, SitePrimer } from "./memory/delivery.js";
 import { createPromptRegistry } from "./prompts.js";
 import { checkBreaker, recordResult as recordBreakerResult } from "./circuit-breaker.js";
 import { renderBoxDrawing } from "./observe/box-drawing-render.js";
@@ -174,6 +175,13 @@ export interface McpBridgeDeps {
    * trace reads (memory_session_trace). When absent, tracing is skipped.
    */
   traceBuffer?: TraceBuffer;
+  /**
+   * Daemon-lifetime SiteContextManager for hybrid memory delivery (Phase 6).
+   * Consulted in dispatch to inject a per-site primer on the first tool
+   * response for a new (session, origin) pair and to re-nudge on roadblocks.
+   * When absent, site-context delivery is skipped.
+   */
+  siteContext?: SiteContextManager;
 }
 
 interface ToolErrorPayload {
@@ -796,7 +804,7 @@ export class McpBridgeServer {
 
 
   /**
-   * Joint hook for trace + telemetry + action trace buffer.
+   * Joint hook for trace + telemetry + action trace buffer + site-context.
    * emitTrace preserves its existing skip behaviour for the procedures_
    * and memory_ tool families (those branches return early; we suppress
    * trace emission for them inline here too). captureToolCalled is
@@ -823,6 +831,15 @@ export class McpBridgeServer {
       (toolName.startsWith("browser_") || toolName.startsWith("procedures_"))
     ) {
       this.recordActionTrace(toolName, result, tab);
+    }
+    // 6.3 — inject site_context primer (after capture_hint is attached).
+    // Never inject on memory_* calls to avoid feedback loops.
+    if (
+      this.deps.siteContext &&
+      this.deps.sessionId !== "" &&
+      !toolName.startsWith("memory_")
+    ) {
+      this.injectSiteContext(toolName, result, tab);
     }
   }
 
@@ -902,6 +919,59 @@ export class McpBridgeServer {
       // Error results have no structuredContent (by design — see toolError).
       // We append a separate text block instead.
       patchCaptureHintOnError(result, hint);
+    }
+  }
+
+  /**
+   * Inject a site_context block into a successful tool result when:
+   *   (a) This is the first browser_* call from this session on this origin
+   *       (UNPRIMED → PRIMED), OR
+   *   (b) A capture_hint roadblock was just attached AND the origin has a
+   *       blocker record with a door workaround (RE-NUDGE path).
+   *
+   * Mutates result in-place, matching patchCaptureHint style.
+   * No-op on error results (site_context belongs to the success path).
+   */
+  private injectSiteContext(
+    _toolName: string,
+    result: ToolCallResult,
+    tab: TabInfo | undefined,
+  ): void {
+    if (!this.deps.siteContext || this.deps.sessionId === "") return;
+
+    // Derive origin from the resolved tab URL.
+    let origin: string | undefined;
+    if (tab?.url) {
+      try { origin = new URL(tab.url).origin; } catch { /* not a URL */ }
+    }
+    if (!origin || origin === "null") return;
+
+    const sc = this.deps.siteContext;
+    const sessionId = this.deps.sessionId;
+
+    // Check whether capture_hint was just attached (roadblock case).
+    const captureHintFired = hasCaptureHint(result);
+
+    if (captureHintFired) {
+      // Re-nudge path: find the best matching blocker door for this origin.
+      const reNudge = sc.reNudge(sessionId, origin, "");
+      if (reNudge) {
+        patchSiteContext(result, {
+          _type: "re_nudge",
+          origin,
+          blocker_name: reNudge.name,
+          blocker_title: reNudge.title,
+          door: reNudge.door,
+          confidence: reNudge.confidence,
+        });
+        return;
+      }
+    }
+
+    // Normal primer path: first call on an UNPRIMED origin.
+    const primer: SitePrimer | null = sc.shouldPrime(sessionId, origin);
+    if (primer) {
+      patchSiteContext(result, { _type: "primer", ...primer });
     }
   }
 
@@ -1140,6 +1210,40 @@ function patchCaptureHintOnError(result: ToolCallResult, hint: CaptureHint): voi
     ...(result.content as Array<{ type: "text"; text: string }>),
     { type: "text", text: safeJson({ capture_hint: hint }) },
   ];
+}
+
+/**
+ * Return true when the result already carries a capture_hint block
+ * (i.e. patchCaptureHint / patchCaptureHintOnError was called before us).
+ */
+function hasCaptureHint(result: ToolCallResult): boolean {
+  // Check structuredContent first (success path).
+  const sc = result.structuredContent as Record<string, unknown> | undefined;
+  if (sc && "capture_hint" in sc) return true;
+  // Error path: a second text block is appended with {capture_hint:…}.
+  if (result.content.length > 1) {
+    const last = result.content[result.content.length - 1];
+    if (last) {
+      try {
+        const parsed = JSON.parse(last.text) as Record<string, unknown>;
+        if ("capture_hint" in parsed) return true;
+      } catch { /* not JSON */ }
+    }
+  }
+  return false;
+}
+
+/**
+ * Attach site_context to a successful ToolCallResult.
+ * Mutates both structuredContent and content[0].text, matching
+ * patchCaptureHint style.  No-op on error results.
+ */
+function patchSiteContext(result: ToolCallResult, siteContext: Record<string, unknown>): void {
+  if (result.isError) return;
+  const existing = (result.structuredContent ?? {}) as Record<string, unknown>;
+  const patched = { ...existing, site_context: siteContext };
+  result.structuredContent = patched;
+  result.content = [{ type: "text", text: safeJson(patched) }];
 }
 
 /**

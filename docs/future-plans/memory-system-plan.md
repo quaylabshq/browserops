@@ -307,7 +307,7 @@ must pass before committing.
   re-nudge the matching blocker's `door` when `capture_hint` fired (→ `RE-NUDGED`);
   deliver path-subset on new `path_glob` match.
   Commit: `feat(memory): inject per-site primer into tool responses`
-  - [ ] Done
+  - [x] Done
 - **6.4** Extend `buildServerInstructions` in
   `packages/bridge/src/server-instructions.ts` with an optional `globalDigest`;
   compute the top-N global records (by confidence, ≤10 title lines) at daemon
