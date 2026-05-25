@@ -282,7 +282,7 @@ must pass before committing.
 - **5.5** Attach `capture_hint = {reason, origin, trace_ref}` to responses in
   `dispatch` when a roadblock cluster fires.
   Commit: `feat(memory): surface capture_hint on tool responses`
-  - [ ] Done
+  - [x] Done
 - **5.6** Tests: ring eviction, cross-session read, signal detection thresholds.
   Commit: `test(memory): trace buffer and capture signals`
   - [ ] Done

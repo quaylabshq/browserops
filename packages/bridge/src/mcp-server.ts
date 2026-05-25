@@ -32,6 +32,7 @@ import type { TraceWriter } from "./trace-writer.js";
 import { buildProcedureHandlers } from "./procedures/handlers.js";
 import { buildMemoryHandlers } from "./memory/handlers.js";
 import { TraceBuffer, type TraceEntry } from "./memory/trace.js";
+import { detectRoadblock, type CaptureHint } from "./memory/capture-signals.js";
 import { buildServerInstructions } from "./server-instructions.js";
 import { createPromptRegistry } from "./prompts.js";
 import { checkBreaker, recordResult as recordBreakerResult } from "./circuit-breaker.js";
@@ -826,7 +827,10 @@ export class McpBridgeServer {
   }
 
   /**
-   * Push one entry into the per-session TraceBuffer.
+   * Push one entry into the per-session TraceBuffer, run the roadblock
+   * detector, and — when a hint fires — mutate the ToolCallResult to
+   * attach `capture_hint` into its structuredContent and content text.
+   *
    * Derives origin from the resolved tab URL and effect_summary from the
    * page_effect/effect envelope in the tool result payload.
    */
@@ -874,7 +878,31 @@ export class McpBridgeServer {
       effect_summary,
       ts: new Date().toISOString(),
     };
+
+    // Snapshot the trace BEFORE recording so the detector sees the prior
+    // window (not including the current call duplicated).
+    const recentTrace = tb.recent(this.deps.sessionId);
     tb.record(this.deps.sessionId, entry);
+
+    // Run the roadblock detector. Only fire for non-error results or for
+    // error results — both matter. Skip pure-error results for reads.
+    const hint: CaptureHint | null = detectRoadblock(recentTrace, {
+      method: toolName,
+      origin,
+      error_code,
+      effect_summary,
+    });
+
+    if (hint && !result.isError) {
+      // Attach capture_hint into the structured payload so the MCP client
+      // (Phase 6 delivery layer) can trigger the scribe subagent.
+      patchCaptureHint(result, hint);
+    } else if (hint && result.isError) {
+      // For error results: attach capture_hint alongside the error payload.
+      // Error results have no structuredContent (by design — see toolError).
+      // We append a separate text block instead.
+      patchCaptureHintOnError(result, hint);
+    }
   }
 
   /**
@@ -1087,6 +1115,31 @@ function applyObserveBoxDrawing(toolName: string, result: unknown): unknown {
   };
   if (p["image"] !== undefined) newPayload["image"] = p["image"];
   return { ...r, payload: newPayload };
+}
+
+/**
+ * Attach a CaptureHint to a successful ToolCallResult.
+ * Mutates both structuredContent and content[0].text so all consumers see it.
+ */
+function patchCaptureHint(result: ToolCallResult, hint: CaptureHint): void {
+  // Build the new payload from the existing structured content.
+  const existing = (result.structuredContent ?? {}) as Record<string, unknown>;
+  const patched = { ...existing, capture_hint: hint };
+  result.structuredContent = patched;
+  // Re-serialise content text so text-only consumers also see capture_hint.
+  result.content = [{ type: "text", text: safeJson(patched) }];
+}
+
+/**
+ * Attach a CaptureHint as a second content block on an error result.
+ * Error results intentionally have no structuredContent, so we add a
+ * separate text block with type "text" that clients can read.
+ */
+function patchCaptureHintOnError(result: ToolCallResult, hint: CaptureHint): void {
+  result.content = [
+    ...(result.content as Array<{ type: "text"; text: string }>),
+    { type: "text", text: safeJson({ capture_hint: hint }) },
+  ];
 }
 
 /**
