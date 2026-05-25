@@ -245,7 +245,7 @@ must pass before committing.
   .default = true`. Keep it a feature (disable-able via `BROWSEROPS_FEATURES` /
   `~/.browserops/config.json`).
   Commit: `feat(memory): enable memory feature by default`
-  - [ ] Done
+  - [x] Done
 - **4.4** Remove the legacy frontmatter types / `memoryTypeEnum` from
   `packages/shared/src/memory.ts` and any now-dead legacy parse paths in
   `store.ts`. Confirm nothing references them (`tsc` is the proof).

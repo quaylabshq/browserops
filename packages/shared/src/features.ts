@@ -45,9 +45,9 @@ export const FEATURE_METADATA: Record<FeatureName, FeatureMetadata> = {
   },
   memory: {
     description:
-      "Cross-agent memory store at ~/browserops/memory/. Save/search/get/delete named markdown memories via MCP — visible to every MCP client (Cursor, Zed, Claude Code, custom SDK). Lets agents teach each other lessons that outlive a single session.",
+      "Cross-agent memory store at ~/browserops/memory/. Structured YAML records (MemoryRecord, two stores: global/ + sites/<origin>/) visible to every MCP client (Cursor, Zed, Claude Code, custom SDK). Auto-enabled by default — disable via browserops feature disable memory.",
     stability: "experimental",
-    default: false,
+    default: true,
   },
 };
 
