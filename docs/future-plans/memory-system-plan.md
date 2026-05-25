@@ -321,7 +321,7 @@ must pass before committing.
 - **6.6** Tests: prime-once/suppress/re-nudge state machine, global digest content,
   path-subset, door-failure bump.
   Commit: `test(memory): delivery state machine and global digest`
-  - [ ] Done
+  - [x] Done
 - **6.7 Verify.**
   Commit: `chore(memory): phase 6 verify`
   - [ ] Done
