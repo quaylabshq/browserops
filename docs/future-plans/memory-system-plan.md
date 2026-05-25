@@ -296,7 +296,7 @@ must pass before committing.
   ((session_id, origin) → `UNPRIMED|PRIMED|RE-NUDGED`) + primer formatter (terse
   `title`-only index, confidence-ranked, ≤5 lines).
   Commit: `feat(memory): SiteContextManager and primer formatter`
-  - [ ] Done
+  - [x] Done
 - **6.2** Warm `SiteContextManager` on the `page_navigated` event in
   `packages/bridge/src/daemon-runtime.ts` (preload origin records from index).
   Commit: `feat(memory): warm site context on navigation`
