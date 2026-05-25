@@ -269,7 +269,7 @@ must pass before committing.
 - **5.2** Record each tool call into the buffer in the `mcp-server.ts` reply path
   (`reply()` ~lines 948–972), deriving origin from the resolved tab URL.
   Commit: `feat(memory): record tool calls into trace buffer`
-  - [ ] Done
+  - [x] Done
 - **5.3** Implement the `memory_session_trace` handler ({`tab_id?`|`session_id?`,
   `limit?`} → recent entries; tab_id resolves to its session).
   Commit: `feat(memory): memory_session_trace handler`

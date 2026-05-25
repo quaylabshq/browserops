@@ -31,6 +31,7 @@ import type { Logger } from "./logger.js";
 import type { TraceWriter } from "./trace-writer.js";
 import { buildProcedureHandlers } from "./procedures/handlers.js";
 import { MEMORY_HANDLERS } from "./memory/handlers.js";
+import { TraceBuffer, type TraceEntry } from "./memory/trace.js";
 import { buildServerInstructions } from "./server-instructions.js";
 import { createPromptRegistry } from "./prompts.js";
 import { checkBreaker, recordResult as recordBreakerResult } from "./circuit-breaker.js";
@@ -166,6 +167,12 @@ export interface McpBridgeDeps {
    * its absence.
    */
   clientName?: string;
+  /**
+   * Per-session action trace ring buffer. Records browser_* and
+   * procedures_* call outcomes for roadblock detection and cross-session
+   * trace reads (memory_session_trace). When absent, tracing is skipped.
+   */
+  traceBuffer?: TraceBuffer;
 }
 
 interface ToolErrorPayload {
@@ -788,11 +795,13 @@ export class McpBridgeServer {
 
 
   /**
-   * Joint hook for trace + telemetry. emitTrace preserves its existing
-   * skip behaviour for the procedures_ and memory_ tool families (those
-   * branches return early; we suppress trace emission for them inline
-   * here too). captureToolCalled is unconditional because telemetry
-   * treats every tools/call as a usage signal.
+   * Joint hook for trace + telemetry + action trace buffer.
+   * emitTrace preserves its existing skip behaviour for the procedures_
+   * and memory_ tool families (those branches return early; we suppress
+   * trace emission for them inline here too). captureToolCalled is
+   * unconditional because telemetry treats every tools/call as a usage
+   * signal. recordActionTrace only fires for browser_* and procedures_*
+   * calls (not memory_*) to avoid feedback noise.
    */
   private record(
     id: string,
@@ -807,6 +816,65 @@ export class McpBridgeServer {
       this.emitTrace(id, toolName, input, startMs, result);
     }
     this.captureToolCalled(toolName, input, originalParamKeys, startMs, result, tab);
+    if (
+      this.deps.traceBuffer &&
+      this.deps.sessionId !== "" &&
+      (toolName.startsWith("browser_") || toolName.startsWith("procedures_"))
+    ) {
+      this.recordActionTrace(toolName, result, tab);
+    }
+  }
+
+  /**
+   * Push one entry into the per-session TraceBuffer.
+   * Derives origin from the resolved tab URL and effect_summary from the
+   * page_effect/effect envelope in the tool result payload.
+   */
+  private recordActionTrace(
+    toolName: string,
+    result: ToolCallResult,
+    tab: TabInfo | undefined,
+  ): void {
+    const tb = this.deps.traceBuffer;
+    if (!tb) return;
+
+    // Derive origin (hostname) from the tab URL we resolved earlier.
+    let origin: string | undefined;
+    if (tab?.url) {
+      try { origin = new URL(tab.url).hostname; } catch { /* not a URL */ }
+    }
+
+    // Extract error_code from an error result.
+    let error_code: string | undefined;
+    if (result.isError) {
+      const text = result.content[0]?.text ?? "";
+      try {
+        const parsed = JSON.parse(text) as { code?: unknown };
+        if (typeof parsed.code === "string") error_code = parsed.code;
+      } catch { /* not JSON */ }
+    }
+
+    // Summarise the page_effect / effect envelope.
+    let effect_summary = "none";
+    if (!result.isError) {
+      const text = result.content[0]?.text ?? "";
+      try {
+        const parsed = JSON.parse(text) as Record<string, unknown>;
+        const eff = (parsed["effect"] ?? parsed["page_effect"]) as Record<string, unknown> | undefined;
+        if (eff && typeof eff === "object") {
+          effect_summary = summariseEffect(eff);
+        }
+      } catch { /* not JSON */ }
+    }
+
+    const entry: TraceEntry = {
+      method: toolName,
+      ...(origin !== undefined ? { origin } : {}),
+      ...(error_code !== undefined ? { error_code } : {}),
+      effect_summary,
+      ts: new Date().toISOString(),
+    };
+    tb.record(this.deps.sessionId, entry);
   }
 
   /**
@@ -1019,6 +1087,24 @@ function applyObserveBoxDrawing(toolName: string, result: unknown): unknown {
   };
   if (p["image"] !== undefined) newPayload["image"] = p["image"];
   return { ...r, payload: newPayload };
+}
+
+/**
+ * Build a compact human-readable summary of a PageEffect envelope.
+ * e.g. "dom+5 url→changed", "net:3", "no-op"
+ */
+function summariseEffect(eff: Record<string, unknown>): string {
+  const parts: string[] = [];
+  const dom = eff["dom"] as { added?: number; removed?: number; attr_changes?: number; text_changes?: number } | undefined;
+  if (dom) {
+    const total = (dom.added ?? 0) + (dom.removed ?? 0) + (dom.attr_changes ?? 0) + (dom.text_changes ?? 0);
+    if (total > 0) parts.push(`dom+${total}`);
+  }
+  const url = eff["url"] as { changed?: boolean } | undefined;
+  if (url?.changed) parts.push("url→changed");
+  const net = eff["network"] as { requests_started?: number } | undefined;
+  if ((net?.requests_started ?? 0) > 0) parts.push(`net:${net!.requests_started}`);
+  return parts.length > 0 ? parts.join(" ") : "no-op";
 }
 
 function toolOk(result: unknown): ToolCallResult {
