@@ -70,14 +70,16 @@ browserops sync              # refresh skills + MCP-client config to match the i
 browserops sync skills       # only refresh ~/.claude/skills/<name>/SKILL.md
 browserops sync --dry-run    # preview without writing
 
-browserops feature list                # show experimental features and their state
-browserops feature enable <name>       # opt into procedures or memory
-browserops feature disable <name>      # opt out
+browserops feature list                # show features and their state
+browserops feature enable <name>       # opt in (e.g. procedures)
+browserops feature disable <name>      # opt out (e.g. memory, if you don't want it)
 ```
 
-**Heads-up on first sync after upgrading:** the next `browserops sync` (or `browserops upgrade`) installs the `browserops-teach` skill at `~/.claude/skills/browserops-teach/SKILL.md` for the first time on machines that were on an earlier package version — earlier releases shipped the skill in the repo but not in the published CLI bundle, so it was never installable. Existing `~/.claude/skills/browserops/SKILL.md` is refreshed in place, with a timestamped `.bak` if any local edits were detected.
+**Heads-up on first sync after upgrading:** the next `browserops sync` (or `browserops upgrade`) installs the `browserops-teach` and `browserops-scribe` skills at `~/.claude/skills/<name>/SKILL.md` for the first time on machines that were on an earlier package version. Existing skills are refreshed in place, with a timestamped `.bak` if any local edits were detected.
 
 `procedures` ships as an **experimental** feature — off by default. With it off, your agent gets the always-on `browser_*` tools and nothing else: minimum token overhead for users who only want basic browser automation. Opt in with `browserops feature enable procedures` and run `browserops restart` so the daemon broadcasts the new feature set to the extension. Once on, the agent gets the procedure-store tools (`procedures_search`, `_get`, `_save`, `_delete`, `_execute`) and the `browserops-teach` skill that authors new procedures autonomously.
+
+`memory` is **on by default**. The agent gets six `memory_*` tools that read and write structured YAML records in `~/browserops/memory/` — visible to every MCP client on the same machine. Disable with `browserops feature disable memory` (then `browserops restart`) if you don't want cross-session memory.
 
 ### Per-project rules (optional)
 
@@ -246,6 +248,10 @@ Content: `browser_screenshot` (viewport), `browser_read` (`text` / `markdown` / 
 
 Input: `browser_click`, `browser_type`, `browser_press`, `browser_scroll`, `browser_hover`, `browser_execute_js`
 
+Memory (always-on): `memory_save`, `memory_search`, `memory_get`, `memory_delete`, `memory_list_for_origin`, `memory_session_trace`
+
+Procedures (opt-in via `browserops feature enable procedures`): `procedures_search`, `procedures_get`, `procedures_save`, `procedures_delete`, `procedures_execute`, `procedures_resume`
+
 Full JSON schemas for each tool are declared in `packages/shared/src/tools.ts`.
 
 **How click/type work.** First call `browser_read` with `mode: "a11y_tree"` on the tab — you get back a numbered tree of interactive elements and their refs. Then call `browser_click({tab_id, ref})` or `browser_type({tab_id, ref, text})` using those refs. Refs invalidate on navigation (same-doc or cross-doc) — re-read the tree after a navigation.
@@ -292,45 +298,43 @@ Authoring checklist (still applies when authoring procedures by hand):
 
 ## Memory (cross-agent)
 
-> **Experimental — off by default.** Enable with `browserops feature enable memory` (then `browserops restart`). With the feature off, the four `memory_*` tools below are hidden from `tools/list` and any direct call returns `FEATURE_DISABLED`.
+> **On by default.** Disable with `browserops feature disable memory` (then `browserops restart`). With the feature off, the six `memory_*` tools are hidden from `tools/list` and any direct call returns `FEATURE_DISABLED`.
 
-A small markdown store at `~/browserops/memory/<name>.md` that any MCP client can read or write. The point is **cross-agent persistence**: a lesson saved from a Claude Code session is visible to a Cursor or Zed session opening the same browserops bridge later. It sits alongside (not on top of) Claude Code's own auto-memory at `~/.claude/projects/.../memory/`, which stays Claude-only by definition.
+A structured YAML store at `~/browserops/memory/` that any MCP client can read or write. The point is **cross-agent persistence**: a lesson saved from a Claude Code session is visible to a Cursor or Zed session opening the same browserops bridge later. It sits alongside (not on top of) Claude Code's own auto-memory at `~/.claude/projects/.../memory/`, which stays Claude-only by definition.
+
+### Two stores
+
+Records use a single `MemoryRecord` schema with a `scope` discriminator:
+
+- **`global/<name>.yaml`** (`scope: "global"`) — cross-site facts: patterns that hold everywhere.
+- **`sites/<origin-slug>/<name>.yaml`** (`scope: "site"`) — per-host facts; `origin` (e.g. `https://slack.com`) is required.
+
+Record kinds: `blocker` (symptom `wall` + workaround `door`), `affordance`, `gotcha`, `lesson`, `selector` (carries a `Locator` descriptor, same as procedures).
 
 ### When to use it
 
-Save a memory when the lesson is useful to *any* MCP client that might pick up the same browserops bridge — browserops behavior, browser-flow gotchas, selectors that survive across sessions, project context. Keep Claude-private things (keybindings, response style) in the auto-memory store.
+Save a memory when the lesson is useful to *any* MCP client that might pick up the same browserops bridge — browserops behavior, browser-flow gotchas, per-site selectors, project context. Keep Claude-private things (keybindings, response style) in the auto-memory store.
 
 ### MCP tools
 
 | Tool | Inputs | Output |
 |---|---|---|
-| `memory_save` | `name`, `description`, `type` (`user`\|`feedback`\|`project`\|`reference`), `body`, `replace?:bool` | `{saved, path, created}` |
-| `memory_search` | `query`, `type?`, `limit?` (1..25, default 10), `min_score?` (0..1, default 0.2) | `{matches, total, truncated}` |
-| `memory_get` | `name` | `{meta, body, path}` |
+| `memory_save` | `record` (full `MemoryRecord`), `merge_into?`, `replace?:bool` | `{saved, path, created}` or `{possible_duplicate: {name, score}}` |
+| `memory_search` | `query`, `scope?`, `origin?`, `kind?`, `limit?` | `{matches, total}` with `confidence` per match |
+| `memory_get` | `name` | `{record, path}` |
 | `memory_delete` | `name` | `{deleted, path}` |
+| `memory_list_for_origin` | `origin`, filters | `{records}` for a specific host |
+| `memory_session_trace` | `tab_id?` or `session_id?`, `limit?` | recent tool calls from the session ring buffer |
 
-`name` matches `^[a-z][a-z0-9._-]{0,79}$`. Duplicate names reject with `MEMORY_ALREADY_EXISTS` unless `replace:true`. Search returns metadata only — fetch the body with `memory_get`.
+`name` matches `^[a-z][a-z0-9._-]{0,79}$`. Duplicate names reject with `MEMORY_ALREADY_EXISTS` unless `replace:true`. `memory_save` returns `possible_duplicate` when a near-match exists and `merge_into` is not supplied — pass `merge_into: "<name>"` to merge instead of creating a parallel record. Search results carry a `confidence` score; records whose delivered doors later fail are demoted automatically.
 
-### Storage
+### Auto-capture
 
-Each memory is one markdown file with YAML frontmatter:
+The bridge detects roadblock clusters (repeated errors, write-not-reflected, no-op effects, wait-for timeouts) and attaches a `capture_hint` to tool responses. The main agent reads the hint and spawns a background **`browserops-scribe`** subagent (haiku) that fetches the session trace, dedups against existing records, authors a structured YAML record, and saves it. No user action required.
 
-```markdown
----
-name: feedback_terse_responses
-description: user wants terse responses
-type: feedback
-source: mcp-tool
-created: 2026-04-29T12:00:00.000Z
-updated: 2026-04-29T12:00:00.000Z
----
+### Delivery
 
-Keep responses under three sentences whenever possible.
-```
-
-There is no index manifest by design — the bridge globs the directory and parses frontmatter on every `memory_search`. Override the root with `BROWSEROPS_MEMORY_DIR`.
-
-When the `memory` feature is on, the MCP `initialize` instructions surfaced to your agent grow a short paragraph about `memory_save` / `_search` / `_get` / `_delete` — agents pick it up automatically on the next session. With the feature off, those tools and their documentation are stripped from both `tools/list` and the server instructions, keeping the prompt minimal.
+When `memory` is on, the MCP `initialize` instructions always include a **global digest** — a confidence-ranked index of your top global records. Per-site records are injected as a terse `site_context` entry on the first tool call for each new (session, origin) pair, then suppressed for the rest of the session. Disable the feature to strip all memory tooling and documentation from the prompt. Override the storage root with `BROWSEROPS_MEMORY_DIR`.
 
 ## Safety defaults
 
@@ -392,7 +396,8 @@ Currently ~220 unit tests total across shared (envelope guards, tool catalogue i
 | `BROWSEROPS_LOG_LEVEL` | `normal` | `normal` truncates strings > 200 chars; `audit` logs full payloads |
 | `BROWSEROPS_APPROVAL` | `auto` | `auto` (default) or `gate`; controls approval mode for risky actions |
 | `BROWSEROPS_TRACE` | unset | `=1` writes trace events including auto-approvals to `~/.browserops/trace.jsonl` |
-| `BROWSEROPS_FEATURES` | unset | Comma-separated experimental feature names to force-enable (e.g. `procedures,memory`). Overrides `~/.browserops/config.json` when explicitly set; an empty string disables everything. Persistent toggles use `browserops feature enable/disable <name>` instead. |
+| `BROWSEROPS_FEATURES` | unset | Comma-separated feature overrides (e.g. `procedures`, `memory:false`). Overrides `~/.browserops/config.json` when explicitly set; an empty string disables all optional features. Persistent toggles use `browserops feature enable/disable <name>` instead. |
+| `BROWSEROPS_MEMORY_DIR` | `~/browserops/memory` | Override the memory store root (`global/` and `sites/` subdirs are created inside it). |
 
 ## Troubleshooting
 
@@ -425,7 +430,7 @@ browserops/
 │   ├── bridge/        # @browserops/bridge — MCP + WebSocket server
 │   ├── extension/     # MV3 extension (background SW, options, popup)
 │   └── cli/           # browserops — CLI orchestrator (init, daemon, launchers)
-└── skills/            # browserops + browserops-teach skill prompts
+└── skills/            # browserops + browserops-teach + browserops-scribe skill prompts
 ```
 
 ## Published packages

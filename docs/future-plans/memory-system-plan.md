@@ -352,7 +352,7 @@ must pass before committing.
   - [x] Done
 - **8.2** Update `README.md`: memory section + default-on feature note + setup.
   Commit: `docs: update README for default-on memory`
-  - [ ] Done
+  - [x] Done
 - **8.3** Flip every `- [ ] Done` to `- [x] Done`; run full `tsc --noEmit` + lint +
   the complete test suite across packages.
   Commit: `docs: complete memory v2 plan`
