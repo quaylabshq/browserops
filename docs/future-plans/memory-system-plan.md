@@ -167,7 +167,7 @@ must pass before committing.
 - **1.3** Add unit tests for `validateMemory` (scope/origin rule, kind/detail
   coherence, name pattern, caps).
   Commit: `test(memory): cover validateMemory rules`
-  - [ ] Done
+  - [x] Done
 - **1.4 Verify** typecheck + lint + shared tests. (No code; fixes only.)
   Commit: `chore(memory): phase 1 verify`
   - [ ] Done
