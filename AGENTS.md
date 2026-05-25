@@ -44,6 +44,7 @@ user's real Chrome tabs (with existing logins intact)
 | browserops-scribe skill (memory auto-capture subagent) | `~/.claude/skills/browserops-scribe/SKILL.md` (mirror at `skills/browserops-scribe.md`) |
 | Memory record schema + validation | `packages/shared/src/memory.ts` |
 | Memory store, index, dedup, migration | `packages/bridge/src/memory/` |
+| Memory system evals (behavioral scorecard + agentic task specs) | `evals/memory/` — run `pnpm eval:memory` |
 | User-facing setup (registration for every major MCP client) | `README.md` |
 
 ## browserops orchestration rules

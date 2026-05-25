@@ -381,9 +381,10 @@ Edit shared protocol types in `packages/shared/src/`, implement handlers in `pac
 ```bash
 pnpm test              # all unit tests
 pnpm -F @browserops/bridge test   # bridge only
+pnpm eval:memory       # behavioral evals for the memory system (scorecard)
 ```
 
-Currently ~220 unit tests total across shared (envelope guards, tool catalogue invariants, procedure schema) and bridge (rate limiter, risky-domain globs, procedure store, index builder, search ranker, handlers). A Playwright smoke suite is planned.
+Unit tests span shared (envelope guards, tool catalogue invariants, procedure + memory schema) and bridge (rate limiter, risky-domain globs, procedure/memory stores, index builder, search ranker, confidence model, delivery, handlers). Beyond the unit tests, `pnpm eval:memory` runs a behavioral eval suite (`evals/memory/`) that verifies the memory system as named end-to-end capabilities — schema/redaction, store/migration, search/confidence/decay, hybrid delivery, capture signals, trace, and the headline "stops hitting the same wall twice" integration — printing a pass/fail scorecard. `evals/memory/tasks/` holds agentic (LLM-in-the-loop / live-browser) task specs with rubrics. A Playwright smoke suite is planned.
 
 ## Environment variables
 
