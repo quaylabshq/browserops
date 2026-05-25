@@ -362,6 +362,62 @@ async function findDuplicate(
 }
 
 // ---------------------------------------------------------------------------
+// Redaction guard
+// ---------------------------------------------------------------------------
+
+/** Email-shaped pattern: non-whitespace @ non-whitespace . non-whitespace */
+const EMAIL_PATTERN = /\S+@\S+\.\S+/;
+
+/** 7+ consecutive digits (phone numbers, credit cards, SSNs, etc.) */
+const LONG_DIGIT_PATTERN = /\d{7,}/;
+
+/**
+ * Secrets/tokens: looks like a bearer token, API key, or high-entropy hex/base64.
+ * Matches: "Bearer <token>", "sk-...", "ghp_...", hex runs ≥32 chars,
+ * base64-like strings ≥40 chars.
+ */
+const SECRET_PATTERNS = [
+  /Bearer\s+\S{8,}/i,
+  /\bsk-[A-Za-z0-9]{8,}/,
+  /\bghp_[A-Za-z0-9]{8,}/,
+  /\bxoxb-[A-Za-z0-9-]{8,}/i,
+  /\b[0-9a-f]{32,}\b/i,
+  /\b[A-Za-z0-9+/]{40,}={0,2}\b/,
+];
+
+/** All detail string fields to scan. */
+function detailStrings(record: MemoryRecord): string[] {
+  const strs: string[] = [];
+  if (record.detail.wall) strs.push(record.detail.wall);
+  if (record.detail.door) strs.push(record.detail.door);
+  if (record.detail.note) strs.push(record.detail.note);
+  if (record.title) strs.push(record.title);
+  return strs;
+}
+
+/**
+ * Validate that a MemoryRecord does not contain PII or secrets.
+ * Returns an error message string if rejected, or null if clean.
+ */
+export function checkRedaction(record: MemoryRecord): string | null {
+  const texts = detailStrings(record);
+  for (const text of texts) {
+    if (EMAIL_PATTERN.test(text)) {
+      return `record contains an email address in a detail field — remove PII before saving`;
+    }
+    if (LONG_DIGIT_PATTERN.test(text)) {
+      return `record contains a long digit run (≥7 digits) in a detail field — likely a phone/card/ID number; remove PII`;
+    }
+    for (const pat of SECRET_PATTERNS) {
+      if (pat.test(text)) {
+        return `record contains what appears to be a secret or API token in a detail field — do not store credentials`;
+      }
+    }
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // v2 CRUD
 // ---------------------------------------------------------------------------
 
@@ -394,6 +450,12 @@ export async function saveRecord(args: SaveRecordArgs): Promise<SaveRecordResult
       "INVALID_PARAMS",
       `record validation failed: ${errors.map((e) => `${e.field}: ${e.message}`).join("; ")}`,
     );
+  }
+
+  // Redaction guard
+  const piiError = checkRedaction(record);
+  if (piiError) {
+    throw new CodedError("MEMORY_PII_REJECTED", piiError);
   }
 
   const now = new Date().toISOString();

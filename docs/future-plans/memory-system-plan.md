@@ -188,7 +188,7 @@ must pass before committing.
 - **2.3** Add a redaction guard: reject records whose `detail.*` contains
   email-shaped / long-digit / obvious-PII strings, with a clear error.
   Commit: `feat(memory): redaction guard rejecting PII in records`
-  - [ ] Done
+  - [x] Done
 - **2.4** One-time migration shim: legacy `~/browserops/memory/*.md` →
   `scope:global, kind:lesson` (`title` from description, `detail.note` from body),
   moving originals to `…/memory/_legacy/`. No-op when the store is empty.
