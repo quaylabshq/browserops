@@ -224,7 +224,7 @@ must pass before committing.
   - [x] Done
 - **3.4 Verify.**
   Commit: `chore(memory): phase 3 verify`
-  - [ ] Done
+  - [x] Done
 
 ## Phase 4 — Tool surface + default-on + legacy removal
 

@@ -159,7 +159,12 @@ export interface MemoryIndex {
   confidence: Record<string, number>;
 }
 
-async function readIndex(): Promise<MemoryIndex> {
+/**
+ * Read the current index from disk.
+ * Returns an empty index if the file does not exist.
+ * Useful for reading cached confidence scores without a full rebuild.
+ */
+export async function readIndex(): Promise<MemoryIndex> {
   const p = indexPath();
   try {
     const text = await fs.readFile(p, "utf8");
