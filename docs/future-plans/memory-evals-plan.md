@@ -157,7 +157,7 @@ prints the manual checklist. Keep it optional and side-effect-free.
   - [x] Done
 - **2.7 Verify** `pnpm eval:memory` is all-green; `pnpm typecheck` clean; lint ≤19.
   Commit: `chore(evals): phase 2 verify`
-  - [ ] Done
+  - [x] Done
 
 ## Phase 3 — Agentic task specs + judge + README
 
