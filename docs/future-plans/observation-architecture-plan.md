@@ -1034,7 +1034,7 @@ and spatial filters.
 - **Response shape**: add `expectation_met?: boolean`,
   `mismatch_reason?: string`.
 - **Commit**: `feat(extension): support expected predicate in browser_click`
-- [ ] Done
+- [x] Done
 
 #### 4.1.5 — Wire into `browser_click_at`
 
