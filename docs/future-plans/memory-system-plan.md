@@ -179,7 +179,7 @@ must pass before committing.
   persist `index.json` (`origins`, `global`, `confidence`), reuse the existing
   `writeChain` lock + atomic temp-rename. Keep `BROWSEROPS_MEMORY_DIR` override.
   Commit: `feat(memory): YAML two-store layout with origin index`
-  - [ ] Done
+  - [x] Done
 - **2.2** Add dedup guard + `merge_into?: string` to `saveMemory`: on create, if a
   same-scope/same-origin record exceeds the similarity threshold and `merge_into`
   is absent, return `{ possible_duplicate: { name, score } }` instead of writing.
