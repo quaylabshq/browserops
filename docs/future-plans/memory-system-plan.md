@@ -234,7 +234,7 @@ must pass before committing.
   add `memory_session_trace` + `memory_list_for_origin`. Remove the now-dead
   legacy schemas added in 1.2's neighbours.
   Commit: `feat(memory): v2 tool definitions (save/search/get/delete + trace + list)`
-  - [ ] Done
+  - [x] Done
 - **4.2** Update the bridge memory handlers + their dispatch in
   `packages/bridge/src/mcp-server.ts` (memory cases ~lines 451–494) to the new
   shapes: save→record+merge_into, search→filters, add `memory_list_for_origin`.

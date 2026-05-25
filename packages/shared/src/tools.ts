@@ -1961,217 +1961,16 @@ const proceduresResume: ToolDef = {
   ] as const,
 } as const;
 // ---------------------------------------------------------------------------
-// Cross-agent memory tools (feature: "memory")
+// Cross-agent memory tools (feature: "memory") — v2 shapes (Phase 4)
 //
-// Memories are markdown files under ~/browserops/memory/, with a small
-// YAML frontmatter block carrying name/description/type/source/timestamps.
-// Every MCP client (Claude Code, Cursor, Zed, custom SDK) sees the same
-// store, so a lesson learned in one session can be reused in another.
+// Two stores: global/ (cross-site) + sites/<origin-slug>/ (per-site).
+// Records are schema-validated YAML (MemoryRecord, schema_version:1).
+// Six tools: save / search / get / delete / session_trace / list_for_origin.
 // ---------------------------------------------------------------------------
 
 const memoryNamePattern = "^[a-z][a-z0-9._-]{0,79}$";
-const memoryTypeEnum = ["user", "feedback", "project", "reference"] as const;
 
-const memoryFrontmatterSchema: JSONSchemaObject = {
-  type: "object",
-  additionalProperties: false,
-  required: ["name", "description", "type", "source", "created", "updated"] as const,
-  properties: {
-    name: { type: "string", pattern: memoryNamePattern },
-    description: { type: "string", minLength: 1, maxLength: 500 },
-    type: { enum: memoryTypeEnum },
-    source: { enum: ["mcp-tool", "cli"] as const },
-    created: { type: "string" },
-    updated: { type: "string" },
-  },
-} as const;
-
-const memorySearchMatchSchema: JSONSchemaObject = {
-  type: "object",
-  additionalProperties: false,
-  required: ["name", "description", "type", "score", "snippet"] as const,
-  properties: {
-    name: { type: "string" },
-    description: { type: "string" },
-    type: { enum: memoryTypeEnum },
-    score: { type: "number", minimum: 0, maximum: 1 },
-    snippet: { type: "string" },
-  },
-} as const;
-
-const memorySave: ToolDef = {
-  name: "memory_save",
-  feature: "memory",
-  description:
-    "Persist a markdown memory under ~/browserops/memory/<name>.md, visible to every MCP client. " +
-    "Use this when you want a lesson, preference, or context to outlive the current session and " +
-    "be reachable from a different agent (e.g. a Cursor session) later. By default duplicate names " +
-    "are rejected with MEMORY_ALREADY_EXISTS — set replace:true to overwrite. " +
-    "type categorises the memory (user|feedback|project|reference) so memory_search can filter. " +
-    'REQUIRED ARGUMENTS: {"name": "<id>", "description": "<one-liner>", "type": "<category>", "body": "<markdown>"}.',
-  inputSchema: {
-    type: "object",
-    additionalProperties: false,
-    required: ["name", "description", "type", "body"] as const,
-    properties: {
-      name: {
-        type: "string",
-        pattern: memoryNamePattern,
-        description:
-          "Stable identifier, e.g. \"feedback_terse_responses\" or \"project_q2_migration\". Lowercase, dot/underscore/hyphen separators.",
-      },
-      description: {
-        type: "string",
-        minLength: 1,
-        maxLength: 500,
-        description:
-          "One-line summary used by memory_search to decide relevance. Be specific — vague descriptions don't surface in searches.",
-      },
-      type: {
-        enum: memoryTypeEnum,
-        description:
-          "Category. user = facts about the human, feedback = how-to-collaborate corrections, project = ongoing-work context, reference = pointers to external systems.",
-      },
-      body: {
-        type: "string",
-        minLength: 1,
-        maxLength: 65536,
-        description: "Full markdown body of the memory.",
-      },
-      replace: {
-        type: "boolean",
-        default: false,
-        description:
-          "When true, overwrite an existing memory with the same name. Default false rejects duplicates with MEMORY_ALREADY_EXISTS.",
-      },
-    },
-  },
-  outputSchema: {
-    type: "object",
-    additionalProperties: false,
-    required: ["saved", "path", "created"] as const,
-    properties: {
-      saved: { const: true },
-      path: { type: "string" },
-      created: {
-        type: "boolean",
-        description: "True when a new memory was created, false when an existing one was overwritten.",
-      },
-    },
-  },
-  action_weight: 0.5,
-  risky: "never",
-  errorCodes: [...BASE_CODES, ...MEMORY_CODES] as const,
-} as const;
-
-const memorySearch: ToolDef = {
-  name: "memory_search",
-  feature: "memory",
-  description:
-    "Coverage-based search over the cross-agent memory store. Returns ranked metadata-only matches " +
-    "(name + description + type + score + body snippet) — fetch the full body with memory_get. " +
-    "Score is the fraction of distinct query tokens that appear anywhere in the entry's name, " +
-    "description, type, or body. Tie-break favours name and description matches over body matches. " +
-    "Pass type to filter by category. " +
-    'REQUIRED ARGUMENTS: {"query": "<search tokens>"}.',
-  inputSchema: {
-    type: "object",
-    additionalProperties: false,
-    required: ["query"] as const,
-    properties: {
-      query: { type: "string", minLength: 1, maxLength: 200 },
-      type: {
-        enum: memoryTypeEnum,
-        description: "If set, only return memories whose type matches.",
-      },
-      limit: { type: "integer", minimum: 1, maximum: 25, default: 10 },
-      min_score: {
-        type: "number",
-        minimum: 0,
-        maximum: 1,
-        default: 0.2,
-        description:
-          "Minimum coverage ratio (matched query tokens / total query tokens). Default 0.2.",
-      },
-    },
-  },
-  outputSchema: {
-    type: "object",
-    additionalProperties: false,
-    required: ["matches", "total", "truncated"] as const,
-    properties: {
-      matches: { type: "array", items: memorySearchMatchSchema },
-      total: { type: "integer", minimum: 0 },
-      truncated: { type: "boolean" },
-    },
-  },
-  action_weight: 0,
-  risky: "never",
-  errorCodes: [...BASE_CODES, ...MEMORY_CODES] as const,
-} as const;
-
-const memoryGet: ToolDef = {
-  name: "memory_get",
-  feature: "memory",
-  description:
-    "Retrieve the full body and frontmatter for a single memory by name. " +
-    "Errors with MEMORY_NOT_FOUND if the name is not in the store. " +
-    'REQUIRED ARGUMENTS: {"name": "<id>"}.',
-  inputSchema: {
-    type: "object",
-    additionalProperties: false,
-    required: ["name"] as const,
-    properties: {
-      name: { type: "string", pattern: memoryNamePattern },
-    },
-  },
-  outputSchema: {
-    type: "object",
-    additionalProperties: false,
-    required: ["meta", "body", "path"] as const,
-    properties: {
-      meta: memoryFrontmatterSchema,
-      body: { type: "string" },
-      path: { type: "string" },
-    },
-  },
-  action_weight: 0,
-  risky: "never",
-  errorCodes: [...BASE_CODES, ...MEMORY_CODES] as const,
-} as const;
-
-const memoryDelete: ToolDef = {
-  name: "memory_delete",
-  feature: "memory",
-  description:
-    "Remove a memory from the store by name. " +
-    "Errors with MEMORY_NOT_FOUND if the name is not present. " +
-    'REQUIRED ARGUMENTS: {"name": "<id>"}.',
-  inputSchema: {
-    type: "object",
-    additionalProperties: false,
-    required: ["name"] as const,
-    properties: {
-      name: { type: "string", pattern: memoryNamePattern },
-    },
-  },
-  outputSchema: {
-    type: "object",
-    additionalProperties: false,
-    required: ["deleted", "path"] as const,
-    properties: {
-      deleted: { const: true },
-      path: { type: "string" },
-    },
-  },
-  action_weight: 0.5,
-  risky: "never",
-  errorCodes: [...BASE_CODES, ...MEMORY_CODES] as const,
-} as const;
-
-// ---------------------------------------------------------------------------
-// v2 memory JSON-Schema builders (additive — legacy schemas above kept until Phase 4)
-// ---------------------------------------------------------------------------
+// Schema constants must be declared before the tool defs that reference them.
 
 /** JSON-Schema for a MemoryRecord (v2 structured record). */
 export const MEMORY_RECORD_V2_SCHEMA: JSONSchemaObject = {
@@ -2313,6 +2112,255 @@ export const MEMORY_LIST_FOR_ORIGIN_INPUT_SCHEMA: JSONSchemaObject = {
       default: 20,
     },
   },
+} as const;
+
+// v2 search result entry — carries confidence score alongside token coverage.
+const memoryRecordMatchSchema: JSONSchemaObject = {
+  type: "object",
+  additionalProperties: false,
+  required: ["name", "title", "scope", "kind", "score", "confidence", "snippet"] as const,
+  properties: {
+    name: { type: "string" },
+    title: { type: "string" },
+    scope: { enum: ["global", "site"] as const },
+    kind: { enum: ["blocker", "affordance", "gotcha", "selector", "lesson"] as const },
+    origin: { type: "string" },
+    score: { type: "number", minimum: 0, maximum: 1 },
+    confidence: { type: "number", minimum: 0, maximum: 1 },
+    snippet: { type: "string" },
+  },
+} as const;
+
+const memorySave: ToolDef = {
+  name: "memory_save",
+  feature: "memory",
+  description:
+    "Persist a structured MemoryRecord (schema_version:1) to ~/browserops/memory/, visible to every MCP client. " +
+    "Records are YAML, two-store layout: global/ for cross-site lessons and sites/<origin>/ for per-site knowledge. " +
+    "The store runs a dedup check on create — when a similar record exists and merge_into is absent, " +
+    "the response includes possible_duplicate:{name,score} instead of writing; set merge_into to the " +
+    "existing name to merge, or replace:true to overwrite by name. " +
+    'REQUIRED ARGUMENTS: {"record": {schema_version:1, name, scope, kind, title, detail, …}}.',
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["record"] as const,
+    properties: {
+      record: MEMORY_RECORD_V2_SCHEMA,
+      merge_into: {
+        type: "string",
+        pattern: memoryNamePattern,
+        description:
+          "Name of an existing record to merge this into. Bumps stats.captures, refines title/detail/tags. " +
+          "Use when possible_duplicate was returned on a prior save attempt.",
+      },
+      replace: {
+        type: "boolean",
+        default: false,
+        description:
+          "When true, overwrite an existing record with the same name. Default false rejects duplicates with MEMORY_ALREADY_EXISTS.",
+      },
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["saved", "path", "created"] as const,
+    properties: {
+      saved: { const: true },
+      path: { type: "string" },
+      created: {
+        type: "boolean",
+        description: "True when a new record was created, false when merged or overwritten.",
+      },
+      possible_duplicate: {
+        type: "object",
+        additionalProperties: false,
+        required: ["name", "score"] as const,
+        description:
+          "Present when the store detected a similar record and did NOT write. " +
+          "Pass merge_into:<name> to merge instead.",
+        properties: {
+          name: { type: "string" },
+          score: { type: "number", minimum: 0, maximum: 1 },
+        },
+      },
+    },
+  },
+  action_weight: 0.5,
+  risky: "never",
+  errorCodes: [...BASE_CODES, ...MEMORY_CODES] as const,
+} as const;
+
+const memorySearch: ToolDef = {
+  name: "memory_search",
+  feature: "memory",
+  description:
+    "Confidence-first, token-coverage search over the structured memory store. " +
+    "Returns ranked metadata-only matches; fetch the full record with memory_get. " +
+    "Filter by scope (global|site), origin (scheme://host[:port]), or kind (blocker|affordance|gotcha|selector|lesson). " +
+    'REQUIRED ARGUMENTS: {"query": "<search tokens>"}.',
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["query"] as const,
+    properties: {
+      query: { type: "string", minLength: 1, maxLength: 200 },
+      scope: {
+        enum: ["global", "site"] as const,
+        description: "If set, only return records with this scope.",
+      },
+      origin: {
+        type: "string",
+        maxLength: 500,
+        description:
+          "If set, only return site-scoped records matching this origin (scheme://host[:port]).",
+      },
+      kind: {
+        enum: ["blocker", "affordance", "gotcha", "selector", "lesson"] as const,
+        description: "If set, only return records with this kind.",
+      },
+      limit: { type: "integer", minimum: 1, maximum: 25, default: 10 },
+      min_score: {
+        type: "number",
+        minimum: 0,
+        maximum: 1,
+        default: 0.2,
+        description: "Minimum token-coverage ratio. Default 0.2.",
+      },
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["matches", "total", "truncated"] as const,
+    properties: {
+      matches: { type: "array", items: memoryRecordMatchSchema },
+      total: { type: "integer", minimum: 0 },
+      truncated: { type: "boolean" },
+    },
+  },
+  action_weight: 0,
+  risky: "never",
+  errorCodes: [...BASE_CODES, ...MEMORY_CODES] as const,
+} as const;
+
+const memoryGet: ToolDef = {
+  name: "memory_get",
+  feature: "memory",
+  description:
+    "Retrieve the full MemoryRecord for a single memory by name. " +
+    "Errors with MEMORY_NOT_FOUND if the name is not in the store. " +
+    'REQUIRED ARGUMENTS: {"name": "<id>"}.',
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["name"] as const,
+    properties: {
+      name: { type: "string", pattern: memoryNamePattern },
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["record", "path"] as const,
+    properties: {
+      record: MEMORY_RECORD_V2_SCHEMA,
+      path: { type: "string" },
+    },
+  },
+  action_weight: 0,
+  risky: "never",
+  errorCodes: [...BASE_CODES, ...MEMORY_CODES] as const,
+} as const;
+
+const memoryDelete: ToolDef = {
+  name: "memory_delete",
+  feature: "memory",
+  description:
+    "Remove a memory record from the store by name. " +
+    "Errors with MEMORY_NOT_FOUND if the name is not present. " +
+    'REQUIRED ARGUMENTS: {"name": "<id>"}.',
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["name"] as const,
+    properties: {
+      name: { type: "string", pattern: memoryNamePattern },
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["deleted", "path"] as const,
+    properties: {
+      deleted: { const: true },
+      path: { type: "string" },
+    },
+  },
+  action_weight: 0.5,
+  risky: "never",
+  errorCodes: [...BASE_CODES, ...MEMORY_CODES] as const,
+} as const;
+
+const memorySessionTrace: ToolDef = {
+  name: "memory_session_trace",
+  feature: "memory",
+  description:
+    "Retrieve recent tool-call trace entries for a session. Used by the memory-scribe subagent " +
+    "to understand what happened before a roadblock or task completion. " +
+    "Provide tab_id to resolve to the owning session, or session_id directly. " +
+    "Returns an array of recent trace entries (method, origin, error_code?, effect_summary, ts). " +
+    'REQUIRED ARGUMENTS: one of {"tab_id": "<t_…>"} or {"session_id": "<id>"}.',
+  inputSchema: MEMORY_SESSION_TRACE_INPUT_SCHEMA,
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["entries"] as const,
+    properties: {
+      entries: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: true,
+          required: ["method", "ts"] as const,
+          properties: {
+            method: { type: "string" },
+            origin: { type: "string" },
+            error_code: { type: "string" },
+            effect_summary: { type: "string" },
+            ts: { type: "string" },
+          },
+        },
+      },
+    },
+  },
+  action_weight: 0,
+  risky: "never",
+  errorCodes: [...BASE_CODES] as const,
+} as const;
+
+const memoryListForOrigin: ToolDef = {
+  name: "memory_list_for_origin",
+  feature: "memory",
+  description:
+    "List all site-scoped memory records for a given origin (scheme://host[:port]). " +
+    "Returns metadata-only entries sorted by confidence descending. " +
+    "Used by the hybrid-delivery layer to prime the agent with per-site context. " +
+    'REQUIRED ARGUMENTS: {"origin": "scheme://host[:port]"}.',
+  inputSchema: MEMORY_LIST_FOR_ORIGIN_INPUT_SCHEMA,
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["records", "total"] as const,
+    properties: {
+      records: { type: "array", items: memoryRecordMatchSchema },
+      total: { type: "integer", minimum: 0 },
+    },
+  },
+  action_weight: 0,
+  risky: "never",
+  errorCodes: [...BASE_CODES, ...MEMORY_CODES] as const,
 } as const;
 
 const setSessionName: ToolDef = {
@@ -2673,6 +2721,8 @@ export const TOOL_DEFS: readonly ToolDef[] = [
   memorySearch,
   memoryGet,
   memoryDelete,
+  memorySessionTrace,
+  memoryListForOrigin,
   browserLocate,
   browserProposeLocator,
 ] as const;
