@@ -197,7 +197,7 @@ must pass before committing.
 - **2.5** Rewrite `packages/bridge/src/memory/search.ts`: add `scope`/`origin`/
   `kind` filters; rank by confidence first, then token coverage.
   Commit: `feat(memory): scope/origin filters and confidence ranking in search`
-  - [ ] Done
+  - [x] Done
 - **2.6** Tests: store roundtrip, index build/persist, dedup, redaction, migration,
   filtered search.
   Commit: `test(memory): store roundtrip, index, dedup, migration`
