@@ -151,7 +151,7 @@ prints the manual checklist. Keep it optional and side-effect-free.
   - [x] Done
 - **2.5** `signals.eval.ts` + `trace.eval.ts` — capabilities F, G. Commit:
   `feat(evals): capture-signal + trace-buffer evals (F,G)`
-  - [ ] Done
+  - [x] Done
 - **2.6** `integration.eval.ts` — capability H (wall-twice, self-heal, dedup).
   Commit: `feat(evals): wall-twice, self-heal, dedup integration evals (H)`
   - [ ] Done
