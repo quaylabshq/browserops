@@ -1,0 +1,15 @@
+{
+  "name": "@browserops/eval-memory",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Behavioral evals for the browserops memory system — run with `pnpm eval:memory`.",
+  "scripts": {
+    "eval": "tsx run.ts"
+  },
+  "devDependencies": {
+    "@browserops/shared": "workspace:*",
+    "@types/node": "^20.14.0",
+    "tsx": "^4.19.0"
+  }
+}

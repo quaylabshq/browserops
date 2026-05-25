@@ -21,6 +21,7 @@
     "test": "pnpm -r test",
     "test:integration": "pnpm --filter @browserops/bridge test:integration",
     "test:smoke": "pnpm --filter @browserops/extension test:smoke",
+    "eval:memory": "pnpm --filter @browserops/shared build && pnpm --filter @browserops/eval-memory eval",
     "clean": "pnpm -r clean && rm -rf node_modules",
     "bump": "node scripts/bump-version.mjs",
     "release": "pnpm -r publish --access public --no-git-checks",

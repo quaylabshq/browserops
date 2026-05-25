@@ -1,0 +1,14 @@
+{
+  "comment": "Standalone — NOT part of the repo build graph (root tsconfig does not reference it). Exists for editor IntelliSense only; the evals run via tsx, which strips types.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": false,
+    "types": ["node"]
+  },
+  "include": ["*.ts", "cases/*.ts"]
+}

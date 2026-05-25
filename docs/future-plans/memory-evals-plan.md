@@ -126,7 +126,7 @@ prints the manual checklist. Keep it optional and side-effect-free.
   script `eval:memory` (`pnpm -F @browserops/shared build && pnpm -F
   @browserops/eval-memory eval`). Run `pnpm install`.
   Commit: `chore(evals): scaffold eval-memory workspace package`
-  - [ ] Done
+  - [x] Done
 - **1.2** Write `evals/memory/harness.ts` (registry, `check`/`checkEqual`,
   `withTempStore`, `runAll` + scorecard, `--filter`/`--json`) and
   `evals/memory/run.ts` (imports all case files, calls `runAll`, sets exit code).
