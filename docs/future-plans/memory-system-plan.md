@@ -204,7 +204,7 @@ must pass before committing.
   - [x] Done
 - **2.7 Verify** typecheck + lint + bridge tests.
   Commit: `chore(memory): phase 2 verify`
-  - [ ] Done
+  - [x] Done
 
 ## Phase 3 — Confidence & decay model
 

@@ -12,7 +12,7 @@
  * All reads/writes go through this module.
  */
 import * as fs from "node:fs/promises";
-import { Stats } from "node:fs";
+import type { Stats } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as YAML from "yaml";
