@@ -170,7 +170,7 @@ prints the manual checklist. Keep it optional and side-effect-free.
   - [x] Done
 - **3.3** `evals/README.md` — what evals are, how to run, the capability matrix,
   how to add a case/task. Commit: `docs(evals): evals README`
-  - [ ] Done
+  - [x] Done
 
 ## Phase 4 — Wire-up + final
 
