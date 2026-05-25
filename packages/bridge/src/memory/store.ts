@@ -769,6 +769,56 @@ export async function listRecords(
 }
 
 // ---------------------------------------------------------------------------
+// Stats bump helpers (Phase 6.5 — self-heal door-failure tracking)
+// ---------------------------------------------------------------------------
+
+/**
+ * Bump a record's stats.door_failures (+1) and update last_hit.
+ * Best-effort: reads the record, updates in-memory, re-saves.
+ * Never throws — logs silently on any error.
+ */
+export async function bumpDoorFailure(
+  name: string,
+  scope: MemoryRecord["scope"],
+  origin?: string,
+): Promise<void> {
+  return withWriteLock(async () => {
+    try {
+      const absPath =
+        scope === "site" && origin
+          ? siteRecordPath(originToSlug(origin), name)
+          : globalRecordPath(name);
+
+      const text = await fs.readFile(absPath, "utf8").catch(() => null);
+      if (!text) return;
+
+      const record = parseRecord(text, absPath);
+      const now = new Date().toISOString();
+
+      const bumped: MemoryRecord = {
+        ...record,
+        stats: {
+          hits: record.stats?.hits ?? 0,
+          resolved: record.stats?.resolved ?? 0,
+          door_failures: (record.stats?.door_failures ?? 0) + 1,
+          captures: record.stats?.captures ?? 0,
+          last_hit: now,
+          last_resolved: record.stats?.last_resolved,
+        },
+        meta: record.meta
+          ? { ...record.meta, updated: now }
+          : undefined,
+      };
+
+      await atomicWriteFileInner(absPath, serializeRecord(bumped));
+      await rebuildIndexInner();
+    } catch {
+      // Best-effort — never surface into the response path.
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Legacy markdown read path (for migration — read only)
 // ---------------------------------------------------------------------------
 

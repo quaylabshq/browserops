@@ -35,6 +35,7 @@ import type { TraceBuffer, TraceEntry } from "./memory/trace.js";
 import { detectRoadblock, type CaptureHint } from "./memory/capture-signals.js";
 import { buildServerInstructions } from "./server-instructions.js";
 import type { SiteContextManager, SitePrimer } from "./memory/delivery.js";
+import { bumpDoorFailure } from "./memory/store.js";
 import { createPromptRegistry } from "./prompts.js";
 import { checkBreaker, recordResult as recordBreakerResult } from "./circuit-breaker.js";
 import { renderBoxDrawing } from "./observe/box-drawing-render.js";
@@ -963,6 +964,18 @@ export class McpBridgeServer {
     const captureHintFired = hasCaptureHint(result);
 
     if (captureHintFired) {
+      // 6.5 — self-heal: bump door_failures when a roadblock fires on an
+      // origin whose blocker door was already delivered this session.
+      if (sc.wasPrimed(sessionId, origin)) {
+        const blocker = sc.findBestBlocker(origin);
+        if (blocker) {
+          // Best-effort: never let this throw into the response path.
+          bumpDoorFailure(blocker.name, blocker.scope, blocker.origin).catch(() => {
+            /* best-effort */
+          });
+        }
+      }
+
       // Re-nudge path: find the best matching blocker door for this origin.
       const reNudge = sc.reNudge(sessionId, origin, "");
       if (reNudge) {

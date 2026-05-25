@@ -173,6 +173,23 @@ export class SiteContextManager {
     const st = this.getState(session_id, origin);
     return st === "PRIMED" || st === "RE-NUDGED";
   }
+
+  /**
+   * Return the best blocker record for the origin (highest confidence)
+   * without mutating state.  Used by the self-heal bump path (6.5).
+   */
+  findBestBlocker(origin: string): { name: string; scope: "site"; origin: string } | null {
+    const records = this.recordsFor(origin);
+    const blockerRecords = records.filter((r) => r.kind === "blocker" && r.detail.door);
+    if (blockerRecords.length === 0) return null;
+
+    const best = blockerRecords
+      .map((r) => ({ r, conf: confidence(r) }))
+      .sort((a, b) => b.conf - a.conf)[0];
+
+    if (!best) return null;
+    return { name: best.r.name, scope: "site", origin };
+  }
 }
 
 // ---------------------------------------------------------------------------

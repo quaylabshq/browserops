@@ -317,7 +317,7 @@ must pass before committing.
 - **6.5** Self-heal: when `capture_hint` fires on an origin with a recently
   delivered blocker, bump that record's `stats.door_failures` via the store.
   Commit: `feat(memory): self-heal door-failure tracking`
-  - [ ] Done
+  - [x] Done
 - **6.6** Tests: prime-once/suppress/re-nudge state machine, global digest content,
   path-subset, door-failure bump.
   Commit: `test(memory): delivery state machine and global digest`
