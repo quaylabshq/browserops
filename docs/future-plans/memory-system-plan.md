@@ -254,7 +254,7 @@ must pass before committing.
 - **4.5** Tests: tools/list exposure with feature default-on, tools/call dispatch,
   `FEATURE_DISABLED` only when explicitly disabled.
   Commit: `test(memory): tool dispatch and default-on gating`
-  - [ ] Done
+  - [x] Done
 - **4.6 Verify** full workspace typecheck + lint + tests (legacy now gone).
   Commit: `chore(memory): phase 4 verify`
   - [ ] Done
