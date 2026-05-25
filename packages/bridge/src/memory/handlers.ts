@@ -1,32 +1,35 @@
 /**
- * MCP tool handlers for the four memory_* tools.
+ * MCP tool handlers for the six memory_* tools (v2 shapes, Phase 4).
  *
- * Each handler validates raw params (throws CodedError("INVALID_PARAMS")
- * on bad shape), calls into the in-process store, and returns the
- * exact output shape declared by the matching ToolDef in
- * packages/shared/src/tools.ts.
+ * Each handler validates raw params, calls into the in-process store
+ * (v2 API: saveRecord / readRecord / deleteRecord / listRecords /
+ * searchRecordsWithConfidence), and returns the output shape declared by the
+ * matching ToolDef in packages/shared/src/tools.ts.
  *
- * Memory handlers are pure-filesystem — no wsBridge, no extension
- * round-trip. Cheaper than the procedure handlers in every dimension.
+ * memory_session_trace is a STUB returning {entries:[]} — the real
+ * implementation follows in Phase 5.3 (trace buffer).
+ *
+ * Memory handlers are pure-filesystem — no wsBridge, no extension round-trip.
  */
 import {
   MEMORY_NAME_REGEX,
-  MEMORY_TYPES,
-  isMemoryType,
-  type MemoryFrontmatter,
-  type MemoryType,
+  validateMemory,
+  type MemoryKind,
+  type MemoryRecord,
+  type MemoryScope,
 } from "@browserops/shared";
 import {
   CodedError,
-  deleteMemory,
-  listMemoryEntries,
-  readMemory,
-  saveMemory,
+  checkRedaction,
+  deleteRecord,
+  listRecords,
+  readRecord,
+  saveRecord,
 } from "./store.js";
-import { searchMemories } from "./search.js";
+import { searchRecordsWithConfidence } from "./search.js";
 
 // ---------------------------------------------------------------------------
-// Param coercion
+// Param coercion helpers
 // ---------------------------------------------------------------------------
 
 function requireString(raw: Record<string, unknown>, key: string): string {
@@ -43,17 +46,6 @@ function requireName(raw: Record<string, unknown>): string {
     throw new CodedError(
       "INVALID_PARAMS",
       `name must match pattern ^[a-z][a-z0-9._-]{0,79}$ — got: ${v}`,
-    );
-  }
-  return v;
-}
-
-function requireType(raw: Record<string, unknown>): MemoryType {
-  const v = raw["type"];
-  if (typeof v !== "string" || !isMemoryType(v)) {
-    throw new CodedError(
-      "INVALID_PARAMS",
-      `type must be one of: ${MEMORY_TYPES.join(", ")}`,
     );
   }
   return v;
@@ -87,38 +79,131 @@ function optionalNumber(raw: Record<string, unknown>, key: string): number | und
 }
 
 // ---------------------------------------------------------------------------
-// Handlers
+// memory_save — v2: takes {record: MemoryRecord, merge_into?, replace?}
 // ---------------------------------------------------------------------------
 
 export interface SaveResult {
   saved: true;
   path: string;
-  /** True when a new memory was created, false when an existing one was overwritten. */
   created: boolean;
+  possible_duplicate?: { name: string; score: number };
 }
 
 export async function handleMemorySave(raw: Record<string, unknown>): Promise<SaveResult> {
-  const name = requireName(raw);
-  const description = requireString(raw, "description");
-  const type = requireType(raw);
-  const body = requireString(raw, "body");
+  const recordRaw = raw["record"];
+  if (typeof recordRaw !== "object" || recordRaw === null) {
+    throw new CodedError("INVALID_PARAMS", "record must be an object");
+  }
+  const record = recordRaw as MemoryRecord;
+
+  // validateMemory covers name-pattern, scope/origin, kind/detail coherence, caps
+  const errs = validateMemory(record);
+  if (errs.length > 0) {
+    throw new CodedError(
+      "MEMORY_SCHEMA_INVALID",
+      `record validation failed: ${errs.map((e) => `${e.field}: ${e.message}`).join("; ")}`,
+    );
+  }
+
+  // Redaction guard (PII check)
+  const piiError = checkRedaction(record);
+  if (piiError) {
+    throw new CodedError("MEMORY_PII_REJECTED", piiError);
+  }
+
+  const mergeInto = optionalString(raw, "merge_into");
   const replace = optionalBoolean(raw, "replace") ?? false;
 
-  const result = await saveMemory({ name, description, type, body, replace });
-  return { saved: true, path: result.entry.path, created: result.created };
+  const result = await saveRecord({ record, merge_into: mergeInto, replace });
+
+  return {
+    saved: true,
+    path: result.path,
+    created: result.created,
+    ...(result.possible_duplicate ? { possible_duplicate: result.possible_duplicate } : {}),
+  };
 }
 
+// ---------------------------------------------------------------------------
+// memory_search — v2: gains scope, origin, kind filters; results carry confidence
+// ---------------------------------------------------------------------------
+
+const VALID_SCOPES = new Set<string>(["global", "site"]);
+const VALID_KINDS = new Set<string>(["blocker", "affordance", "gotcha", "selector", "lesson"]);
+
+export async function handleMemorySearch(raw: Record<string, unknown>): Promise<unknown> {
+  const query = requireString(raw, "query");
+
+  const scopeRaw = optionalString(raw, "scope");
+  if (scopeRaw !== undefined && !VALID_SCOPES.has(scopeRaw)) {
+    throw new CodedError("INVALID_PARAMS", `scope must be "global" or "site"`);
+  }
+  const scope = scopeRaw as MemoryScope | undefined;
+
+  const origin = optionalString(raw, "origin");
+
+  const kindRaw = optionalString(raw, "kind");
+  if (kindRaw !== undefined && !VALID_KINDS.has(kindRaw)) {
+    throw new CodedError(
+      "INVALID_PARAMS",
+      `kind must be one of: blocker, affordance, gotcha, selector, lesson`,
+    );
+  }
+  const kind = kindRaw as MemoryKind | undefined;
+
+  const limit = optionalNumber(raw, "limit");
+  const minScore = optionalNumber(raw, "min_score");
+
+  const records = await listRecords({ scope, origin });
+  return searchRecordsWithConfidence(records, query, {
+    scope,
+    origin,
+    kind,
+    limit,
+    min_score: minScore,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// memory_get — v2: returns {record, path}
+// ---------------------------------------------------------------------------
+
 export interface GetResult {
-  meta: MemoryFrontmatter;
-  body: string;
+  record: MemoryRecord;
   path: string;
 }
 
 export async function handleMemoryGet(raw: Record<string, unknown>): Promise<GetResult> {
   const name = requireName(raw);
-  const entry = await readMemory(name);
-  return { meta: entry.meta, body: entry.body, path: entry.path };
+  // v2 get: try global first, then fall back to searching across all scopes
+  // by name. Since we don't receive scope/origin in the tool call for get,
+  // search global first, then sites.
+  let record: MemoryRecord;
+  let resolvedPath: string;
+
+  try {
+    record = await readRecord(name, "global");
+    const { globalRecordPath } = await import("./store.js");
+    resolvedPath = globalRecordPath(name);
+  } catch (err) {
+    if ((err as { code?: string }).code !== "MEMORY_NOT_FOUND") throw err;
+    // Search site stores
+    const allRecords = await listRecords({ scope: "site" });
+    const found = allRecords.find((r) => r.name === name);
+    if (!found) {
+      throw new CodedError("MEMORY_NOT_FOUND", `memory "${name}" not found`, { name });
+    }
+    record = found;
+    const { originToSlug, siteRecordPath } = await import("./store.js");
+    resolvedPath = siteRecordPath(originToSlug(found.origin ?? ""), name);
+  }
+
+  return { record, path: resolvedPath };
 }
+
+// ---------------------------------------------------------------------------
+// memory_delete — v2: tries global first, then site scope by searching
+// ---------------------------------------------------------------------------
 
 export interface DeleteResult {
   deleted: true;
@@ -127,28 +212,102 @@ export interface DeleteResult {
 
 export async function handleMemoryDelete(raw: Record<string, unknown>): Promise<DeleteResult> {
   const name = requireName(raw);
-  const { path: absPath } = await deleteMemory(name);
+  // Try global first
+  try {
+    const { path: absPath } = await deleteRecord(name, "global");
+    return { deleted: true, path: absPath };
+  } catch (err) {
+    if ((err as { code?: string }).code !== "MEMORY_NOT_FOUND") throw err;
+  }
+  // Search site records for this name
+  const allRecords = await listRecords({ scope: "site" });
+  const found = allRecords.find((r) => r.name === name);
+  if (!found) {
+    throw new CodedError("MEMORY_NOT_FOUND", `memory "${name}" not found`, { name });
+  }
+  const { path: absPath } = await deleteRecord(name, "site", found.origin);
   return { deleted: true, path: absPath };
 }
 
-export async function handleMemorySearch(raw: Record<string, unknown>): Promise<unknown> {
-  const query = requireString(raw, "query");
-  const typeRaw = optionalString(raw, "type");
-  if (typeRaw !== undefined && !isMemoryType(typeRaw)) {
+// ---------------------------------------------------------------------------
+// memory_list_for_origin — list site-scoped records for a given origin
+// ---------------------------------------------------------------------------
+
+export interface ListForOriginResult {
+  records: Array<{
+    name: string;
+    title: string;
+    scope: MemoryScope;
+    kind: MemoryKind;
+    origin?: string;
+    score: number;
+    confidence: number;
+    snippet: string;
+  }>;
+  total: number;
+}
+
+export async function handleMemoryListForOrigin(
+  raw: Record<string, unknown>,
+): Promise<ListForOriginResult> {
+  const origin = requireString(raw, "origin");
+  const kindRaw = optionalString(raw, "kind");
+  if (kindRaw !== undefined && !VALID_KINDS.has(kindRaw)) {
     throw new CodedError(
       "INVALID_PARAMS",
-      `type filter must be one of: ${MEMORY_TYPES.join(", ")}`,
+      `kind must be one of: blocker, affordance, gotcha, selector, lesson`,
     );
   }
-  const limit = optionalNumber(raw, "limit");
-  const minScore = optionalNumber(raw, "min_score");
+  const kind = kindRaw as MemoryKind | undefined;
+  const minConfidence = optionalNumber(raw, "min_confidence");
+  const limitRaw = optionalNumber(raw, "limit");
+  const limit = limitRaw !== undefined ? Math.min(100, Math.max(1, limitRaw)) : 20;
 
-  const entries = await listMemoryEntries();
-  return searchMemories(entries, query, {
-    type: typeRaw as MemoryType | undefined,
-    limit,
-    min_score: minScore,
-  });
+  const records = await listRecords({ scope: "site", origin });
+
+  // Use searchRecordsWithConfidence with a wildcard query to get all records
+  // ranked by confidence; apply kind filter and min_confidence threshold.
+  const { confidence } = await import("./confidence.js");
+  let filtered = records.filter((r) => r.origin === origin);
+  if (kind !== undefined) filtered = filtered.filter((r) => r.kind === kind);
+
+  // Rank by confidence descending
+  const ranked = filtered
+    .map((r) => ({ r, conf: confidence(r) }))
+    .filter(({ conf }) => minConfidence === undefined || conf >= minConfidence)
+    .sort((a, b) => b.conf - a.conf)
+    .slice(0, limit);
+
+  return {
+    records: ranked.map(({ r, conf }) => ({
+      name: r.name,
+      title: r.title,
+      scope: r.scope,
+      kind: r.kind,
+      origin: r.origin,
+      score: 1,
+      confidence: conf,
+      snippet:
+        (r.detail.note ?? r.detail.wall ?? r.detail.door ?? r.title)
+          .trim()
+          .replace(/\s+/g, " ")
+          .slice(0, 120),
+    })),
+    total: filtered.length,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// memory_session_trace — STUB (Phase 5.3 implements the real trace buffer)
+// TODO(phase5): replace this stub with actual TraceBuffer lookup
+// ---------------------------------------------------------------------------
+
+export async function handleMemorySessionTrace(
+  _raw: Record<string, unknown>,
+): Promise<{ entries: unknown[] }> {
+  // TODO(phase5): resolve tab_id → session_id via tab registry;
+  // look up TraceBuffer for the session; return recent entries.
+  return { entries: [] };
 }
 
 // ---------------------------------------------------------------------------
@@ -162,4 +321,6 @@ export const MEMORY_HANDLERS: Record<string, HandlerFn> = {
   memory_search: handleMemorySearch,
   memory_get: handleMemoryGet,
   memory_delete: handleMemoryDelete,
+  memory_list_for_origin: handleMemoryListForOrigin,
+  memory_session_trace: handleMemorySessionTrace,
 };

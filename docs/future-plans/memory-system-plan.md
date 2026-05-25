@@ -240,7 +240,7 @@ must pass before committing.
   shapes: save→record+merge_into, search→filters, add `memory_list_for_origin`.
   (`memory_session_trace` is implemented in 5.3.)
   Commit: `feat(memory): wire bridge handlers to v2 tool shapes`
-  - [ ] Done
+  - [x] Done
 - **4.3** In `packages/shared/src/features.ts`, set `FEATURE_METADATA["memory"]
   .default = true`. Keep it a feature (disable-able via `BROWSEROPS_FEATURES` /
   `~/.browserops/config.json`).
