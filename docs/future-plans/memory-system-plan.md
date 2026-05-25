@@ -349,7 +349,7 @@ must pass before committing.
   symlink): de-opt-in memory, document the two stores, auto-capture, hybrid
   delivery, and the new tools.
   Commit: `docs: document memory v2 (two stores, auto-capture, hybrid delivery)`
-  - [ ] Done
+  - [x] Done
 - **8.2** Update `README.md`: memory section + default-on feature note + setup.
   Commit: `docs: update README for default-on memory`
   - [ ] Done

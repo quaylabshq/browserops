@@ -27,6 +27,8 @@ user's real Chrome tabs (with existing logins intact)
 
 **Procedure memory.** Named, parameterised action graphs stored under `~/browserops/procedures/` as YAML. Five `procedures_*` tools (search, get, save, delete, execute) manage them. The store ships empty — new procedures are authored on-demand by the `browserops-teach` skill (autonomous) or by hand.
 
+**Cross-agent memory.** Structured, schema-validated YAML records stored under `~/browserops/memory/` — on by default. Two stores: `global/<name>.yaml` (cross-site lessons) and `sites/<origin-slug>/<name>.yaml` (per-site blockers, selectors, affordances). Six `memory_*` tools manage them. Records are auto-captured by the `browserops-scribe` subagent when the agent hits a roadblock or completes a non-trivial flow.
+
 ## Where to look
 
 | Want to understand… | File |
@@ -39,6 +41,9 @@ user's real Chrome tabs (with existing logins intact)
 | Error codes + WebSocket close codes | `packages/shared/src/errors.ts` |
 | Rate limiter + risky-action gate | `packages/bridge/src/rate-limiter.ts` + `packages/bridge/src/safety.ts` |
 | browserops-teach skill (autonomous procedure authoring, replaces teach + autoteach) | `~/.claude/skills/browserops-teach/SKILL.md` (mirror at `skills/browserops-teach.md`) |
+| browserops-scribe skill (memory auto-capture subagent) | `~/.claude/skills/browserops-scribe/SKILL.md` (mirror at `skills/browserops-scribe.md`) |
+| Memory record schema + validation | `packages/shared/src/memory.ts` |
+| Memory store, index, dedup, migration | `packages/bridge/src/memory/` |
 | User-facing setup (registration for every major MCP client) | `README.md` |
 
 ## browserops orchestration rules
@@ -53,14 +58,43 @@ The procedure-memory family (`procedures_search`, `procedures_get`, `procedures_
 Before any browser task, call `procedures_search` with tokens from the user's request — but only when `procedures_search` is in your tool catalogue (the procedures feature is opt-in; see above).
 If score >= 0.5, use that procedure. Do not re-plan steps that are already encoded.
 
-### Cross-agent memory (`memory_*`) is opt-in too
-The four `memory_*` tools (`memory_save`, `memory_search`, `memory_get`, `memory_delete`) are gated behind the `memory` feature, off by default. They live in `~/browserops/memory/` and are visible to every MCP client (Claude Code, Cursor, Zed, custom SDK), so a lesson saved from one session is reusable in another. Use them for browserops behavior, browser-flow gotchas, and project context that benefits any agent picking up the same bridge — keep Claude-only preferences (keybindings, response style) in the `~/.claude/projects/.../memory/` auto-memory store. The `browserops` skill section "memory_save / memory_search / memory_get / memory_delete" is the source of truth for tool shapes and decision rules.
+### Cross-agent memory (`memory_*`) — on by default
+
+The six `memory_*` tools are enabled out of the box (disable with `browserops feature disable memory` or `BROWSEROPS_FEATURES=memory:false`). Memory records live in `~/browserops/memory/` and are visible to every MCP client (Claude Code, Cursor, Zed, custom SDK), so a lesson saved in one session is reusable in the next — or in a completely different editor.
+
+**Two stores, one schema.** Records are structured YAML (`MemoryRecord`, `packages/shared/src/memory.ts`) — not markdown — validated against a strict schema:
+
+- `global/<name>.yaml` — cross-site facts (`scope: "global"`): patterns that hold everywhere (e.g. "cookie banners appear on first visit").
+- `sites/<origin-slug>/<name>.yaml` — per-site facts (`scope: "site"`, `origin` required): blockers, affordances, selectors, gotchas scoped to one host.
+
+Record kinds: `blocker` (`wall` + `door` workaround), `affordance`, `gotcha`, `lesson`, `selector` (carries a `Locator` descriptor, reused from the procedures schema).
+
+**Six tools:**
+
+| Tool | Purpose |
+|---|---|
+| `memory_save({record, merge_into?, replace?})` | Write or merge a record; server returns `possible_duplicate` when a near-match exists and `merge_into` is absent |
+| `memory_search({query, scope?, origin?, kind?})` | Confidence-ranked search with optional scope/origin/kind filters |
+| `memory_get({name})` | Fetch one record by name |
+| `memory_delete({name})` | Remove a record |
+| `memory_list_for_origin({origin, ...})` | List all records for a specific origin (used by site primers) |
+| `memory_session_trace({tab_id?, session_id?, limit?})` | Read recent tool calls from the session trace ring buffer |
+
+Search results carry a `confidence` score (0–1) derived from severity, recency, resolved/hit ratio, and `door_failures`. A door that the agent delivers but that later fails in practice bumps `door_failures` — low-confidence records decay out of primers automatically.
+
+**Auto-capture.** The bridge detects roadblock clusters (repeated errors, `WRITE_NOT_REFLECTED`, no-op effects, wait-for timeouts) and attaches a `capture_hint` to tool responses. The main agent reads this hint and spawns a background **`browserops-scribe`** subagent (haiku model) which fetches the session trace, dedups against existing records, authors a structured YAML record, and saves it. The bridge has no LLM — it only detects, provides the trace, and saves what the scribe produces.
+
+**Hybrid delivery.** Memory reaches the agent through two channels:
+1. **Global digest** — top-N global records (≤10 title lines, confidence-ranked) appended to the MCP `initialize` instructions once per session.
+2. **Per-site primer** — a terse index of site-scoped records injected as a `site_context` entry on the first tool response for a new (session, origin) pair, then suppressed. Re-nudged (blocker's `door` repeated) when a `capture_hint` fires on the same origin.
+
+Use memory for browserops behavior, browser-flow gotchas, per-site selectors, and project context that benefits any agent — keep Claude-only preferences (keybindings, response style) in the `~/.claude/projects/.../memory/` auto-memory store. The `browserops` skill is the source of truth for tool shapes, decision rules, and scribe trigger contract.
 
 ### Skills stay in sync with the installed package
-Skills bundled with the CLI (`browserops`, `browserops-teach`) are kept in sync via `browserops upgrade` (which now calls `browserops sync` internally) or directly via `browserops sync skills`. After every package bump the on-disk `~/.claude/skills/<name>/SKILL.md` is refreshed atomically, with a timestamped `.bak` if local edits were detected. If a skill ever feels out of step with the tool catalogue you're seeing, run `browserops sync skills`.
+Skills bundled with the CLI (`browserops`, `browserops-teach`, `browserops-scribe`) are kept in sync via `browserops upgrade` (which now calls `browserops sync` internally) or directly via `browserops sync skills`. After every package bump the on-disk `~/.claude/skills/<name>/SKILL.md` is refreshed atomically, with a timestamped `.bak` if local edits were detected. If a skill ever feels out of step with the tool catalogue you're seeing, run `browserops sync skills`.
 
 ### Server instructions adapt to enabled features
-The text the bridge surfaces via MCP `initialize.result.instructions` is built per-server-instance from the active feature set, so disabled features don't bloat the prompt with documentation for tools the agent can't call. With `procedures` off the Procedure-memory section collapses to a one-line opt-in hint; with `memory` on a short Cross-agent-memory paragraph is appended; the procedure-prompt entry (`browserops_procedure`) is hidden from `prompts/list` whenever `procedures` is off. That's why the procedure-first orchestration rule above is conditional on `procedures_search` actually being in your tool catalogue.
+The text the bridge surfaces via MCP `initialize.result.instructions` is built per-server-instance from the active feature set. With `procedures` off the Procedure-memory section collapses to a one-line opt-in hint; the procedure-prompt entry (`browserops_procedure`) is hidden from `prompts/list` whenever `procedures` is off. With `memory` on (the default), the instructions always carry the global memory digest (top-N confidence-ranked global records, ≤10 title lines) so the agent has cross-site context from the first call. That's why the procedure-first orchestration rule above is conditional on `procedures_search` actually being in your tool catalogue.
 
 ### Prefer `browser_observe` for general state reads; `browser_quick_read` for element lookup
 For general "look at the page" steps, prefer `browser_observe` over both `browser_read` and `browser_quick_read` — its `auto` mode picks the cheapest representation (augmented a11y, action-grade screenshot, box-drawing summary, or diff against a prior observation_token) based on page characteristics. When you specifically need to find an element by its label, `browser_quick_read` is still the cheapest path. Fall back to raw `browser_read` only when you need the full a11y tree as a serialised blob (procedure replay, debugging). `browser_read` and `browser_quick_read` both default to viewport scope now; pass `scope: "document"` for the legacy full-page walk.
