@@ -265,7 +265,7 @@ must pass before committing.
   `TraceBuffer` ring (≈50 entries/session: `{method, origin, error_code?,
   effect_summary, ts}`), keyed by `session_id`, readable cross-session.
   Commit: `feat(memory): per-session action trace ring buffer`
-  - [ ] Done
+  - [x] Done
 - **5.2** Record each tool call into the buffer in the `mcp-server.ts` reply path
   (`reply()` ~lines 948–972), deriving origin from the resolved tab URL.
   Commit: `feat(memory): record tool calls into trace buffer`
