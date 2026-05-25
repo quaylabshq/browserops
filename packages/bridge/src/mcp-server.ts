@@ -182,6 +182,13 @@ export interface McpBridgeDeps {
    * When absent, site-context delivery is skipped.
    */
   siteContext?: SiteContextManager;
+  /**
+   * Pre-formatted global memory digest (≤10 title lines, confidence-ranked).
+   * Computed once at daemon startup from global-scope records; appended to
+   * the MCP server instructions so every session sees it on initialize.
+   * When absent, the global memory section is omitted from instructions.
+   */
+  globalDigest?: string;
 }
 
 interface ToolErrorPayload {
@@ -255,7 +262,10 @@ export class McpBridgeServer {
       { name: "browserops", version: deps.version },
       {
         capabilities: { tools: {}, prompts: {} },
-        instructions: buildServerInstructions(deps.enabledFeatures),
+        instructions: buildServerInstructions(
+          deps.enabledFeatures,
+          deps.globalDigest ? { globalDigest: deps.globalDigest } : undefined,
+        ),
       },
     );
 

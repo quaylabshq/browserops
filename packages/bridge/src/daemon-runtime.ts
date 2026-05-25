@@ -27,6 +27,7 @@ import { proceduresRoot } from "./procedures/paths.js";
 import { loadConfigFeatures } from "./config.js";
 import { SiteContextManager } from "./memory/delivery.js";
 import { listRecords } from "./memory/store.js";
+import { confidence } from "./memory/confidence.js";
 
 export interface DaemonRuntime {
   version: string;
@@ -57,6 +58,12 @@ export interface DaemonRuntime {
    * Warmed on page_navigated; consulted by each McpBridgeServer on dispatch.
    */
   siteContext: SiteContextManager;
+  /**
+   * Pre-computed global memory digest (≤10 title lines, confidence-ranked).
+   * Computed once at daemon boot and threaded into each McpBridgeServer so
+   * the initialize instructions carry global memory context.
+   */
+  globalDigest: string;
   shutdown(): Promise<void>;
 }
 
@@ -162,6 +169,9 @@ export async function bootDaemonRuntime(opts: BootDaemonRuntimeOptions): Promise
     }
   }
 
+  // 6.4 — compute the global memory digest once at boot.
+  const globalDigest = await computeGlobalDigest();
+
   const approvalMode = process.env[ENV.APPROVAL] === "gate" ? "GATE" : "AUTO";
   if (approvalMode === "GATE") {
     process.stderr.write(
@@ -188,6 +198,7 @@ export async function bootDaemonRuntime(opts: BootDaemonRuntimeOptions): Promise
     riskyMatcher,
     pairCode: wsBridge.pairCode,
     siteContext,
+    globalDigest,
     get onTabClosed() {
       return hooks.onTabClosed;
     },
@@ -283,6 +294,36 @@ function handleEvent(
     }
     default:
       return undefined;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Global memory digest helper (Phase 6.4)
+// ---------------------------------------------------------------------------
+
+/** Maximum number of global records shown in the digest. */
+const GLOBAL_DIGEST_MAX = 10;
+
+/**
+ * Compute a terse, confidence-ranked digest of global memory records.
+ * Returns a multi-line string (one record per line: "- [kind] title")
+ * or an empty string when there are no global records or on error.
+ */
+async function computeGlobalDigest(): Promise<string> {
+  try {
+    const records = await listRecords({ scope: "global" });
+    if (records.length === 0) return "";
+
+    const ranked = records
+      .map((r) => ({ r, conf: confidence(r) }))
+      .sort((a, b) => b.conf - a.conf)
+      .slice(0, GLOBAL_DIGEST_MAX);
+
+    return ranked
+      .map(({ r }) => `- [${r.kind}] ${r.title}  (${r.name})`)
+      .join("\n");
+  } catch {
+    return "";
   }
 }
 

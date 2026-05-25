@@ -232,13 +232,29 @@ function memorySection(enabledFeatures: ReadonlySet<FeatureName>): Lines {
 }
 
 /**
+ * Optional extras for buildServerInstructions.
+ */
+export interface ServerInstructionOpts {
+  /**
+   * Top-N global memory records as a terse title-only digest (≤10 lines).
+   * Computed at daemon startup from confidence-ranked global records and
+   * appended as a "Global memory" section when present.
+   */
+  globalDigest?: string;
+}
+
+/**
  * Build the MCP server instructions for the given feature set.
  *
  * The blocks above each return `readonly string[]`; this function joins them
  * with blank lines between sections and a final newline-joined string.
+ *
+ * @param enabledFeatures  Set of currently-enabled feature flags.
+ * @param opts             Optional extras (globalDigest for Phase 6.4).
  */
 export function buildServerInstructions(
   enabledFeatures: ReadonlySet<FeatureName>,
+  opts?: ServerInstructionOpts,
 ): string {
   const blocks: Lines[] = [
     header(enabledFeatures),
@@ -251,7 +267,21 @@ export function buildServerInstructions(
     risky,
     proceduresSection(enabledFeatures),
     memorySection(enabledFeatures),
+    globalDigestSection(opts?.globalDigest),
   ].filter((b) => b.length > 0);
 
   return blocks.map((b) => b.join("\n")).join("\n\n");
+}
+
+/**
+ * Append the global memory digest section when a digest is present.
+ * The digest is a pre-formatted string (≤10 title lines, confidence-ranked).
+ */
+function globalDigestSection(digest: string | undefined): Lines {
+  if (!digest) return [];
+  return [
+    "Global memory (cross-site, confidence-ranked):",
+    digest,
+    "Call memory_get(name) to read full detail for any of the above.",
+  ];
 }

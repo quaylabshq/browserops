@@ -303,6 +303,8 @@ async function attachMcpSession(
     traceWriter: runtime.traceWriter,
     renameSession,
     clientName: session.client_info.name,
+    siteContext: runtime.siteContext,
+    globalDigest: runtime.globalDigest || undefined,
   });
   await mcp.start(transport);
   void runtime.logger.write({

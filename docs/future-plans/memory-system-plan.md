@@ -313,7 +313,7 @@ must pass before committing.
   compute the top-N global records (by confidence, ≤10 title lines) at daemon
   startup and pass it at Server construction (`mcp-server.ts` ~line 242).
   Commit: `feat(memory): global memory digest in server instructions`
-  - [ ] Done
+  - [x] Done
 - **6.5** Self-heal: when `capture_hint` fires on an origin with a recently
   delivered blocker, bump that record's `stats.door_failures` via the store.
   Commit: `feat(memory): self-heal door-failure tracking`
