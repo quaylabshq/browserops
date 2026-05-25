@@ -228,19 +228,18 @@ describe("rebuildIndex", () => {
     expect(parsed).toHaveProperty("confidence");
   });
 
-  it("preserves existing confidence entries", async () => {
-    // Pre-write an index with confidence data
-    await fs.mkdir(tmpRoot, { recursive: true });
-    await fs.writeFile(
-      indexPath(),
-      JSON.stringify({ global: [], origins: {}, confidence: { "some-record": 0.9 } }),
-      "utf8",
-    );
-    // Save a record (which calls rebuildIndex)
+  it("populates confidence for each record after rebuild", async () => {
+    // Phase 3.2: rebuildIndex computes confidence fresh from disk records;
+    // stale entries for records that no longer exist on disk are dropped.
     await saveRecord({ record: globalRecord() });
     const raw = await fs.readFile(indexPath(), "utf8");
     const parsed = JSON.parse(raw) as { confidence: Record<string, number> };
-    expect(parsed.confidence["some-record"]).toBe(0.9);
+    // The saved record should have a confidence value in [0, 1]
+    expect(typeof parsed.confidence["test-lesson"]).toBe("number");
+    expect(parsed.confidence["test-lesson"]).toBeGreaterThanOrEqual(0);
+    expect(parsed.confidence["test-lesson"]).toBeLessThanOrEqual(1);
+    // Records not on disk are not in the confidence map
+    expect(parsed.confidence["some-record"]).toBeUndefined();
   });
 });
 

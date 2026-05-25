@@ -217,7 +217,7 @@ must pass before committing.
 - **3.2** Wire confidence into the store's `index.json` (cache per record) and into
   search ranking (3.1 → used by 2.5's ranker).
   Commit: `feat(memory): persist confidence in index and rank by it`
-  - [ ] Done
+  - [x] Done
 - **3.3** Tests: confidence math, decay over time, door-failure demotion to
   "fix no longer reliable".
   Commit: `test(memory): confidence, decay, door-failure demotion`

@@ -10,6 +10,10 @@
  * Legacy MemoryEntry search (searchMemories) is preserved for backward
  * compatibility with the old markdown-based store tests and the legacy
  * handlers path.
+ *
+ * Phase 3.2: `searchRecordsWithConfidence` is the bridge-facing call site —
+ * it wraps `searchRecords` with the confidence model pre-wired so callers
+ * don't need to import confidence.ts separately.
  */
 import {
   tokenize,
@@ -303,3 +307,28 @@ export function searchRecords(
 
 // Re-export recordIndexText for tests
 export { recordIndexText };
+
+// ---------------------------------------------------------------------------
+// Confidence-wired bridge call site (Phase 3.2)
+// ---------------------------------------------------------------------------
+
+import { confidence } from "./confidence.js";
+
+/**
+ * Bridge-facing wrapper: calls `searchRecords` with the confidence model
+ * pre-wired as `confidenceOf`. This is the canonical call site inside the
+ * bridge so callers get confidence-first ranking automatically.
+ *
+ * Pass any additional `RecordSearchOptions` (scope, origin, kind, limit,
+ * min_score) — just omit `confidenceOf`, which is injected here.
+ */
+export function searchRecordsWithConfidence(
+  records: MemoryRecord[],
+  query: string,
+  options?: Omit<RecordSearchOptions, "confidenceOf">,
+): RecordSearchResult {
+  return searchRecords(records, query, {
+    ...options,
+    confidenceOf: (r) => confidence(r),
+  });
+}

@@ -27,6 +27,7 @@ import {
   type MemoryRecord,
   type MemoryType,
 } from "@browserops/shared";
+import { confidence } from "./confidence.js";
 
 // ---------------------------------------------------------------------------
 // Paths
@@ -190,15 +191,15 @@ async function writeIndexInner(index: MemoryIndex): Promise<void> {
 
 /**
  * Inner rebuild — must be called inside withWriteLock.
- * Scans global/ and sites/ directories and writes the index atomically.
+ * Scans global/ and sites/ directories, computes confidence for each record,
+ * and writes the index atomically.
  */
 async function rebuildIndexInner(): Promise<MemoryIndex> {
   const root = memoryRoot();
-  const existing = await readIndex();
   const index: MemoryIndex = {
     global: [],
     origins: {},
-    confidence: existing.confidence,
+    confidence: {},
   };
 
   // Scan global/
@@ -208,7 +209,16 @@ async function rebuildIndexInner(): Promise<MemoryIndex> {
     for (const f of files) {
       if (!f.endsWith(".yaml")) continue;
       const name = f.slice(0, -5);
-      if (MEMORY_NAME_REGEX.test(name)) index.global.push(name);
+      if (!MEMORY_NAME_REGEX.test(name)) continue;
+      index.global.push(name);
+      // Compute and cache confidence score
+      try {
+        const text = await fs.readFile(path.join(globalDir, f), "utf8");
+        const record = parseRecord(text, path.join(globalDir, f));
+        index.confidence[name] = confidence(record);
+      } catch {
+        // Skip unreadable / malformed — leave confidence entry absent
+      }
     }
     index.global.sort();
   } catch (err) {
@@ -234,7 +244,16 @@ async function rebuildIndexInner(): Promise<MemoryIndex> {
       for (const f of files) {
         if (!f.endsWith(".yaml")) continue;
         const name = f.slice(0, -5);
-        if (MEMORY_NAME_REGEX.test(name)) names.push(name);
+        if (!MEMORY_NAME_REGEX.test(name)) continue;
+        names.push(name);
+        // Compute and cache confidence score
+        try {
+          const text = await fs.readFile(path.join(slugDir, f), "utf8");
+          const record = parseRecord(text, path.join(slugDir, f));
+          index.confidence[name] = confidence(record);
+        } catch {
+          // Skip unreadable / malformed — leave confidence entry absent
+        }
       }
       if (names.length > 0) {
         names.sort();
@@ -252,7 +271,7 @@ async function rebuildIndexInner(): Promise<MemoryIndex> {
 
 /**
  * Public: rebuild the index, acquiring the write lock.
- * Does not touch confidence (those are computed by Phase 3).
+ * Computes and caches confidence scores for all records.
  */
 export async function rebuildIndex(): Promise<MemoryIndex> {
   return withWriteLock(() => rebuildIndexInner());
