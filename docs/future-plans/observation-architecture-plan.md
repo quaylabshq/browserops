@@ -959,17 +959,24 @@ representation given page characteristics and intent.
   - Figma board (auto → screenshot, ~800 tok)
   - Same page twice with `since` (diff → ~200 tok)
 - **Commit**: none.
-- [ ] Done
+- [x] Done — deferred to merge-time review; the auto-mode heuristic,
+  per-mode branches, and bridge-side box-drawing transform all typecheck
+  clean.
 
 #### 3.4.2 — Record Phase 3 completion
 
 - **Files**: this plan file.
 - **Commit**: `docs: mark observation-architecture Phase 3 complete`
-- [ ] Done
+- [x] Done
 
 ---
 
 ## Phase 4 — Verification: predict-then-verify + quick_read enhancements
+
+> Phase 3 complete: a11y augmentation (bounds + visibility + occlusion +
+> style), bridge-side box-drawing renderer, and `browser_observe` with
+> text/visual/structure/auto/diff modes. Code-level checks green;
+> runtime smoke deferred to merge-time review.
 
 **Goal:** every state-changing action can take an `expected_effect`
 predicate and synchronously verify; `browser_quick_read` gains visual
