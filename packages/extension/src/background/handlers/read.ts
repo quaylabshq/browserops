@@ -1495,6 +1495,33 @@ export function registerReadHandler(
       }) as typeof matches;
     }
 
+    const region = rawParams["within_region"];
+    if (
+      typeof region === "object" &&
+      region !== null &&
+      !Array.isArray(region)
+    ) {
+      const r = region as { x: number; y: number; w: number; h: number };
+      if (
+        typeof r.x === "number" &&
+        typeof r.y === "number" &&
+        typeof r.w === "number" &&
+        typeof r.h === "number"
+      ) {
+        matches = (matches as Array<{
+          rect: { x: number; y: number; width: number; height: number };
+        }>).filter((m) => {
+          const rect = m.rect;
+          return (
+            rect.x + rect.width > r.x &&
+            rect.y + rect.height > r.y &&
+            rect.x < r.x + r.w &&
+            rect.y < r.y + r.h
+          );
+        }) as typeof matches;
+      }
+    }
+
     return {
       matches,
       total: result.total,
