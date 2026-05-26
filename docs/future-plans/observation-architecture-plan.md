@@ -1054,7 +1054,7 @@ and spatial filters.
 #### 4.1.8 — Wire into `browser_press`
 
 - **Commit**: `feat(extension): support expected predicate in browser_press`
-- [ ] Done
+- [x] Done
 
 #### 4.1.9 — Wire into `browser_navigate`
 
