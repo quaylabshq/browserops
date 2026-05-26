@@ -867,6 +867,17 @@ const quickRead: ToolDef = {
           h: { type: "number" },
         },
       },
+      near: {
+        type: "object",
+        additionalProperties: false,
+        required: ["ref", "radius_px"] as const,
+        description:
+          "Filter to matches whose bounding-box center is within `radius_px` CSS pixels of the named ref's center.",
+        properties: {
+          ref: { type: "string" },
+          radius_px: { type: "number", minimum: 0 },
+        },
+      },
       max_results: { type: "integer", minimum: 1, maximum: 50, default: 10 },
     },
   },
