@@ -158,6 +158,7 @@ interface TypeParams {
   delay_ms?: number;
   observe_effects?: boolean;
   expect_effect?: ExpectEffect;
+  expected?: ActionExpectation;
 }
 
 interface PressParams {
@@ -1575,6 +1576,8 @@ function parseType(raw: Record<string, unknown>): TypeParams {
   if (raw["observe_effects"] === false) result.observe_effects = false;
   const expectEffect = parseExpectEffect(raw["expect_effect"]);
   if (expectEffect !== undefined) result.expect_effect = expectEffect;
+  const expected = parseExpected(raw["expected"]);
+  if (expected !== undefined) result.expected = expected;
   return result;
 }
 
@@ -2344,6 +2347,8 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       escalated_to_cdp?: true;
       page_effect?: PageEffect;
       effect?: Effect;
+      expectation_met?: boolean;
+      mismatch_reason?: string;
       warnings?: string[];
     }> => {
       const params = parseType(raw);
@@ -2620,7 +2625,13 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       }
       return dispatchWithRescue();
       });
-      return { ...handlerResult, effect };
+      let verification: { expectation_met?: boolean; mismatch_reason?: string } = {};
+      if (params.expected !== undefined) {
+        const v = await pollUntilMet(chromeId, effect, params.expected);
+        verification.expectation_met = v.expectation_met;
+        if (v.mismatch_reason !== undefined) verification.mismatch_reason = v.mismatch_reason;
+      }
+      return { ...handlerResult, effect, ...verification };
     },
   );
 

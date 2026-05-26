@@ -1108,6 +1108,7 @@ const typeTool: ToolDef = {
       delay_ms: { type: "integer", minimum: 0, maximum: 200, default: 0 },
       observe_effects: observeEffectsInputSchema,
       expect_effect: expectEffectInputSchema,
+      expected: actionExpectationSchema,
     },
   },
   outputSchema: {
@@ -1125,6 +1126,7 @@ const typeTool: ToolDef = {
       },
       page_effect: pageEffectSchema,
       effect: effectSchema,
+      ...expectationOutputSchema,
       warnings: warningsOutputSchema,
     },
   },
