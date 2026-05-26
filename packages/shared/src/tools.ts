@@ -840,6 +840,21 @@ const quickRead: ToolDef = {
         description:
           "When true (default), each match carries visual fields (visible, in_viewport, occluded_by, bg/fg colors, opacity, disabled_visual, display, flex_direction) sourced from a one-shot DOM lookup. Set false to skip the augmentation cost when only structural data is needed.",
       },
+      only_enabled: {
+        type: "boolean",
+        default: false,
+        description: "Filter to matches that are not `disabled_visual` (greyed out, pointer-events:none, etc.).",
+      },
+      only_visible: {
+        type: "boolean",
+        default: false,
+        description: "Filter to matches whose computed visibility is true (display !== none, visibility !== hidden, opacity > 0.01).",
+      },
+      only_in_viewport: {
+        type: "boolean",
+        default: false,
+        description: "Filter to matches whose bounding box intersects the viewport.",
+      },
       max_results: { type: "integer", minimum: 1, maximum: 50, default: 10 },
     },
   },
