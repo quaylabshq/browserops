@@ -1059,7 +1059,7 @@ and spatial filters.
 #### 4.1.9 — Wire into `browser_navigate`
 
 - **Commit**: `feat(extension): support expected predicate in browser_navigate`
-- [ ] Done
+- [x] Done
 
 ### 4.2 — `browser_quick_read` enhancements
 
