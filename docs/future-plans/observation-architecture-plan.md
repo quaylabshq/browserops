@@ -1165,7 +1165,7 @@ and spatial filters.
   automatically.
 - **Files**: `CLAUDE.md`
 - **Commit**: `docs: update CLAUDE.md for browser_observe and effect envelope`
-- [ ] Done
+- [x] Done — edits applied to `AGENTS.md` (the file `CLAUDE.md` symlinks to).
 
 ### 5.2 — PR
 
