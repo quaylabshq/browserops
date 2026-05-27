@@ -60,6 +60,24 @@ const NAMED_KEYS: Readonly<Record<string, NamedKey>> = (() => {
     Control:   { key: "Control",    code: "ControlLeft", vkCode: 17 },
     Alt:       { key: "Alt",        code: "AltLeft",     vkCode: 18 },
     Meta:      { key: "Meta",       code: "MetaLeft",    vkCode: 91 },
+    // US-layout punctuation event.code names. Without these, callers passing
+    // chord-style tokens (e.g. ["Shift","Slash"] for "?", or bare "Slash" for
+    // "/" — which is what triggers the Notion / Linear / Discord slash menu)
+    // fall through to the unknown-token branch and dispatch a key event with
+    // no `text`, so the page receives the keydown but no character is
+    // inserted. Slot in the US base-layer text up front; shifted text is
+    // computed later in `resolveKey` from SHIFTED_TEXT when mods.shift is set.
+    Slash:        { key: "/",  code: "Slash",        vkCode: 191, text: "/"  },
+    Period:       { key: ".",  code: "Period",       vkCode: 190, text: "."  },
+    Comma:        { key: ",",  code: "Comma",        vkCode: 188, text: ","  },
+    Semicolon:    { key: ";",  code: "Semicolon",    vkCode: 186, text: ";"  },
+    Quote:        { key: "'",  code: "Quote",        vkCode: 222, text: "'"  },
+    Backquote:    { key: "`",  code: "Backquote",    vkCode: 192, text: "`"  },
+    Minus:        { key: "-",  code: "Minus",        vkCode: 189, text: "-"  },
+    Equal:        { key: "=",  code: "Equal",        vkCode: 187, text: "="  },
+    BracketLeft:  { key: "[",  code: "BracketLeft",  vkCode: 219, text: "["  },
+    BracketRight: { key: "]",  code: "BracketRight", vkCode: 221, text: "]"  },
+    Backslash:    { key: "\\", code: "Backslash",    vkCode: 220, text: "\\" },
   };
   for (let i = 1; i <= 12; i += 1) {
     t[`F${i}`] = { key: `F${i}`, code: `F${i}`, vkCode: 111 + i };
