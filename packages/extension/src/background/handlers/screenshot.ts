@@ -60,12 +60,9 @@ const INTENT_PRESETS: Record<ScreenshotIntent, { quality: number; max_dimension:
   user_requested: { quality: 95,  max_dimension: 8192, full_quality: true  },
 };
 
-interface ScreenshotResult {
-  image_base64: string;
-  width: number;
-  height: number;
-  format: "png" | "jpeg";
-}
+// (ScreenshotResult type retired — the action-grade response shape is
+// inlined at the return site so the agent-visible fields match the
+// observation-architecture additions exactly.)
 
 function codedError(code: ErrorCode, message: string): Error {
   const err = new Error(message) as Error & { code: ErrorCode };
