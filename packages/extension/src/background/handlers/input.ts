@@ -2481,7 +2481,15 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
             throw codedError("REF_STALE", `ref ${params.ref} no longer resolves in tab ${params.tab_id}`);
           }
           await cdpClick(cdp, chromeId, center.x, center.y, "left", { ctrl: false, alt: false, shift: false, meta: false });
-          await cdpType(cdp, chromeId, params.text);
+          if (mode === "paste") {
+            // Bulk-assign via Input.insertText — fast for long strings,
+            // sufficient for normal textboxes and contenteditable.
+            await cdpType(cdp, chromeId, params.text);
+          } else {
+            // Per-char dispatchKeyEvent — necessary for canvas grids and
+            // keydown-gated editors (Sheets cells, Docs, Figma).
+            await cdpTypeKeystroke(cdp, chromeId, params.text);
+          }
           if (submit) {
             await cdpPress(cdp, chromeId, "Enter", { ctrl: false, alt: false, shift: false, meta: false });
           }
