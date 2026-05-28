@@ -920,16 +920,15 @@ export function registerReadHandler(
       const scopeMode = params.scope.kind === "viewport" ? "viewport" : "document";
       let rootSelector: string | null = null;
       if (params.scope.kind === "ref") {
-        const snapshot = opts.refCache.get(params.tab_id);
         const refNum = Number.parseInt(params.scope.ref, 10);
-        const entry = snapshot?.entries.get(refNum);
-        if (entry === undefined) {
+        const hit = opts.refCache.lookupWithFallback(params.tab_id, refNum);
+        if (hit === undefined) {
           throw codedError(
             "REF_STALE",
             `scope=ref:${params.scope.ref} could not be resolved; call browser_read mode:'a11y_tree' first`,
           );
         }
-        rootSelector = entry.selector;
+        rootSelector = hit.entry.selector;
       }
       const raw: unknown = await execInTabWithArgs<
         readonly [boolean, string | null, "viewport" | "document", string | null],
@@ -1062,14 +1061,15 @@ export function registerReadHandler(
     if (chromeTabId === undefined) {
       throw codedError("TAB_NOT_FOUND", `unknown tab_id: ${tab_id}`);
     }
-    const snap = opts.refCache.get(tab_id);
-    if (snap === undefined) {
-      throw codedError("REF_STALE", `no a11y snapshot for tab ${tab_id}; call browser_read first`);
-    }
-    const entry = snap.entries.get(refRaw);
-    if (entry === undefined) {
+    const hit = opts.refCache.lookupWithFallback(tab_id, refRaw);
+    if (hit === undefined) {
+      const snap = opts.refCache.get(tab_id);
+      if (snap === undefined) {
+        throw codedError("REF_STALE", `no a11y snapshot for tab ${tab_id}; call browser_read first`);
+      }
       throw codedError("REF_NOT_FOUND", `ref ${refRaw} not present in current snapshot for ${tab_id}`);
     }
+    const entry = hit.entry;
     const results = (await chrome.scripting.executeScript({
       target: { tabId: chromeTabId },
       world: "MAIN",
@@ -1500,7 +1500,9 @@ export function registerReadHandler(
       const nr = near as { ref: string; radius_px: number };
       if (typeof nr.ref === "string" && typeof nr.radius_px === "number") {
         const refNum = Number.parseInt(nr.ref, 10);
-        const entry = !Number.isNaN(refNum) ? opts.refCache.get(tabId)?.entries.get(refNum) : undefined;
+        const entry = !Number.isNaN(refNum)
+          ? opts.refCache.lookupWithFallback(tabId, refNum)?.entry
+          : undefined;
         if (entry !== undefined) {
           let centerBounds: { x: number; y: number } | null = null;
           try {

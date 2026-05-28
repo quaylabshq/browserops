@@ -308,20 +308,21 @@ export function registerNavigationHandlers(router: Router, opts: NavigationOpts)
 
       let refSelector: string | null = null;
       if (typeof refRaw === "number") {
-        const snap = refCache.get(tabIdRaw);
-        if (snap === undefined) {
-          throw makeError(
-            "REF_STALE",
-            `no a11y snapshot for tab ${tabIdRaw}; call browser_read first`,
-          );
-        }
-        const entry = snap.entries.get(refRaw);
-        if (entry === undefined) {
+        const hit = refCache.lookupWithFallback(tabIdRaw, refRaw);
+        if (hit === undefined) {
+          const snap = refCache.get(tabIdRaw);
+          if (snap === undefined) {
+            throw makeError(
+              "REF_STALE",
+              `no a11y snapshot for tab ${tabIdRaw}; call browser_read first`,
+            );
+          }
           throw makeError(
             "REF_NOT_FOUND",
             `ref ${refRaw} not present in current snapshot for ${tabIdRaw}`,
           );
         }
+        const entry = hit.entry;
         refSelector = entry.selector;
       }
       const text = typeof textRaw === "string" ? textRaw : null;
