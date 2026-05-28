@@ -317,7 +317,10 @@ async function cdpPress(
   token: string,
   mods: { ctrl: boolean; alt: boolean; shift: boolean; meta: boolean },
 ): Promise<void> {
-  const k = resolveKey(token);
+  // Pass mods so Shift chords resolve to the shifted character (Shift+Digit3
+  // -> "#", Shift+Slash -> "?"). Modifier chords (Ctrl/Cmd) still drop text
+  // downstream so Cmd+A doesn't accidentally type "a".
+  const k = resolveKey(token, mods);
   const m = cdpModBits(mods);
   // Always send key + code + windowsVirtualKeyCode + nativeVirtualKeyCode.
   // CDP does not auto-fill the VK codes from `key` alone — legacy editors
@@ -2683,9 +2686,10 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
     }
 
     // Synthetic path. Pre-resolve the key tuple here so the injected fn
-    // ships only the data it needs and stays free of imports.
+    // ships only the data it needs and stays free of imports. Pass mods
+    // through so Shift chords resolve to shifted text on this path too.
     const dispatchPress = async (): Promise<{ pressed: true }> => {
-      const kTuple = resolveKey(terminal);
+      const kTuple = resolveKey(terminal, modifierFlags(mods));
       await execInTab(
         chromeId,
         injectedPress,
