@@ -87,7 +87,7 @@ registerTabHandlers(router, {
   cdp,
 });
 registerNavigationHandlers(router, { tabIdMap: tabIdToChromeId, refCache, network, cdp });
-registerScreenshotHandler(router, { tabIdMap: tabIdToChromeId });
+registerScreenshotHandler(router, { tabIdMap: tabIdToChromeId, cdp });
 registerReadHandler(router, { tabIdMap: tabIdToChromeId, refCache });
 registerObserveHandler(router, { tabIdMap: tabIdToChromeId, refCache });
 registerInputHandlers(router, { tabIdMap: tabIdToChromeId, refCache, cdp, network });
