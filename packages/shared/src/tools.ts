@@ -1139,10 +1139,14 @@ const typeTool: ToolDef = {
   inputSchema: {
     type: "object",
     additionalProperties: false,
-    required: ["tab_id", "ref", "text"] as const,
+    required: ["tab_id", "text"] as const,
     properties: {
       tab_id: tabIdSchema,
-      ref: refSchema,
+      ref: {
+        ...refSchema,
+        description:
+          "Optional. If omitted, text is inserted into document.activeElement via Input.insertText — call browser_click_at first to focus the target field. When provided, the handler clicks the ref to focus it and then types.",
+      },
       text: { type: "string", maxLength: 32768 },
       mode: {
         description:
