@@ -391,6 +391,19 @@ async function cdpTypeKeystroke(cdp: CdpManager, chromeId: number, text: string)
       text: ch,
     };
     await cdp.send(chromeId, "Input.dispatchKeyEvent", downParams);
+    // Emit the `char` event so Chrome's text-input pipeline delivers the
+    // character into canvas editors (Google Docs body, Sheets formula bar,
+    // Figma). Without this the renderer fires keydown listeners but never
+    // produces visible text on Docs' .docs-texteventtarget-iframe.
+    await cdp.send(chromeId, "Input.dispatchKeyEvent", {
+      type: "char",
+      text: ch,
+      key: ch,
+      code: mapping.code,
+      windowsVirtualKeyCode: mapping.vkCode,
+      nativeVirtualKeyCode: mapping.vkCode,
+      modifiers,
+    });
     await cdp.send(chromeId, "Input.dispatchKeyEvent", {
       type: "keyUp",
       key: ch,
@@ -426,10 +439,28 @@ async function cdpPress(
     nativeVirtualKeyCode: k.vkCode,
     modifiers: m,
   };
-  if (k.text !== undefined && !mods.ctrl && !mods.meta) {
+  const emitText = k.text !== undefined && !mods.ctrl && !mods.meta;
+  if (emitText) {
     downParams["text"] = k.text;
   }
   await cdp.send(chromeId, "Input.dispatchKeyEvent", downParams);
+  // Emit the standalone `char` event between keyDown and keyUp for single
+  // printable characters. This is what Chrome's renderer hands to the
+  // text-input pipeline that backs canvas editors with offscreen iframes
+  // (Google Docs body, Sheets formula bar, Figma text). The keyDown listener
+  // alone is enough for contenteditable / hidden-input targets, but Docs'
+  // .docs-texteventtarget-iframe waits for `char` to actually insert text.
+  if (emitText && k.text !== undefined && k.text.length === 1) {
+    await cdp.send(chromeId, "Input.dispatchKeyEvent", {
+      type: "char",
+      text: k.text,
+      key: k.key,
+      code: k.code,
+      windowsVirtualKeyCode: k.vkCode,
+      nativeVirtualKeyCode: k.vkCode,
+      modifiers: m,
+    });
+  }
   await cdp.send(chromeId, "Input.dispatchKeyEvent", {
     type: "keyUp",
     key: k.key,
