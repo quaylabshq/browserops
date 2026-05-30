@@ -42,10 +42,19 @@ const AUTO_CDP_DOMAINS: readonly RegExp[] = [
   /(\.|^)tldraw\.com$/,
 ];
 
+/** Tab-scoped CDP event handler. method is the full CDP event name
+ *  (e.g. "Network.requestWillBeSent"); params is the raw event payload. */
+export type CdpEventHandler = (
+  chromeTabId: number,
+  method: string,
+  params: Record<string, unknown>,
+) => void;
+
 export class CdpManager {
   private readonly attached = new Map<number, AttachState>();
   private readonly external = new Set<number>();
   private readonly persistent = new Set<number>();
+  private readonly eventListeners = new Set<CdpEventHandler>();
 
   constructor() {
     // External detach (user clicked the "Cancel" banner, DevTools opened,
@@ -58,6 +67,30 @@ export class CdpManager {
       this.attached.delete(id);
       this.persistent.delete(id);
     });
+
+    // Fan CDP events out to subscribers. Single onEvent registration shared
+    // across consumers; each consumer filters by method themselves.
+    chrome.debugger.onEvent.addListener((source, method, params) => {
+      const id = source.tabId;
+      if (id === undefined) return;
+      const payload = (params ?? {}) as Record<string, unknown>;
+      for (const handler of this.eventListeners) {
+        try {
+          handler(id, method, payload);
+        } catch (err) {
+          console.warn("[browserops] CDP event handler threw:", err);
+        }
+      }
+    });
+  }
+
+  /** Register a CDP event listener invoked for every event on every attached
+   *  tab. Returns an unsubscribe function. */
+  addEventListener(handler: CdpEventHandler): () => void {
+    this.eventListeners.add(handler);
+    return () => {
+      this.eventListeners.delete(handler);
+    };
   }
 
   /** Run `fn` while the debugger is attached to `chromeTabId`. The attach

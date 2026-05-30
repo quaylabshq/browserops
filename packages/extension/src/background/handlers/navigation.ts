@@ -1,5 +1,7 @@
-import { NAVIGATE_TIMEOUT_MS, WAIT_FOR_TIMEOUT_CAP_MS, type ErrorCode, type PageEffect } from "@browserops/shared";
+import { NAVIGATE_TIMEOUT_MS, WAIT_FOR_TIMEOUT_CAP_MS, type ActionExpectation, type Effect, type ErrorCode, type PageEffect } from "@browserops/shared";
 import { checkEffectExpectation } from "./effects.js";
+import { captureEffect } from "../effect.js";
+import { pollUntilMet } from "../expectation-poller.js";
 import type { Router } from "../router.js";
 import type { RefCache } from "../ref-cache.js";
 import type { NetworkTracker } from "../network-tracker.js";
@@ -92,12 +94,13 @@ export function registerNavigationHandlers(router: Router, opts: NavigationOpts)
 
   router.register(
     "browser_navigate",
-    async (params): Promise<{ final_url: string; page_effect?: PageEffect; warnings?: string[] }> => {
+    async (params): Promise<{ final_url: string; page_effect?: PageEffect; effect?: Effect; expectation_met?: boolean; mismatch_reason?: string; warnings?: string[] }> => {
       const chromeId = resolveChromeId(tabIdMap, params["tab_id"]);
       const url = params["url"];
       if (typeof url !== "string") {
         throw makeError("INVALID_PARAMS", "url must be a string");
       }
+      const { result: handlerResult, effect: navEffect } = await captureEffect(chromeId, async () => {
       const waitForLoadRaw = params["wait_for_load"];
       const shouldWait = waitForLoadRaw !== false;
       // observe_effects defaults to true; only explicit false opts out.
@@ -176,27 +179,45 @@ export function registerNavigationHandlers(router: Router, opts: NavigationOpts)
       };
       if (warning !== null) out.warnings = [warning];
       return out;
+      });
+      let verification: { expectation_met?: boolean; mismatch_reason?: string } = {};
+      const expectedRaw = params["expected"];
+      if (expectedRaw !== undefined && typeof expectedRaw === "object" && expectedRaw !== null) {
+        const v = await pollUntilMet(chromeId, navEffect, expectedRaw as ActionExpectation);
+        verification.expectation_met = v.expectation_met;
+        if (v.mismatch_reason !== undefined) verification.mismatch_reason = v.mismatch_reason;
+      }
+      return { ...handlerResult, effect: navEffect, ...verification };
     },
   );
 
-  router.register("browser_back", async (params): Promise<{ final_url: string }> => {
+  router.register("browser_back", async (params): Promise<{ final_url: string; effect: Effect }> => {
     const chromeId = resolveChromeId(tabIdMap, params["tab_id"]);
-    await chrome.tabs.goBack(chromeId);
-    return { final_url: await readTabUrl(chromeId) };
+    const { result, effect } = await captureEffect(chromeId, async () => {
+      await chrome.tabs.goBack(chromeId);
+      return { final_url: await readTabUrl(chromeId) };
+    });
+    return { ...result, effect };
   });
 
-  router.register("browser_forward", async (params): Promise<{ final_url: string }> => {
+  router.register("browser_forward", async (params): Promise<{ final_url: string; effect: Effect }> => {
     const chromeId = resolveChromeId(tabIdMap, params["tab_id"]);
-    await chrome.tabs.goForward(chromeId);
-    return { final_url: await readTabUrl(chromeId) };
+    const { result, effect } = await captureEffect(chromeId, async () => {
+      await chrome.tabs.goForward(chromeId);
+      return { final_url: await readTabUrl(chromeId) };
+    });
+    return { ...result, effect };
   });
 
-  router.register("browser_reload", async (params): Promise<{ final_url: string }> => {
+  router.register("browser_reload", async (params): Promise<{ final_url: string; effect: Effect }> => {
     const chromeId = resolveChromeId(tabIdMap, params["tab_id"]);
     const hardRaw = params["hard"];
     const bypassCache = hardRaw === true;
-    await chrome.tabs.reload(chromeId, { bypassCache });
-    return { final_url: await readTabUrl(chromeId) };
+    const { result, effect } = await captureEffect(chromeId, async () => {
+      await chrome.tabs.reload(chromeId, { bypassCache });
+      return { final_url: await readTabUrl(chromeId) };
+    });
+    return { ...result, effect };
   });
 
   router.register(
@@ -287,20 +308,21 @@ export function registerNavigationHandlers(router: Router, opts: NavigationOpts)
 
       let refSelector: string | null = null;
       if (typeof refRaw === "number") {
-        const snap = refCache.get(tabIdRaw);
-        if (snap === undefined) {
-          throw makeError(
-            "REF_STALE",
-            `no a11y snapshot for tab ${tabIdRaw}; call browser_read first`,
-          );
-        }
-        const entry = snap.entries.get(refRaw);
-        if (entry === undefined) {
+        const hit = refCache.lookupWithFallback(tabIdRaw, refRaw);
+        if (hit === undefined) {
+          const snap = refCache.get(tabIdRaw);
+          if (snap === undefined) {
+            throw makeError(
+              "REF_STALE",
+              `no a11y snapshot for tab ${tabIdRaw}; call browser_read first`,
+            );
+          }
           throw makeError(
             "REF_NOT_FOUND",
             `ref ${refRaw} not present in current snapshot for ${tabIdRaw}`,
           );
         }
+        const entry = hit.entry;
         refSelector = entry.selector;
       }
       const text = typeof textRaw === "string" ? textRaw : null;

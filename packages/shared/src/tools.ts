@@ -105,6 +105,83 @@ const tabSummarySchema: JSONSchemaObject = {
 // when observe_effects is true / not suppressed).
 // ---------------------------------------------------------------------------
 
+// page_effect envelope produced by captureEffect — a structural delta
+// covering the action window. ~100 tokens; lets the agent skip a re-read
+// after most mutating actions.
+const effectSchema: JSONSchemaObject = {
+  type: "object",
+  description:
+    "Structural delta captured around every state-changing action: " +
+    "mutations, network, visual hash diff, focus, new dialogs, a11y diff, " +
+    "console errors. Returned alongside `page_effect` for forward " +
+    "compatibility with the observation architecture.",
+  properties: {
+    url_changed: { type: "boolean" },
+    title_changed: { type: "boolean" },
+    mutations: {
+      type: "object",
+      properties: {
+        added: { type: "integer", minimum: 0 },
+        removed: { type: "integer", minimum: 0 },
+        attr: { type: "integer", minimum: 0 },
+        char: { type: "integer", minimum: 0 },
+      },
+      required: ["added", "removed", "attr", "char"] as const,
+      additionalProperties: false,
+    },
+    network: {
+      type: "object",
+      properties: {
+        requests: { type: "integer", minimum: 0 },
+        failed: { type: "integer", minimum: 0 },
+        endpoints: { type: "array", items: { type: "string" } },
+      },
+      required: ["requests", "failed", "endpoints"] as const,
+      additionalProperties: false,
+    },
+    visual_hash_delta: { type: "number", minimum: 0, maximum: 1 },
+    a11y_delta: {
+      type: "object",
+      properties: {
+        added: { type: "integer", minimum: 0 },
+        removed: { type: "integer", minimum: 0 },
+        changed: { type: "integer", minimum: 0 },
+      },
+      required: ["added", "removed", "changed"] as const,
+      additionalProperties: false,
+    },
+    focus_moved_to: { type: ["string", "null"] },
+    new_dialogs: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          role: { type: "string" },
+          name: { type: "string" },
+          ref: { type: "string" },
+        },
+        required: ["role", "name", "ref"] as const,
+        additionalProperties: false,
+      },
+    },
+    console_errors: { type: "integer", minimum: 0 },
+    duration_ms: { type: "integer", minimum: 0 },
+  },
+  required: [
+    "url_changed",
+    "title_changed",
+    "mutations",
+    "network",
+    "visual_hash_delta",
+    "a11y_delta",
+    "focus_moved_to",
+    "new_dialogs",
+    "console_errors",
+    "duration_ms",
+  ] as const,
+  additionalProperties: false,
+} as const;
+
 const pageEffectSchema: JSONSchemaObject = {
   type: "object",
   description:
@@ -159,6 +236,42 @@ const pageEffectSchema: JSONSchemaObject = {
   required: ["dom", "url", "focus", "network", "console_errors", "window_ms"] as const,
   additionalProperties: true, // forward-compat for Phase 2+
 } as const;
+
+const actionExpectationSchema: JSONSchemaObject = {
+  type: "object",
+  additionalProperties: false,
+  description:
+    "Predicate the agent expects to hold after the action. The handler polls the page until it matches or `timeout_ms` elapses, then returns `expectation_met` and (if false) `mismatch_reason`. Soft signal — never throws.",
+  properties: {
+    url_matches: { type: "string", description: "Regex matched against window.location.href." },
+    new_dialog: {
+      oneOf: [{ type: "boolean" }, { type: "string" }],
+      description:
+        "true requires any dialog to appear; a string is a regex against the dialog's accessible name.",
+    },
+    value_contains: {
+      type: "object",
+      additionalProperties: false,
+      required: ["ref", "substring"] as const,
+      properties: {
+        ref: { type: "string" },
+        substring: { type: "string" },
+      },
+    },
+    mutations_at_least: { type: "integer", minimum: 0 },
+    network_endpoint: { type: "string", description: "Regex matched against any captured endpoint." },
+    focus_to: { type: "string", description: "CSS selector / ref expected to hold focus." },
+    visual_delta_at_least: { type: "number", minimum: 0, maximum: 1 },
+    title_matches: { type: "string" },
+    timeout_ms: { type: "integer", minimum: 100, maximum: 30000, default: 3000 },
+    poll_interval_ms: { type: "integer", minimum: 50, maximum: 5000, default: 100 },
+  },
+} as const;
+
+const expectationOutputSchema = {
+  expectation_met: { type: "boolean" } as const,
+  mismatch_reason: { type: "string" } as const,
+};
 
 const observeEffectsInputSchema: JSONSchemaObject = {
   type: "boolean",
@@ -343,7 +456,7 @@ const switchTab: ToolDef = {
 
 const navigate: ToolDef = {
   name: "browser_navigate",
-  description: "Point the tab at a URL and optionally wait for page load. Returns page_effect when observe_effects is on, warnings? when expect_effect mismatches.",
+  description: "Point the tab at a URL and optionally wait for page load. Returns `page_effect` when observe_effects is on, `warnings?` when expect_effect mismatches, and an `effect` page_effect envelope (mutations, network, visual hash diff, focus, new dialogs, a11y diff, console errors) for the action window.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -354,6 +467,7 @@ const navigate: ToolDef = {
       wait_for_load: { type: "boolean", default: true },
       observe_effects: observeEffectsInputSchema,
       expect_effect: expectEffectInputSchema,
+      expected: actionExpectationSchema,
     },
   },
   outputSchema: {
@@ -363,6 +477,8 @@ const navigate: ToolDef = {
     properties: {
       final_url: { type: "string" },
       page_effect: pageEffectSchema,
+      effect: effectSchema,
+      ...expectationOutputSchema,
       warnings: warningsOutputSchema,
     },
   },
@@ -379,7 +495,8 @@ const navigate: ToolDef = {
 
 const back: ToolDef = {
   name: "browser_back",
-  description: "Go back one step in the tab's history.",
+  description:
+    "Go back one step in the tab's history. Response includes a `page_effect` envelope describing what changed during the action window.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -394,6 +511,7 @@ const back: ToolDef = {
     required: ["final_url"] as const,
     properties: {
       final_url: { type: "string" },
+      effect: effectSchema,
     },
   },
   action_weight: 1,
@@ -408,7 +526,8 @@ const back: ToolDef = {
 
 const forward: ToolDef = {
   name: "browser_forward",
-  description: "Go forward one step in the tab's history.",
+  description:
+    "Go forward one step in the tab's history. Response includes a `page_effect` envelope describing what changed during the action window.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -423,6 +542,7 @@ const forward: ToolDef = {
     required: ["final_url"] as const,
     properties: {
       final_url: { type: "string" },
+      effect: effectSchema,
     },
   },
   action_weight: 1,
@@ -437,7 +557,8 @@ const forward: ToolDef = {
 
 const reload: ToolDef = {
   name: "browser_reload",
-  description: "Reload the current page.",
+  description:
+    "Reload the current page. Response includes a `page_effect` envelope describing what changed during the action window.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -453,6 +574,7 @@ const reload: ToolDef = {
     required: ["final_url"] as const,
     properties: {
       final_url: { type: "string" },
+      effect: effectSchema,
     },
   },
   action_weight: 1,
@@ -491,6 +613,34 @@ const screenshot: ToolDef = {
       quality: { type: "integer", minimum: 0, maximum: 100 },
       max_dimension: { type: "integer", minimum: 1, maximum: 8192 },
       full_quality: { type: "boolean" },
+      dimensions: {
+        type: "object",
+        additionalProperties: false,
+        description:
+          "Action-grade dimensions hint. `longest_edge` (default 768) caps the longer image side; the other axis preserves aspect ratio. Wins over `max_dimension` when both are set.",
+        properties: {
+          longest_edge: { type: "integer", minimum: 1, maximum: 8192 },
+        },
+      },
+      region: {
+        type: "object",
+        additionalProperties: false,
+        description:
+          "Crop to {x, y, w, h} in CSS pixels (relative to the viewport) before resizing to the target dimensions. Useful for focusing the agent on a specific UI region without paying for the full viewport.",
+        required: ["x", "y", "w", "h"] as const,
+        properties: {
+          x: { type: "number", minimum: 0 },
+          y: { type: "number", minimum: 0 },
+          w: { type: "number", minimum: 0 },
+          h: { type: "number", minimum: 0 },
+        },
+      },
+      annotate: {
+        description:
+          "Overlay annotations. 'som' adds Set-of-Marks numbered labels on interactive elements and returns `som_map` mapping label → {ref, role, name}. 'none' (default) leaves the screenshot un-annotated.",
+        enum: ["som", "none"] as const,
+        default: "none",
+      },
     },
   },
   outputSchema: {
@@ -502,6 +652,41 @@ const screenshot: ToolDef = {
       width: { type: "integer", minimum: 1 },
       height: { type: "integer", minimum: 1 },
       format: { enum: ["png", "jpeg"] as const },
+      observation_token: { type: "string" },
+      css_pixel_dims: {
+        type: "object",
+        additionalProperties: false,
+        required: ["w", "h"] as const,
+        properties: { w: { type: "number" }, h: { type: "number" } },
+      },
+      screenshot_dims: {
+        type: "object",
+        additionalProperties: false,
+        required: ["w", "h"] as const,
+        properties: { w: { type: "number" }, h: { type: "number" } },
+      },
+      scale: { type: "number" },
+      scroll: {
+        type: "object",
+        additionalProperties: false,
+        required: ["x", "y"] as const,
+        properties: { x: { type: "number" }, y: { type: "number" } },
+      },
+      dpr: { type: "number" },
+      representation: { enum: ["screenshot", "screenshot_som"] as const },
+      som_map: {
+        type: "object",
+        additionalProperties: {
+          type: "object",
+          additionalProperties: false,
+          required: ["ref"] as const,
+          properties: {
+            ref: { type: "string" },
+            role: { type: "string" },
+            name: { type: "string" },
+          },
+        },
+      },
     },
   },
   action_weight: 0.5,
@@ -527,6 +712,19 @@ const read: ToolDef = {
       mode: { enum: ["a11y_tree", "markdown", "sanitized_html", "text"] as const },
       max_length: { type: "integer", minimum: 1024, maximum: 1048576, default: 131072 },
       viewport_only: { type: "boolean", default: false },
+      augment: {
+        type: "boolean",
+        default: true,
+        description:
+          "When true (default), each ref in the response carries visual fields (bounds, visible, in_viewport, occluded_by, bg/fg colors, opacity, disabled_visual, display, flex_direction) sourced from a one-shot DOM lookup. Set false to skip the augmentation cost when only structural data is needed.",
+      },
+      scope: {
+        description:
+          "Restrict the read to a slice of the page. 'viewport' (default) filters a11y nodes to those intersecting the viewport rect — cheaper than reading the whole document on long pages. 'document' is the legacy full-page scope. 'ref:<id>' filters to the subtree rooted at the named ref.",
+        type: "string",
+        pattern: "^(viewport|document|ref:.+)$",
+        default: "viewport",
+      },
       verbose: { type: "boolean", default: false },
       selector: { type: "string", minLength: 1, maxLength: 1024 },
       start: { type: "integer", minimum: 0, default: 0 },
@@ -550,7 +748,7 @@ const read: ToolDef = {
       length: { type: "integer", minimum: 0 },
       refs: {
         description:
-          "Map from ref integer (as string key) to a minimal element summary. Populated only when mode == 'a11y_tree'.",
+          "Map from ref integer (as string key) to a minimal element summary. Populated only when mode == 'a11y_tree'. Each entry carries augmented visual fields (bounds, visible, etc.) when augment != false.",
         type: "object",
         additionalProperties: {
           type: "object",
@@ -562,6 +760,25 @@ const read: ToolDef = {
             value: { type: "string" },
             tag: { type: "string" },
             input_type: { type: "string" },
+            bounds: {
+              type: ["object", "null"],
+              additionalProperties: false,
+              properties: {
+                x: { type: "number" },
+                y: { type: "number" },
+                w: { type: "number" },
+                h: { type: "number" },
+              },
+            },
+            visible: { type: "boolean" },
+            in_viewport: { type: "boolean" },
+            occluded_by: { type: ["string", "null"] },
+            bg_color: { type: ["string", "null"] },
+            fg_color: { type: ["string", "null"] },
+            opacity: { type: "number" },
+            disabled_visual: { type: "boolean" },
+            display: { type: "string" },
+            flex_direction: { type: "string" },
           },
         },
       },
@@ -609,19 +826,76 @@ const quickRead: ToolDef = {
         description: "Filter results to elements with this ARIA role (e.g. 'button', 'textbox', 'link').",
       },
       viewport_only: { type: "boolean", default: false },
+      scope: {
+        description:
+          "Restrict the search to a slice of the page. 'viewport' (default) is faster than the legacy full-document walk on long pages. 'document' is the legacy full-page scope. 'ref:<id>' filters to the subtree rooted at the named ref.",
+        type: "string",
+        pattern: "^(viewport|document|ref:.+)$",
+        default: "viewport",
+      },
+      augment: {
+        type: "boolean",
+        default: true,
+        description:
+          "When true (default), each match carries visual fields (visible, in_viewport, occluded_by, bg/fg colors, opacity, disabled_visual, display, flex_direction) sourced from a one-shot DOM lookup. Set false to skip the augmentation cost when only structural data is needed.",
+      },
+      only_enabled: {
+        type: "boolean",
+        default: false,
+        description: "Filter to matches that are not `disabled_visual` (greyed out, pointer-events:none, etc.).",
+      },
+      only_visible: {
+        type: "boolean",
+        default: false,
+        description: "Filter to matches whose computed visibility is true (display !== none, visibility !== hidden, opacity > 0.01).",
+      },
+      only_in_viewport: {
+        type: "boolean",
+        default: false,
+        description: "Filter to matches whose bounding box intersects the viewport.",
+      },
+      within_region: {
+        type: "object",
+        additionalProperties: false,
+        required: ["x", "y", "w", "h"] as const,
+        description: "Filter to matches whose bounding box intersects this CSS-pixel region (relative to the viewport).",
+        properties: {
+          x: { type: "number" },
+          y: { type: "number" },
+          w: { type: "number" },
+          h: { type: "number" },
+        },
+      },
+      near: {
+        type: "object",
+        additionalProperties: false,
+        required: ["ref", "radius_px"] as const,
+        description:
+          "Filter to matches whose bounding-box center is within `radius_px` CSS pixels of the named ref's center.",
+        properties: {
+          ref: { type: "string" },
+          radius_px: { type: "number", minimum: 0 },
+        },
+      },
+      best_match: {
+        type: "boolean",
+        default: false,
+        description:
+          "When true, return only the highest-confidence single match in `match` (not `matches`). Confidence is exact > prefix > substring with smaller-bounds tiebreaker.",
+      },
       max_results: { type: "integer", minimum: 1, maximum: 50, default: 10 },
     },
   },
   outputSchema: {
     type: "object",
     additionalProperties: false,
-    required: ["matches", "total", "query"] as const,
+    required: ["total", "query"] as const,
     properties: {
       matches: {
         type: "array",
         items: {
           type: "object",
-          additionalProperties: false,
+          additionalProperties: true,
           required: ["ref", "role", "name"] as const,
           properties: {
             ref: refSchema,
@@ -643,6 +917,11 @@ const quickRead: ToolDef = {
           },
         },
       },
+      match: {
+        description: "Set when best_match: true. The single highest-confidence match (or null when no matches found).",
+        type: ["object", "null"],
+        additionalProperties: true,
+      },
       total: { type: "integer", minimum: 0 },
       query: { type: "string" },
     },
@@ -655,7 +934,7 @@ const quickRead: ToolDef = {
 const click: ToolDef = {
   name: "browser_click",
   description:
-    "Click an element identified by ref. Fires pointer/mouse events on the element. Returns `{clicked, page_effect?, warnings?}`.",
+    "Click an element identified by ref. Fires pointer/mouse events on the element. Returns `{clicked, page_effect?, effect, warnings?}` — `effect` is the page_effect envelope (mutations, network, visual hash diff, focus, new dialogs, a11y diff, console errors).",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -674,6 +953,7 @@ const click: ToolDef = {
       },
       observe_effects: observeEffectsInputSchema,
       expect_effect: expectEffectInputSchema,
+      expected: actionExpectationSchema,
     },
   },
   outputSchema: {
@@ -683,6 +963,7 @@ const click: ToolDef = {
     properties: {
       clicked: { const: true },
       navigated: { type: "boolean" },
+      ...expectationOutputSchema,
       // Set when overlay:'simple'|'smart' was on and the initial click was
       // occluded; indicates the overlay was dismissed and the click retried.
       dismissed_overlay: { type: "boolean" },
@@ -709,6 +990,7 @@ const click: ToolDef = {
       // we walked up to the nearest interactive ancestor to dispatch on.
       retargeted: { type: "boolean" },
       page_effect: pageEffectSchema,
+      effect: effectSchema,
       warnings: warningsOutputSchema,
     },
   },
@@ -726,7 +1008,7 @@ const click: ToolDef = {
 const clickAt: ToolDef = {
   name: "browser_click_at",
   description:
-    "Click at viewport coordinates (x, y) — no ref required. Escape hatch for canvas, maps, games, and anything the a11y walker can't address.",
+    "Click at viewport coordinates (x, y) — no ref required. Escape hatch for canvas, maps, games, and anything the a11y walker can't address. With `coord_space: 'screenshot:<token>'`, x/y are interpreted in screenshot pixels and translated to CSS pixels via the observation cache. Response includes a `page_effect` envelope describing what changed during the action window.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -737,6 +1019,14 @@ const clickAt: ToolDef = {
       y: { type: "number", minimum: 0 },
       button: { enum: ["left", "middle", "right"] as const, default: "left" },
       modifiers: modifiersSchema,
+      coord_space: {
+        description:
+          "Coordinate space for x,y. 'css' (default) treats them as CSS pixels relative to the viewport. 'screenshot:<token>' treats them as pixels inside the screenshot identified by the token (returned by browser_screenshot / browser_observe).",
+        type: "string",
+        pattern: "^(css|screenshot:.+)$",
+        default: "css",
+      },
+      expected: actionExpectationSchema,
     },
   },
   outputSchema: {
@@ -747,6 +1037,19 @@ const clickAt: ToolDef = {
       clicked: { const: true },
       x: { type: "number" },
       y: { type: "number" },
+      effect: effectSchema,
+      ...expectationOutputSchema,
+      hit_element: {
+        type: "object",
+        additionalProperties: false,
+        required: ["tag", "role", "name", "ref"] as const,
+        properties: {
+          tag: { type: "string" },
+          role: { type: "string" },
+          name: { type: "string" },
+          ref: { type: "string" },
+        },
+      },
     },
   },
   action_weight: 1,
@@ -763,7 +1066,7 @@ const clickAt: ToolDef = {
 const clickByText: ToolDef = {
   name: "browser_click_by_text",
   description:
-    "Click the visible element whose accessible name matches the given text. Bypasses the a11y-tree ref mechanism — use this when browser_read didn't surface the element as a ref (common on SPA sites with div-wrapped click handlers), or when the agent knows the exact button label and doesn't want to pay for a full read first. Typically called from an operator sub-agent.",
+    "Click the visible element whose accessible name matches the given text. Bypasses the a11y-tree ref mechanism — use this when browser_read didn't surface the element as a ref (common on SPA sites with div-wrapped click handlers), or when the agent knows the exact button label and doesn't want to pay for a full read first. Typically called from an operator sub-agent. Response includes a `page_effect` envelope describing what changed during the action window.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -786,6 +1089,7 @@ const clickByText: ToolDef = {
       case_sensitive: { type: "boolean", default: false },
       button: { enum: ["left", "middle", "right"] as const, default: "left" },
       modifiers: modifiersSchema,
+      expected: actionExpectationSchema,
     },
   },
   outputSchema: {
@@ -813,6 +1117,8 @@ const clickByText: ToolDef = {
           role: { type: ["string", "null"] },
         },
       },
+      effect: effectSchema,
+      ...expectationOutputSchema,
     },
   },
   action_weight: 1,
@@ -829,18 +1135,22 @@ const clickByText: ToolDef = {
 const typeTool: ToolDef = {
   name: "browser_type",
   description:
-    "Type text into an element identified by ref. Two dispatch modes: 'keystroke' (default for short text, fires per-character keydown/beforeinput/input/keyup — what autocompletes and per-keystroke validators need), 'paste' (bulk-assign the value in one shot, use for long text where per-char events are wasteful). Default resolves to 'keystroke' for text <=64 chars, 'paste' otherwise. Returns `{typed, mode, page_effect?, warnings?}`.",
+    "Type text into an element identified by ref. Two dispatch modes: 'paste' (default, bulk Input.insertText — atomic, no per-character keydown events, so SPA shortcut handlers like Notion's space-for-AI overlay don't intercept the typed text mid-stream), 'keystroke' (fires per-character rawKeyDown/char/keyUp — needed for canvas-backed editors like Google Sheets cells that listen for real key events on a hidden input; also for autocompletes / per-keystroke validators). Default is 'paste' except when the ref's selector matches a known canvas editor (auto-routed to 'keystroke'). Returns `{typed, mode, page_effect?, effect, warnings?}` — `effect` is the page_effect envelope.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
-    required: ["tab_id", "ref", "text"] as const,
+    required: ["tab_id", "text"] as const,
     properties: {
       tab_id: tabIdSchema,
-      ref: refSchema,
+      ref: {
+        ...refSchema,
+        description:
+          "Optional. If omitted, text is inserted into document.activeElement via Input.insertText — call browser_click_at first to focus the target field. When provided, the handler clicks the ref to focus it and then types.",
+      },
       text: { type: "string", maxLength: 32768 },
       mode: {
         description:
-          "Dispatch mode — see tool description. Omit to auto-select by text length.",
+          "Dispatch mode. Omit for auto: 'paste' for most targets, 'keystroke' when the ref's selector matches a known canvas editor (e.g. Google Sheets cell). Force 'keystroke' when you need per-character keydown events (autocompletes, validators). Force 'paste' to skip key events entirely.",
         enum: ["keystroke", "paste"] as const,
       },
       submit: { type: "boolean", default: false },
@@ -852,6 +1162,7 @@ const typeTool: ToolDef = {
       delay_ms: { type: "integer", minimum: 0, maximum: 200, default: 0 },
       observe_effects: observeEffectsInputSchema,
       expect_effect: expectEffectInputSchema,
+      expected: actionExpectationSchema,
     },
   },
   outputSchema: {
@@ -868,6 +1179,8 @@ const typeTool: ToolDef = {
         description: "True when the field was cleared before typing (clear_mode was set).",
       },
       page_effect: pageEffectSchema,
+      effect: effectSchema,
+      ...expectationOutputSchema,
       warnings: warningsOutputSchema,
     },
   },
@@ -885,7 +1198,7 @@ const typeTool: ToolDef = {
 const findAndReplace: ToolDef = {
   name: "browser_find_and_replace",
   description:
-    "Replace a substring inside an editable element without clearing the whole field. Works on <input>, <textarea>, and contenteditable. Target resolves to `ref` if given, otherwise document.activeElement. Dispatches via beforeinput + execCommand insertText + Range fallback.",
+    "Replace a substring inside an editable element without clearing the whole field. Works on <input>, <textarea>, and contenteditable. Target resolves to `ref` if given, otherwise document.activeElement. Dispatches via beforeinput + execCommand insertText + Range fallback. Response includes a `page_effect` envelope describing what changed during the action window.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -906,6 +1219,7 @@ const findAndReplace: ToolDef = {
     properties: {
       replaced: { type: "integer", minimum: 0 },
       used_fallback: { type: "boolean" },
+      effect: effectSchema,
     },
   },
   action_weight: 1,
@@ -923,7 +1237,7 @@ const findAndReplace: ToolDef = {
 const press: ToolDef = {
   name: "browser_press",
   description:
-    "Send a keyboard-only chord to the tab (CDP key names). Does not target a specific ref. Leading entries are treated as modifiers and the final entry as the key — e.g. [\"Primary\",\"KeyA\"] sends select-all. Use `Primary` instead of Meta/Control for portable chords; the extension resolves it to Meta on macOS and Control elsewhere at dispatch time. Returns `{pressed, page_effect?, warnings?}`.",
+    "Send a keyboard-only chord to the tab (CDP key names). Does not target a specific ref. Leading entries are treated as modifiers and the final entry as the key — e.g. [\"Primary\",\"KeyA\"] sends select-all. Use `Primary` instead of Meta/Control for portable chords; the extension resolves it to Meta on macOS and Control elsewhere at dispatch time. Returns `{pressed, page_effect?, effect, warnings?}` — `effect` is the page_effect envelope (mutations, network, visual hash diff, focus, new dialogs, a11y diff, console errors).",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -945,6 +1259,7 @@ const press: ToolDef = {
       repeat: { type: "integer", minimum: 1, maximum: 20, default: 1 },
       observe_effects: observeEffectsInputSchema,
       expect_effect: expectEffectInputSchema,
+      expected: actionExpectationSchema,
     },
   },
   outputSchema: {
@@ -954,6 +1269,8 @@ const press: ToolDef = {
     properties: {
       pressed: { const: true },
       page_effect: pageEffectSchema,
+      effect: effectSchema,
+      ...expectationOutputSchema,
       warnings: warningsOutputSchema,
     },
   },
@@ -1014,14 +1331,23 @@ const scroll: ToolDef = {
 const hover: ToolDef = {
   name: "browser_hover",
   description:
-    "Move the synthetic mouse over an element identified by ref (fires CSS :hover and pointer events).",
+    "Move the synthetic mouse over an element identified by ref (fires CSS :hover and pointer events). Also accepts (x, y) coords with `coord_space` like browser_click_at — useful for hovering over canvas / SoM-labeled regions. Response includes a `page_effect` envelope describing what changed during the action window.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
-    required: ["tab_id", "ref"] as const,
+    required: ["tab_id"] as const,
     properties: {
       tab_id: tabIdSchema,
       ref: refSchema,
+      x: { type: "number", minimum: 0 },
+      y: { type: "number", minimum: 0 },
+      coord_space: {
+        description:
+          "Coordinate space for x,y. 'css' (default) treats them as CSS pixels relative to the viewport. 'screenshot:<token>' treats them as pixels inside the screenshot identified by the token.",
+        type: "string",
+        pattern: "^(css|screenshot:.+)$",
+        default: "css",
+      },
     },
   },
   outputSchema: {
@@ -1030,6 +1356,7 @@ const hover: ToolDef = {
     required: ["hovered"] as const,
     properties: {
       hovered: { const: true },
+      effect: effectSchema,
     },
   },
   action_weight: 0.5,
@@ -1922,6 +2249,104 @@ const releaseTab: ToolDef = {
 // Public catalogue
 // ---------------------------------------------------------------------------
 
+// Adaptive read tool — picks the cheapest viable representation given
+// page characteristics and intent. See the observation-architecture plan.
+const observe: ToolDef = {
+  name: "browser_observe",
+  description:
+    "Adaptive page observation. Returns the cheapest representation (augmented a11y, screenshot, box-drawing summary, or diff) given page size, canvas density, and stated intent. Default mode 'auto' picks based on the page; specify 'text'|'visual'|'structure'|'diff' to force a representation.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["tab_id"] as const,
+    properties: {
+      tab_id: tabIdSchema,
+      mode: {
+        enum: ["auto", "text", "visual", "structure", "diff"] as const,
+        default: "auto",
+        description:
+          "Representation selector. 'auto' (default) chooses based on page characteristics. 'text' = augmented a11y; 'visual' = action-grade screenshot; 'structure' = box-drawing layout summary; 'diff' = changes since the supplied observation_token.",
+      },
+      scope: {
+        type: "string",
+        pattern: "^(viewport|document|ref:.+)$",
+        default: "viewport",
+        description:
+          "Restrict the observation to a slice of the page (same shape as browser_read).",
+      },
+      budget_tokens: {
+        type: "integer",
+        minimum: 100,
+        maximum: 100000,
+        description:
+          "Optional token budget. When set, 'auto' picks the largest representation that fits.",
+      },
+      since: {
+        type: "string",
+        description:
+          "Previous observation_token. Required for mode='diff'; optional for 'auto' (the heuristic may emit a diff when the prior representation is comparable).",
+      },
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["representation", "observation_token", "page_meta"] as const,
+    properties: {
+      representation: {
+        enum: [
+          "augmented_a11y",
+          "screenshot",
+          "box_drawing",
+          "box_drawing+screenshot",
+          "diff",
+          "screenshot_som",
+        ] as const,
+      },
+      observation_token: { type: "string" },
+      payload: {},
+      page_meta: {
+        type: "object",
+        additionalProperties: false,
+        required: ["url", "title", "scroll", "viewport_dims", "dpr"] as const,
+        properties: {
+          url: { type: "string" },
+          title: { type: "string" },
+          scroll: {
+            type: "object",
+            additionalProperties: false,
+            required: ["x", "y"] as const,
+            properties: {
+              x: { type: "number" },
+              y: { type: "number" },
+            },
+          },
+          viewport_dims: {
+            type: "object",
+            additionalProperties: false,
+            required: ["w", "h"] as const,
+            properties: {
+              w: { type: "number" },
+              h: { type: "number" },
+            },
+          },
+          dpr: { type: "number" },
+        },
+      },
+      warnings: warningsOutputSchema,
+    },
+  },
+  action_weight: 0,
+  risky: "never",
+  errorCodes: [
+    ...BASE_CODES,
+    ...TAB_CODES,
+    ...REF_CODES,
+    "OBSERVATION_TOKEN_INVALID",
+    "CDP_ATTACH_FAILED",
+  ] as const,
+} as const;
+
 export const TOOL_DEFS: readonly ToolDef[] = [
   listTabs,
   currentTab,
@@ -1935,6 +2360,7 @@ export const TOOL_DEFS: readonly ToolDef[] = [
   screenshot,
   read,
   quickRead,
+  observe,
   click,
   clickAt,
   clickByText,

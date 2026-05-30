@@ -62,8 +62,25 @@ function isPersistedSnapshot(value: unknown): value is PersistedSnapshot {
 
 export class RefCache {
   private readonly snapshots = new Map<string, RefSnapshot>();
+  // One-deep history: when a new snapshot replaces the current one, the
+  // outgoing snapshot moves here. This lets lookupWithFallback() resolve
+  // refs the agent received from an earlier read after an intervening
+  // browser_quick_read or browser_observe(structure) replaced the
+  // active snapshot. Without this, every observation invalidates every
+  // outstanding ref and the agent has to re-read before each action.
+  private readonly previous = new Map<string, RefSnapshot>();
 
   set(tab_id: string, snapshot: RefSnapshot): void {
+    const outgoing = this.snapshots.get(tab_id);
+    if (outgoing !== undefined && outgoing.url === snapshot.url) {
+      // Same-page replacement — keep the outgoing snapshot as the fallback
+      // so refs from the prior read survive one round of observation.
+      this.previous.set(tab_id, outgoing);
+    } else {
+      // URL change (or first set) — clear the fallback; prior refs are
+      // definitionally stale.
+      this.previous.delete(tab_id);
+    }
     this.snapshots.set(tab_id, snapshot);
     void this.persist(tab_id, snapshot);
   }
@@ -78,14 +95,43 @@ export class RefCache {
     return snap.entries.get(ref);
   }
 
+  /**
+   * Resolve a ref against the current snapshot first; if absent (or the
+   * ref number wasn't issued by the current snapshot) fall back to the
+   * one-deep previous snapshot. Returns the entry plus a flag indicating
+   * whether the fallback was used so callers can warn or surface it.
+   */
+  lookupWithFallback(
+    tab_id: string,
+    ref: number,
+  ): { entry: RefEntry; source: "current" | "previous" } | undefined {
+    const current = this.snapshots.get(tab_id);
+    const fromCurrent = current?.entries.get(ref);
+    if (fromCurrent !== undefined) {
+      return { entry: fromCurrent, source: "current" };
+    }
+    const prev = this.previous.get(tab_id);
+    if (prev === undefined) return undefined;
+    // Only fall back if the previous snapshot's URL still matches the
+    // current snapshot's URL (or the current snapshot is missing, e.g.
+    // SW eviction). Cross-URL fallback would resolve refs against a
+    // page the agent isn't even looking at any more.
+    if (current !== undefined && current.url !== prev.url) return undefined;
+    const fromPrev = prev.entries.get(ref);
+    if (fromPrev === undefined) return undefined;
+    return { entry: fromPrev, source: "previous" };
+  }
+
   invalidate(tab_id: string): void {
     this.snapshots.delete(tab_id);
+    this.previous.delete(tab_id);
     void chrome.storage.session.remove(storageKey(tab_id)).catch(() => {});
   }
 
   clear(): void {
     const keys = Array.from(this.snapshots.keys()).map(storageKey);
     this.snapshots.clear();
+    this.previous.clear();
     if (keys.length > 0) {
       void chrome.storage.session.remove(keys).catch(() => {});
     }
