@@ -16,6 +16,7 @@
 export const FEATURES = [
   "procedures",
   "lore",
+  "playbooks",
 ] as const;
 
 export type FeatureName = (typeof FEATURES)[number];
@@ -46,6 +47,12 @@ export const FEATURE_METADATA: Record<FeatureName, FeatureMetadata> = {
   lore: {
     description:
       "Cross-agent lore store at ~/browserops/lore/. Save/search/get/delete named markdown entries via MCP — visible to every MCP client (Cursor, Zed, Claude Code, custom SDK). Lets agents teach each other lessons that outlive a single session.",
+    stability: "experimental",
+    default: false,
+  },
+  playbooks: {
+    description:
+      "Deterministic-first browser playbooks with semantic locators, auto-wait, retrying assertions, and per-step LLM fallback via playbooks_resume. Stored at ~/browserops/playbooks/. Complements procedures: procedures are LLM-baked recipes, playbooks are durable orchestrations.",
     stability: "experimental",
     default: false,
   },
