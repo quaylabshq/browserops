@@ -194,7 +194,10 @@ export const LOCATOR_SCHEMA = {
       additionalProperties: false,
       properties: {
         ref: { type: "integer", minimum: 1 },
-        locator: { $ref: "#/$defs/locator_inner" },
+        // Recursive locator shape is intentionally untyped here to avoid
+        // pulling a $ref into the schema; the resolver validates the inner
+        // shape at runtime.
+        locator: { type: "object", additionalProperties: true },
         radius_px: { type: "number", minimum: 0 },
       },
     },
