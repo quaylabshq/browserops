@@ -109,7 +109,19 @@ When destructive inputs need a verification value, default to
        `do: js` with a narrow document.evaluate call, or (c) declare
        fallback.strategy: relocate_then_llm so a future LLM patch can
        re-resolve at runtime.
-   Cap probe at ~5 browser_* calls (one read + one propose per control).
+     - Confirm ACTIONABILITY, not just uniqueness. browser_propose_locator
+       proves the descriptor resolves to exactly one element — it does NOT
+       prove that dispatching the action through the runtime produces the
+       intended effect. The two diverge constantly: a Compose button that
+       opens nothing, an SPA hash-nav that no-ops when you're already on
+       the route, a control behind an isTrusted gate. For the ENTRY step
+       especially (open composer / open modal / route change), dry-run the
+       real primitive live (browser_click / browser_navigate) and read the
+       returned `effect`/`page_effect`. A zero-effect dispatch on something
+       that should have changed state is a silent failure — fix it NOW,
+       before you author the rest of the YAML on top of a broken entry.
+   Cap probe at ~6 browser_* calls (one read + one propose per control +
+   one actionability dry-run of the entry control).
    If propose returns tier-3 for every control, the UI may not be
    stably addressable — note it in the final report and ship a
    relocate_then_llm-heavy YAML so the runtime can recover.
@@ -144,7 +156,21 @@ When destructive inputs need a verification value, default to
        executor auto-calls browser_read before every browser_locate, so
        the ref-cache is fresh even after SPA hash transitions (Gmail's
        #inbox → #inbox?compose=new, etc.). A manual prime step is
-       redundant and just slows the run down.
+       redundant and just slows the run down. (If a locator step ever
+       halts with "no ref-cache snapshot for this tab", that is a RUNTIME
+       bug in the auto-prime — NOT your locator. See the divergence→cause
+       table in §9 before touching the YAML.)
+     - ENTRY-STEP PATTERN — open the surface reliably. Don't assume a
+       URL/hash navigation opens a composer or modal: SPA hash-only
+       changes (e.g. #inbox → #inbox?compose=new) no-op when you're
+       already on that route, so the dialog never opens. Author the entry
+       as THREE steps: (1) `do: navigate` to the app's base view; (2)
+       `do: wait` for the entry control to be present (real
+       browser_wait_for — its text search works where the `text_visible`
+       expect predicate may not); (3) `do: click` the entry control via
+       its proposed locator with `expect: { new_dialog: ... }`. This is
+       what makes the flow work whether the tab starts on the app or on
+       some unrelated page.
      - Every action step with a positive success criterion gets an
        expect: { ... } block. expect is REQUIRED on any step whose
        fallback.strategy is "llm" — without it the runtime can't tell
@@ -160,10 +186,20 @@ When destructive inputs need a verification value, default to
        through with.inputs — procedures_execute ignores a top-level
        tab_id on a procedure_call step.
 
-4. Verify with procedures_execute({strict: true}). strict is mandatory
-   during authoring — it refuses every LLM fallback, so a clean run means
-   the locators + expect predicates are good without help. Use the safe
-   dummies from step 2 for destructive inputs.
+4. Verify INCREMENTALLY, not all-at-once. Don't author 10 steps and only
+   discover at the final run that step 1 was broken. Climb a ladder and
+   stop at the first rung that fails — each rung localizes the fault to a
+   different layer:
+     a. Resolve every locator: browser_locate({tab_id, locator}) for each
+        authored locator. A miss here = bad descriptor (re-propose) OR a
+        runtime prime bug (see §9) — not a deep logic problem.
+     b. Dry-run the ENTRY step live (the navigate→wait→open sequence) and
+        read the effect. Confirm the composer/modal actually opened
+        (new_dialog present, non-zero a11y_delta) BEFORE trusting the tail.
+     c. Full run: procedures_execute({strict: true}). strict is mandatory
+        during authoring — it refuses every LLM fallback, so a clean run
+        means the locators + expect predicates are good without help. Use
+        the safe dummies from step 2 for destructive inputs.
 
 5. Build a goal-grounded predicate OUTSIDE the procedure to confirm
    success. The runtime's verify{} block is the spec; the agent's external
@@ -176,7 +212,31 @@ When destructive inputs need a verification value, default to
    If completed: true but the external predicate fails, the procedure is
    still broken — fix the verify block, fix the locators, do not save.
 
-6. On clean strict run + external predicate pass:
+6. RECONFIRM REPEATEDLY before calling it done — one clean run is NOT
+   proof. A single pass can be a fluke: a dialog that happened to be open,
+   a cache that happened to be warm, a network race that happened to win.
+   Run the FULL flow end-to-end at least 3 times in strict mode, and after
+   EACH run re-check the external goal predicate from step 5. To call it
+   confirmed, ALL of these must hold:
+     - ≥3 runs return completed: true in strict mode, with
+       used_llm_fallback staying false on every run (no run leaned on an
+       LLM patch).
+     - The external predicate passes after every run, against a FRESH
+       artefact each time (e.g. 3 distinct sent-mail confirmations, not
+       the same message re-counted).
+     - You VARY the starting state across runs to prove robustness, not
+       repetition: one run already on the app, one starting from a blank
+       or unrelated tab, one immediately after a prior run. A flow that
+       only works from one starting state is not trusted-ready.
+     - Drift health stays clean across the streak: any relocate,
+       target_changed, or ambiguous_resolve on a step means the locator is
+       marginal — tighten it (re-propose for a tier-1 descriptor) and
+       restart the count.
+   The target is N CONSECUTIVE clean runs, not N runs total: if any run
+   diverges, fix the cause and RESET the counter. Only an unbroken streak
+   earns promotion.
+
+7. On a clean ≥3-run streak + external predicate pass every time:
    procedures_save({ name, yaml, overwrite: true, bump_success: true })
    → procedure flips to status:trusted and becomes discoverable via
    procedures_search by default.
@@ -190,17 +250,22 @@ When destructive inputs need a verification value, default to
    worked last week may not be unique anymore), re-verify, then bump.
    Do NOT report success — surface the demote_reason in the final report.
 
-7. On fail: edit the YAML, re-execute. Up to ~3 self-correction attempts.
-   If still failing after 3, write a structured failure note to memory
-   and tell the user what blocked you. Do not ask them to demonstrate;
-   if they want to, they will offer.
+8. On fail: classify BEFORE you re-edit. Map the divergence with the §9
+   table first — if it points at the runtime ("no ref-cache snapshot", a
+   url "" on a navigate that clearly moved, a text predicate that can never
+   match the text you can see), it is NOT an authoring problem and editing
+   the YAML will loop forever; surface the runtime fault instead. If it's
+   genuinely your YAML, edit and re-run from the ladder (step 4), up to ~3
+   self-correction attempts. If still blocked after 3, write a structured
+   failure note to memory and tell the user what blocked you. Do not ask
+   them to demonstrate; if they want to, they will offer.
 
-8. Update memory with what you learned about the app — role/name pairs
+9. Update memory with what you learned about the app — role/name pairs
    that worked, tier-1 attrs that disambiguated, the working network
    endpoint, things that didn't work. The next procedure for the same
    app rides on this.
 
-9. Report once.
+10. Report once.
 ```
 
 ---
@@ -276,16 +341,19 @@ For a flow against a known SaaS app with priors in memory:
 - 1 `procedures_search` (pre-flight reuse check)
 - 1 `browser_read({mode: "a11y_tree", augment: true})` to seed the snapshot
 - N `browser_propose_locator` (one per control you'll touch)
+- 1 entry-step actionability dry-run (browser_click/navigate, read effect)
 - 1 `procedures_save` (draft)
-- 1 `procedures_execute({strict: true})` to verify
-- 1 external-API predicate call
+- ≥3 `procedures_execute({strict: true})` — the reconfirm streak (step 6),
+  each paired with an external-API predicate call
 - 1 `procedures_save({overwrite: true, bump_success: true})` to promote
 - 1 final report
 
-For a 5-step flow that's <14 tool calls on a known app. More than 25
-is the signal that priors are missing, the proposer kept returning
-fragile descriptors (the UI lacks stable signals), or the verify
-predicate isn't tight.
+For a 5-step flow that's <22 tool calls on a known app (the reconfirm
+streak is the bulk of it — and it is not optional). More than 32 is the
+signal that priors are missing, the proposer kept returning fragile
+descriptors (the UI lacks stable signals), the verify predicate isn't
+tight, or the reconfirm streak keeps resetting (a marginal locator —
+tighten it rather than re-running).
 
 For a brand-new app with no memory: budget ~25-35 calls (explore +
 author + verify + save + memory write). After 2-3 successful runs against
@@ -325,3 +393,44 @@ the recursive call.
 - **Prefer the proposer's tier-1 output** (aria_label / data_testid /
   href / attr) for selectors. Hand-written `{role, name}` is tier 2 at
   best — it works until the framework restyles or the copy changes.
+
+---
+
+## 9. Predicate reliability + divergence → cause
+
+Not every `expect:`/`verify:` predicate is equally trustworthy. Prefer the
+ones sourced from the action's effect envelope — they're populated from the
+tool result directly and can't silently no-op:
+
+  RELIABLE (effect / page_effect-sourced — reach for these first):
+    - network_endpoint_seen / network_endpoint  → a backend call fired
+    - new_dialog                                → a modal appeared
+    - dom_added_min / dom_removed_min           → DOM mutated / torn down
+    - visual_delta_at_least                     → viewport visibly changed
+    - focus_moved_to                            → focus landed somewhere
+    - url_matches                               → URL changed (navigate too)
+
+  USE WITH CARE:
+    - text_visible / text_invisible — depends on the runtime populating
+      page text into the observation. If a text predicate "never matches"
+      on text you can plainly SEE on the page, don't fight it: switch to an
+      effect-based predicate (new_dialog for "a thing opened",
+      network_endpoint_seen for "it submitted", dom_removed_min for "the
+      dialog closed"). A structurally-impossible predicate loops authoring
+      forever.
+
+Map a strict-run divergence to the layer that actually failed BEFORE you
+touch the YAML — re-editing locators won't fix a runtime fault:
+
+  | Divergence reason                                   | Likely cause        | Action |
+  |-----------------------------------------------------|---------------------|--------|
+  | "no ref-cache snapshot for this tab"                | runtime auto-prime  | Not your locator — surface the prime bug. |
+  | url "" on a navigate that clearly moved             | runtime observation | URL not captured for this tool — use an effect predicate or report. |
+  | text_visible "<text you can see>" not found         | predicate unsupported | Switch to an effect-based predicate. |
+  | "locator matched no elements" (descriptor looks ok) | timing / not loaded | Add a `do: wait` for the control before the step. |
+  | "locator matched no elements" (descriptor wrong)    | bad locator         | Re-propose on a fresh snapshot; prefer tier-1. |
+  | "no new dialog matched ..." after a real open       | wrong dialog name   | Loosen the new_dialog regex / drop to `new_dialog: true`. |
+  | expect passed but external predicate failed         | weak expect         | Tighten expect; the run was a false positive. |
+
+Rule of thumb: if the same step fails the same way across two edits AND the
+descriptor visibly resolves on the page, suspect the runtime, not your YAML.
