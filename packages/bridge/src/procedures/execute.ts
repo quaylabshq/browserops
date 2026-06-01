@@ -427,8 +427,9 @@ export async function runProcedure(
   // Top-level verify
   let verifyPassed: boolean | undefined;
   if (procedure.verify !== undefined) {
-    const obs = await captureObservation(ctx, undefined);
-    const verify = await pollExpect(procedure.verify, async () => obs);
+    const verify = await pollExpect(procedure.verify, () =>
+      captureObservation(ctx, undefined),
+    );
     verifyPassed = verify.matched;
     if (!verify.matched) {
       await flushHealth(procedure.name, healthAccum);
@@ -507,7 +508,7 @@ async function tryStepOnce(
     try {
       await wsBridge.callExtension(
         "browser_read",
-        { tab_id, mode: "a11y_tree", scope: { kind: "viewport" }, augment: true },
+        { tab_id, mode: "a11y_tree", scope: "viewport", augment: true },
         DEFAULT_TOOL_TIMEOUT_MS,
       );
     } catch {
@@ -615,9 +616,18 @@ async function tryStepOnce(
 
   // Expect polling
   if (step.expect !== undefined) {
-    const polled = await pollExpect(step.expect, async () =>
-      buildObservation(toolResult),
-    );
+    const needsText = expectNeedsText(step.expect);
+    const polled = await pollExpect(step.expect, async () => {
+      const obs: Observation = buildObservation(toolResult) ?? {};
+      // text_visible / text_invisible inspect rendered page text, which the
+      // tool result does not carry. Fetch it live, re-reading each poll so
+      // we actually wait for the text to appear (or disappear).
+      if (needsText) {
+        const text = await readLiveText(ctx, tab_id);
+        if (text !== undefined) obs.text = text;
+      }
+      return obs;
+    });
     if (!polled.matched) {
       return {
         ok: false,
@@ -937,18 +947,71 @@ function buildObservation(toolResult: unknown): Observation | undefined {
     }
   }
 
+  // browser_navigate returns the landed URL as `final_url`, not `url`.
+  // Accept both so url_matches works on navigate steps as well as on
+  // tools that surface `url` directly.
   if (typeof r["url"] === "string") obs.url = r["url"] as string;
+  else if (typeof r["final_url"] === "string") obs.url = r["final_url"] as string;
   if (typeof r["title"] === "string") obs.title = r["title"] as string;
 
   return obs;
+}
+
+/** True when an expect/verify predicate inspects rendered page text. */
+function expectNeedsText(expect: StepDef["expect"]): boolean {
+  return (
+    expect != null &&
+    (expect.text_visible !== undefined || expect.text_invisible !== undefined)
+  );
+}
+
+/**
+ * Fetch the tab's rendered viewport text via browser_read(mode:"text").
+ * Best-effort — returns undefined on any failure so a text predicate just
+ * reports "not found" rather than throwing.
+ */
+async function readLiveText(
+  ctx: RunProcedureContext,
+  tab_id: string,
+): Promise<string | undefined> {
+  try {
+    const r = await ctx.wsBridge.callExtension<{ content?: string }>(
+      "browser_read",
+      { tab_id, mode: "text", scope: "viewport" },
+      DEFAULT_TOOL_TIMEOUT_MS,
+    );
+    return typeof r?.content === "string" ? r.content : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 async function captureObservation(
   ctx: RunProcedureContext,
   baseResult: unknown,
 ): Promise<Observation | undefined> {
-  void ctx;
-  return buildObservation(baseResult);
+  const obs: Observation = buildObservation(baseResult) ?? {};
+  // A standalone verify (no action result to inspect) needs live state.
+  // browser_read(mode:"text") returns the rendered text plus url + title in
+  // one call, so text_visible / url_matches / title predicates all resolve.
+  // Best-effort: leave obs as-is on failure.
+  try {
+    const r = await ctx.wsBridge.callExtension<{
+      content?: string;
+      url?: string;
+      title?: string;
+    }>(
+      "browser_read",
+      { tab_id: ctx.tab_id, mode: "text", scope: "viewport" },
+      DEFAULT_TOOL_TIMEOUT_MS,
+    );
+    if (obs.text === undefined && typeof r?.content === "string") obs.text = r.content;
+    if (obs.url === undefined && typeof r?.url === "string") obs.url = r.url;
+    if (obs.title === undefined && typeof r?.title === "string") obs.title = r.title;
+  } catch {
+    // best-effort enrichment
+  }
+  return obs;
 }
 
 // ---------------------------------------------------------------------------
