@@ -47,6 +47,7 @@ import {
 } from "./expectation.js";
 import type { StepResult, DivergenceInfo } from "./execute-types.js";
 import { createState, type ExecutionState } from "./state.js";
+import { applyRetry, applyRelocate } from "./fallback.js";
 
 // ---------------------------------------------------------------------------
 // Result types
@@ -548,25 +549,186 @@ async function tryFallback(
   firstDivergence: DivergenceInfo | undefined,
   strategy: PlaybookFallbackStrategy,
 ): Promise<FallbackResult> {
-  void ctx;
-  // Phase 5: only "strict" is honored. Phase 6 fills in retry/relocate;
-  // Phase 7 fills in llm via the resume envelope flow.
-  const div = firstDivergence ?? {
-    step_id: step.id,
-    step_index: index,
-    reason: "unknown divergence",
-  };
+  let lastDivergence: DivergenceInfo =
+    firstDivergence ?? {
+      step_id: step.id,
+      step_index: index,
+      reason: "unknown divergence",
+    };
+
+  if (strategy === "strict") {
+    return {
+      ok: false,
+      divergence: lastDivergence,
+      stepResult: {
+        id: step.id,
+        action: step.do,
+        matched: false,
+        resolved_by: "halted",
+        warnings: ["strict — no fallback attempted"],
+      },
+    };
+  }
+
+  // -------- retry strategy --------
+  if (strategy === "retry") {
+    let attempt = 0;
+    let totalAttempts = 1;
+    while (true) {
+      const decision = applyRetry(step, attempt);
+      if (decision.action === "give_up") break;
+      if (!chargeBudget(ctx, step)) {
+        lastDivergence = {
+          ...lastDivergence,
+          reason: `${lastDivergence.reason}; retry budget exhausted`,
+        };
+        break;
+      }
+      if (decision.backoff_ms > 0) {
+        await new Promise((r) => setTimeout(r, decision.backoff_ms));
+      }
+      attempt = decision.attempt;
+      totalAttempts += 1;
+      const next = await tryStepOnce(ctx, step, index);
+      if (next.ok) {
+        return {
+          ok: true,
+          divergence: lastDivergence,
+          observation: next.observation,
+          stepResult: {
+            id: step.id,
+            action: step.do,
+            matched: true,
+            observed: next.observation,
+            attempts: totalAttempts,
+            resolved_by: "retry",
+          },
+        };
+      }
+      if (next.divergence) lastDivergence = next.divergence;
+    }
+    return {
+      ok: false,
+      divergence: lastDivergence,
+      stepResult: {
+        id: step.id,
+        action: step.do,
+        matched: false,
+        attempts: totalAttempts,
+        resolved_by: "halted",
+      },
+    };
+  }
+
+  // -------- relocate strategy (or first leg of relocate_then_llm) --------
+  if (strategy === "relocate" || strategy === "relocate_then_llm") {
+    const decision = applyRelocate(step);
+    if (decision.action === "retry_with" && decision.locator !== undefined) {
+      if (chargeBudget(ctx, step)) {
+        const relocatedStep: PlaybookStepDef = {
+          ...step,
+          locator: decision.locator,
+        };
+        const next = await tryStepOnce(ctx, relocatedStep, index);
+        if (next.ok) {
+          return {
+            ok: true,
+            divergence: lastDivergence,
+            observation: next.observation,
+            stepResult: {
+              id: step.id,
+              action: step.do,
+              matched: true,
+              observed: next.observation,
+              attempts: 2,
+              resolved_by: "relocate",
+            },
+          };
+        }
+        if (next.divergence) lastDivergence = next.divergence;
+      } else {
+        lastDivergence = {
+          ...lastDivergence,
+          reason: `${lastDivergence.reason}; relocate budget exhausted`,
+        };
+      }
+    }
+
+    if (strategy === "relocate") {
+      return {
+        ok: false,
+        divergence: lastDivergence,
+        stepResult: {
+          id: step.id,
+          action: step.do,
+          matched: false,
+          resolved_by: "halted",
+        },
+      };
+    }
+    // fall through to llm escalation
+  }
+
+  // -------- llm strategy (Phase 7 — halt + needs_assist) --------
+  if (strategy === "llm" || strategy === "relocate_then_llm") {
+    if (ctx.strict) {
+      return {
+        ok: false,
+        divergence: lastDivergence,
+        stepResult: {
+          id: step.id,
+          action: step.do,
+          matched: false,
+          resolved_by: "halted",
+          warnings: ["llm fallback refused in strict mode"],
+        },
+      };
+    }
+    ctx.used_llm_fallback = true;
+    return {
+      ok: false,
+      needsAssist: true,
+      divergence: lastDivergence,
+      stepResult: {
+        id: step.id,
+        action: step.do,
+        matched: false,
+        resolved_by: "llm",
+      },
+    };
+  }
+
   return {
     ok: false,
-    divergence: div,
+    divergence: lastDivergence,
     stepResult: {
       id: step.id,
       action: step.do,
       matched: false,
       resolved_by: "halted",
-      warnings: [`strategy ${strategy} not yet handled — halted`],
+      warnings: [`unhandled strategy ${strategy}`],
     },
   };
+}
+
+/**
+ * Charge one tool_call from the per-step + per-run budgets.
+ * Returns true if there was room, false when the budget is exhausted.
+ */
+function chargeBudget(
+  ctx: RunPlaybookContext,
+  step: PlaybookStepDef,
+): boolean {
+  const stepBudget = step.fallback?.budget?.tool_calls;
+  if (typeof stepBudget === "number" && stepBudget <= 0) return false;
+
+  ctx.budget.consumed_tool_calls += 1;
+  if (ctx.budget.consumed_tool_calls > ctx.max_tool_calls) return false;
+  // Decrement step budget by mutating step.fallback.budget? No — that
+  // would mutate the playbook def. Track step-level usage via the per-
+  // call divergence chain instead. Keeping the global cap is enough for
+  // v1; step-level caps are a follow-up.
+  return true;
 }
 
 // ---------------------------------------------------------------------------
