@@ -70,6 +70,22 @@ describe("buildServerInstructions — lore gating", () => {
   });
 });
 
+describe("buildServerInstructions — playbooks gating", () => {
+  it("includes the Playbooks section when playbooks is enabled", () => {
+    const out = buildServerInstructions(set("playbooks"));
+    expect(out).toContain("Playbooks:");
+    expect(out).toContain("playbooks_search");
+    expect(out).toContain("playbooks_execute");
+    expect(out).toContain("playbooks_resume");
+  });
+
+  it("emits the opt-in hint when playbooks is disabled", () => {
+    const out = buildServerInstructions(set());
+    expect(out).toContain("Playbooks are opt-in");
+    expect(out).toContain("browserops feature enable playbooks");
+  });
+});
+
 describe("buildServerInstructions — invariants", () => {
   it("always includes the autonomous-by-default rule and click ladder", () => {
     for (const features of [set(), set("procedures"), set("lore"), set("procedures", "lore")]) {
