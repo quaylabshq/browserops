@@ -46,6 +46,9 @@ function stubWsBridge(script: Script[]): WSBridgeLike & {
     isConnected: () => true,
     callExtension: async <T>(method: string, params: Record<string, unknown>): Promise<T> => {
       calls.push({ method, params });
+      if (method === "browser_read" && script[idx]?.method !== "browser_read") {
+        return { refs: [], content: "", url: "", title: "" } as T;
+      }
       const item = script[idx++];
       if (!item) throw new Error(`stub ran out (next ${method})`);
       if (item.method !== method) throw new Error(`expected ${item.method} got ${method}`);
