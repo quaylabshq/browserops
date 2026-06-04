@@ -4,13 +4,14 @@ import { ERROR_CODES } from "./errors.js";
 import { KNOWN_FEATURES } from "./features.js";
 
 describe("TOOL_DEFS catalogue", () => {
-  it("every tool name is prefixed browser_, procedures_, or lore_ and unique", () => {
+  it("every tool name is prefixed browser_, procedures_, playbooks_, or memory_ and unique", () => {
     const names = TOOL_DEFS.map((t) => t.name);
     expect(new Set(names).size).toBe(names.length);
     for (const n of names)
       expect(
         n.startsWith("browser_") ||
           n.startsWith("procedures_") ||
+          n.startsWith("playbooks_") ||
           n.startsWith("lore_"),
       ).toBe(true);
   });
@@ -48,12 +49,20 @@ describe("TOOL_DEFS catalogue", () => {
     }
   });
 
-  it("procedures_* gated as 'procedures', lore_* gated as 'lore', browser_* ungated", () => {
+  it("procedures_*/lore_*/playbooks_* are feature-gated; browser_* is mostly ungated", () => {
+    // browser_locate is the one browser_* tool gated behind playbooks
+    // (it powers the playbooks runtime; agents shouldn't see it when the
+    // feature is off).
+    const browserGated = new Set(["browser_locate"]);
     for (const t of TOOL_DEFS) {
       if (t.name.startsWith("procedures_")) {
         expect(t.feature).toBe("procedures");
       } else if (t.name.startsWith("lore_")) {
         expect(t.feature).toBe("lore");
+      } else if (t.name.startsWith("playbooks_")) {
+        expect(t.feature).toBe("playbooks");
+      } else if (browserGated.has(t.name)) {
+        expect(t.feature).toBe("playbooks");
       } else {
         expect(t.feature).toBeUndefined();
       }
