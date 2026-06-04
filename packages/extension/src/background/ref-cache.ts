@@ -25,7 +25,14 @@ export interface RefEntry {
   role: string;
   /** Accessible name, truncated to 80 chars. */
   name: string;
-  /** Extra diagnostic info: domType, inputType, href, type. */
+  /**
+   * Diagnostic + tier-1 locator-match info. Common keys:
+   *   - domType, inputType, type   — legacy diagnostic fields
+   *   - aria-label, data-testid,
+   *     data-test, data-qa, href,
+   *     name (form controls only)  — tier-1 stable signals used by the
+   *     locator resolver and the uniqueness scorer (see lib/tier1-attrs.ts)
+   */
   attrs?: Record<string, string>;
 }
 
