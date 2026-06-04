@@ -617,9 +617,9 @@ v1.
 
 - Inline `locator:` field on existing `browser_click`/`browser_type`/
   `browser_press`/`browser_hover` (Phase 4 deferred).
-- `browserops-playbook` authoring skill (mirrors browserops-teach for
-  playbooks specifically; v1 ships without it, authoring is manual).
-- Procedure → playbook converter command.
+- Procedure → playbook converter command (the `browserops-playbook` skill
+  describes the manual conversion path; a one-shot CLI command would
+  shave a few tool calls off the common case).
 - Playbook recorder (Playwright codegen analog: snapshot real session into
   a draft playbook with semantic locators).
 - Trace viewer for playbook runs (today: `BROWSEROPS_TRACE=1` writes JSONL,
