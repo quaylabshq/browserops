@@ -131,6 +131,38 @@ export interface PlaybookStepDef {
   bind?: string;
 }
 
+/**
+ * Per-step locator drift health record. Maintained by the execute loop on
+ * every successful resolution. The auto-demote check on save reads
+ * `relocates / runs`, `ambiguous_resolves / runs`, and `target_changed`
+ * to decide whether a trusted playbook should be demoted to draft.
+ */
+export interface PlaybookStepHealth {
+  /** Total resolution attempts for this step across all runs. */
+  runs: number;
+  /** How many times the original locator missed and relocate kicked in. */
+  relocates: number;
+  /** Resolutions where the locator matched >1 element and we picked the first. */
+  ambiguous_resolves: number;
+  /**
+   * Times the locator resolved to a DIFFERENT ref than the previously
+   * recorded target. Strongest signal of UI drift.
+   */
+  target_changed: number;
+  /** Rolling average match-count from browser_locate. */
+  avg_match_count?: number;
+  /** Stability tier of the most recent successful descriptor (1/2/3). */
+  last_tier?: 1 | 2 | 3;
+  /** ref the locator resolved to most recently (used to detect changes). */
+  last_ref?: number;
+}
+
+/** meta.health — top-level health block keyed by step id. */
+export interface PlaybookHealthDef {
+  updated: string;
+  steps: Record<string, PlaybookStepHealth>;
+}
+
 /** Bridge-managed metadata. Caller-supplied values are ignored on save. */
 export interface PlaybookMetaDef {
   version: number;
@@ -142,6 +174,8 @@ export interface PlaybookMetaDef {
    * trusted = verified at least once via playbooks_save with bump_success.
    */
   status?: "draft" | "trusted";
+  /** Per-step locator-drift health, used by the auto-demote check on save. */
+  health?: PlaybookHealthDef;
 }
 
 /**
@@ -302,6 +336,35 @@ const stepSchema: JSONSchemaObject = {
   },
 };
 
+const playbookStepHealthSchema: JSONSchemaObject = {
+  type: "object",
+  additionalProperties: false,
+  required: ["runs", "relocates", "ambiguous_resolves", "target_changed"],
+  properties: {
+    runs: { type: "integer", minimum: 0 },
+    relocates: { type: "integer", minimum: 0 },
+    ambiguous_resolves: { type: "integer", minimum: 0 },
+    target_changed: { type: "integer", minimum: 0 },
+    avg_match_count: { type: "number", minimum: 0 },
+    last_tier: { enum: [1, 2, 3] as const },
+    last_ref: { type: "integer", minimum: 1 },
+  },
+};
+
+const playbookHealthSchema: JSONSchemaObject = {
+  type: "object",
+  additionalProperties: false,
+  required: ["updated", "steps"],
+  properties: {
+    updated: { type: "string" },
+    steps: {
+      type: "object",
+      additionalProperties: playbookStepHealthSchema,
+      maxProperties: 60,
+    },
+  },
+};
+
 const playbookMetaSchema: JSONSchemaObject = {
   type: "object",
   additionalProperties: false,
@@ -311,6 +374,7 @@ const playbookMetaSchema: JSONSchemaObject = {
     created: { type: "string" },
     last_verified: { type: "string" },
     status: { enum: ["draft", "trusted"] as const },
+    health: playbookHealthSchema,
   },
 };
 
