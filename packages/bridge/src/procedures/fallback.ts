@@ -7,8 +7,8 @@
  */
 import type {
   Locator,
-  PlaybookFallbackDef,
-  PlaybookStepDef,
+  FallbackDef,
+  StepDef,
 } from "@browserops/shared";
 
 export interface RetryDecision {
@@ -26,10 +26,10 @@ const DEFAULT_BACKOFF_MS = 500;
  * function returns retry if attempt < attempts.
  */
 export function applyRetry(
-  step: PlaybookStepDef,
+  step: StepDef,
   attempt: number,
 ): RetryDecision {
-  const fallback: PlaybookFallbackDef | undefined = step.fallback;
+  const fallback: FallbackDef | undefined = step.fallback;
   const attempts = fallback?.retry?.attempts ?? DEFAULT_RETRY_ATTEMPTS;
   const backoff = fallback?.retry?.backoff_ms ?? DEFAULT_BACKOFF_MS;
   if (attempt < attempts) {
@@ -59,7 +59,7 @@ export interface RelocateDecision {
  *                    wasn't already a substring match.
  */
 export function applyRelocate(
-  step: PlaybookStepDef,
+  step: StepDef,
 ): RelocateDecision {
   const fallback = step.fallback;
   const cfg = fallback?.relocate;

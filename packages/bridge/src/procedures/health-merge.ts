@@ -1,11 +1,11 @@
 /**
- * YAML-level merge of accumulated drift health back into a playbook
+ * YAML-level merge of accumulated drift health back into a procedure
  * document. Keeps existing meta.* fields intact and merges per-step
  * health entries (any step not present in `incoming` keeps its prior
  * entry).
  *
- * Pure: takes YAML text + new PlaybookHealthDef → returns new YAML text.
- * The executor (Substep 3.7c) calls this with the playbook's on-disk
+ * Pure: takes YAML text + new HealthDef → returns new YAML text.
+ * The executor (Substep 3.7c) calls this with the procedure's on-disk
  * text and the run's accumulated health, then atomic-writes the result.
  *
  * Implementation note: we round-trip through JS (parse → mutate →
@@ -15,7 +15,7 @@
  * prevents authors from hand-editing it meaningfully.
  */
 import YAML from "yaml";
-import type { PlaybookHealthDef, PlaybookStepHealth } from "@browserops/shared";
+import type { HealthDef, StepHealth } from "@browserops/shared";
 
 interface YamlDocShape {
   meta?: {
@@ -25,16 +25,16 @@ interface YamlDocShape {
     status?: string;
     health?: {
       updated: string;
-      steps: Record<string, PlaybookStepHealth>;
+      steps: Record<string, StepHealth>;
     };
     [k: string]: unknown;
   };
   [k: string]: unknown;
 }
 
-export function mergeHealthIntoPlaybookYaml(
+export function mergeHealthIntoProcedureYaml(
   yamlText: string,
-  incoming: PlaybookHealthDef,
+  incoming: HealthDef,
 ): string {
   // Fast-path: no per-step updates → don't touch the file.
   if (Object.keys(incoming.steps).length === 0) return yamlText;
@@ -45,11 +45,11 @@ export function mergeHealthIntoPlaybookYaml(
   }
 
   // Build merged steps: existing entries first, then overlay incoming.
-  const mergedSteps: Record<string, PlaybookStepHealth> = {};
+  const mergedSteps: Record<string, StepHealth> = {};
   const existing = parsed.meta?.health?.steps;
   if (existing && typeof existing === "object") {
     for (const [k, v] of Object.entries(existing)) {
-      mergedSteps[k] = v as PlaybookStepHealth;
+      mergedSteps[k] = v as StepHealth;
     }
   }
   for (const [k, v] of Object.entries(incoming.steps)) {

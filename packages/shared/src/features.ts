@@ -16,7 +16,6 @@
 export const FEATURES = [
   "procedures",
   "lore",
-  "playbooks",
 ] as const;
 
 export type FeatureName = (typeof FEATURES)[number];
@@ -40,19 +39,13 @@ export interface FeatureMetadata {
 export const FEATURE_METADATA: Record<FeatureName, FeatureMetadata> = {
   procedures: {
     description:
-      "Procedure runtime — search/save/run named, parameterised action graphs from ~/browserops/procedures/. Also gates the browserops-teach skill, which authors new procedures autonomously.",
+      "Procedure runtime — deterministic-first browser flows with semantic locators (auto-resolved via browser_propose_locator), retrying expect predicates, per-step LLM-fallback ladder (resume via procedures_resume), and drift-health auto-demote. Stored at ~/browserops/procedures/. Authored via the browserops-teach skill.",
     stability: "experimental",
     default: false,
   },
   lore: {
     description:
       "Cross-agent lore store at ~/browserops/lore/. Save/search/get/delete named markdown entries via MCP — visible to every MCP client (Cursor, Zed, Claude Code, custom SDK). Lets agents teach each other lessons that outlive a single session.",
-    stability: "experimental",
-    default: false,
-  },
-  playbooks: {
-    description:
-      "Deterministic-first browser playbooks with semantic locators, auto-wait, retrying assertions, and per-step LLM fallback via playbooks_resume. Stored at ~/browserops/playbooks/. Complements procedures: procedures are LLM-baked recipes, playbooks are durable orchestrations.",
     stability: "experimental",
     default: false,
   },
