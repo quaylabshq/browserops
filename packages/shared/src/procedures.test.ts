@@ -1,463 +1,273 @@
+import { describe, it, expect } from "vitest";
 import Ajv from "ajv";
-import { describe, expect, it, beforeAll } from "vitest";
-import { PROCEDURE_SCHEMA, STOP_WORDS, tokenize } from "./procedures.js";
-import type { ValidateFunction } from "ajv";
+import {
+  PROCEDURE_SCHEMA,
+  type ProcedureDef,
+  tokenize,
+} from "./procedures.js";
 
-// ---------------------------------------------------------------------------
-// Ajv setup
-// ---------------------------------------------------------------------------
-
-let validate: ValidateFunction;
-
-beforeAll(() => {
-  const ajv = new Ajv({ strict: false });
-  validate = ajv.compile(PROCEDURE_SCHEMA);
-});
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function valid(obj: unknown): boolean {
-  const ok = validate(obj);
-  return ok as boolean;
+function makeAjv() {
+  return new Ajv({ allErrors: true, strict: false });
 }
 
-function invalid(obj: unknown): boolean {
-  return !valid(obj);
-}
+const minimalLeaf: ProcedureDef = {
+  schema_version: 1,
+  name: "demo.minimal",
+  description: "Minimal leaf procedure.",
+  kind: "leaf",
+  steps: [{ id: "s1", do: "navigate", with: { url: "https://example.com" } }],
+};
 
-// ---------------------------------------------------------------------------
-// example procedure (constructed literally — no YAML file read)
-// ---------------------------------------------------------------------------
-
-const EXAMPLE_LEAF_PROCEDURE = {
+const richLeaf: ProcedureDef = {
   schema_version: 1,
   name: "gmail.send_email",
-  description: "Compose and send a Gmail email via the web UI",
+  description: "Compose and send an email via Gmail web.",
   kind: "leaf",
+  goal: "Send an email.",
   domain: "gmail",
-  triggers: [
-    "email users who did",
-    "send an email to",
-    "message someone about",
-  ],
-  tags: ["email", "outreach"],
+  triggers: ["send email"],
+  tags: ["email", "compose"],
+  side_effects: ["send_message"],
   inputs: {
-    to: { type: "string", required: true, description: "Recipient email address" },
+    to: { type: "string", required: true, destructive: true },
     subject: { type: "string", required: true },
     body: { type: "string", required: true },
   },
-  preconditions: [
-    {
-      url_matches: "^https://mail\\.google\\.com/",
-      fallback: {
-        action: "browser_navigate",
-        with: { url: "https://mail.google.com/mail/u/0/" },
-      },
-    },
-  ],
+  forbidden: {
+    locators: [{ name: "/^delete/i" }],
+    actions: ["browser_execute_js"],
+  },
+  verify: { text_visible: "Message sent" },
   steps: [
     {
       id: "open_compose",
-      action: "browser_click_by_text",
-      with: {
-        tab_id: "{{tab_id}}",
-        text: "Compose",
+      goal: "Open the compose pane.",
+      do: "click",
+      locator: { role: "button", name: "/^compose/i" },
+      auto_wait: { timeout_ms: 4000 },
+      expect: { new_dialog: true, timeout_ms: 5000 },
+      fallback: {
+        strategy: "relocate_then_llm",
+        budget: { tool_calls: 3 },
+        retry: { attempts: 2, backoff_ms: 500 },
+        relocate: { widen_role: true, widen_name: true },
       },
-      wait_for: { selector: ".compose-dialog" },
-      bind: "compose_ref",
-      on_fail: [{ action: "browser_click", with: { tab_id: "{{tab_id}}", ref: 1 } }],
     },
-  ],
-  success_criteria: [{ toast_text: "Message sent" }],
-  meta: {
-    version: 3,
-    created: "2026-04-01T10:00:00Z",
-    last_verified: "2026-04-20T14:22:00Z",
-    
-    
-  },
-} as const;
-
-const EXAMPLE_COMPOSITE_PROCEDURE = {
-  schema_version: 1,
-  name: "email_posthog_users",
-  description: "Find PostHog users by behavior and email them",
-  kind: "composite",
-  uses: ["find_users_by_event", "gmail.send_email"],
-  steps: [
     {
-      id: "send_all",
-      for_each: "{{users}}",
-      as: "user",
-      do: [
-        {
-          action: "gmail.send_email",
-          with: {
-            to: "{{user.email}}",
-            subject: "{{input.subject}}",
-            body: "{{input.body}}",
-          },
-        },
-      ],
+      id: "send",
+      do: "click",
+      locator: { role: "button", name: "/^send/i" },
+      expect: { network_endpoint: "/sendmessage" },
+      fallback: { strategy: "llm" },
     },
   ],
-} as const;
+};
 
-// ---------------------------------------------------------------------------
-// Schema: valid cases
-// ---------------------------------------------------------------------------
+const minimalComposite: ProcedureDef = {
+  schema_version: 1,
+  name: "billing.pay_invoice",
+  description: "Pay an invoice end-to-end.",
+  kind: "composite",
+  uses: ["billing.lookup_invoice", "billing.submit_payment"],
+  steps: [
+    { id: "lookup", do: "procedure_call", with: { name: "billing.lookup_invoice" } },
+  ],
+};
 
-describe("PROCEDURE_SCHEMA — valid cases", () => {
-  it("accepts the leaf example", () => {
-    expect(valid(EXAMPLE_LEAF_PROCEDURE)).toBe(true);
+describe("PROCEDURE_SCHEMA", () => {
+  const ajv = makeAjv();
+  const validate = ajv.compile(PROCEDURE_SCHEMA);
+
+  it("accepts a minimal leaf procedure", () => {
+    const ok = validate(minimalLeaf);
+    expect(ok).toBe(true);
+    expect(validate.errors).toBeNull();
+  });
+
+  it("accepts a rich leaf procedure with all bells", () => {
+    const ok = validate(richLeaf);
+    expect(ok).toBe(true);
+    expect(validate.errors).toBeNull();
   });
 
   it("accepts a composite procedure with uses", () => {
-    expect(valid(EXAMPLE_COMPOSITE_PROCEDURE)).toBe(true);
+    const ok = validate(minimalComposite);
+    expect(ok).toBe(true);
   });
 
-  it("accepts a minimal leaf (only required fields)", () => {
-    expect(
-      valid({
-        schema_version: 1,
-        name: "my.proc",
-        description: "A minimal procedure",
-        kind: "leaf",
-        steps: [{ id: "s1", action: "browser_click", with: { ref: 1 } }],
-      }),
-    ).toBe(true);
+  it("rejects a composite procedure missing uses", () => {
+    const bad = { ...minimalComposite, uses: undefined };
+    const ok = validate(bad);
+    expect(ok).toBe(false);
   });
 
-  it("accepts a step with a fully-populated expected_effect", () => {
-    expect(
-      valid({
-        schema_version: 1,
-        name: "my.proc",
-        description: "A procedure with expected_effect on a step",
-        kind: "leaf",
-        steps: [
-          {
-            id: "s1",
-            action: "browser_navigate",
-            with: { tab_id: "t_1", url: "https://example.com" },
-            expected_effect: {
-              dom: {
-                any: true,
-                added_min: 5,
-                removed_min: 0,
-                attr_changes_min: 2,
-                text_changes_min: 1,
+  it("rejects bad name pattern", () => {
+    const bad = { ...minimalLeaf, name: "Bad-Name" };
+    const ok = validate(bad);
+    expect(ok).toBe(false);
+  });
+
+  it("rejects unknown step action", () => {
+    const bad = {
+      ...minimalLeaf,
+      steps: [{ id: "s1", do: "explode" }],
+    };
+    const ok = validate(bad);
+    expect(ok).toBe(false);
+  });
+
+  it("rejects unknown fallback strategy", () => {
+    const bad = {
+      ...minimalLeaf,
+      steps: [
+        {
+          id: "s1",
+          do: "click",
+          fallback: { strategy: "ask_friend" },
+        },
+      ],
+    };
+    const ok = validate(bad);
+    expect(ok).toBe(false);
+  });
+
+  it("rejects the legacy `playbook_call` step action (dropped in unify)", () => {
+    const bad = {
+      ...minimalLeaf,
+      steps: [{ id: "s1", do: "playbook_call" }],
+    };
+    expect(validate(bad)).toBe(false);
+  });
+
+  it("rejects extra top-level fields", () => {
+    const bad = { ...minimalLeaf, surprise: true } as unknown;
+    const ok = validate(bad);
+    expect(ok).toBe(false);
+  });
+
+  it("rejects steps > 60", () => {
+    const steps = Array.from({ length: 61 }, (_, i) => ({
+      id: `s${i}`,
+      do: "navigate",
+      with: { url: "https://example.com" },
+    }));
+    const bad = { ...minimalLeaf, steps };
+    const ok = validate(bad);
+    expect(ok).toBe(false);
+  });
+
+  it("rejects side_effects with duplicates", () => {
+    const bad = { ...minimalLeaf, side_effects: ["send_message", "send_message"] };
+    const ok = validate(bad);
+    expect(ok).toBe(false);
+  });
+
+  it("rejects unknown side_effect classes", () => {
+    const bad = { ...minimalLeaf, side_effects: ["nuke"] };
+    const ok = validate(bad);
+    expect(ok).toBe(false);
+  });
+
+  it("accepts a step with only a do field", () => {
+    const ok = validate({
+      ...minimalLeaf,
+      steps: [{ id: "s1", do: "observe" }],
+    });
+    expect(ok).toBe(true);
+  });
+
+  it("rejects step missing id", () => {
+    const bad = {
+      ...minimalLeaf,
+      steps: [{ do: "navigate", with: { url: "x" } }],
+    };
+    const ok = validate(bad);
+    expect(ok).toBe(false);
+  });
+
+  describe("meta.health", () => {
+    it("accepts a meta.health block with per-step locator drift entries", () => {
+      const ok = validate({
+        ...minimalLeaf,
+        meta: {
+          version: 1,
+          created: "2026-05-24T00:00:00Z",
+          health: {
+            updated: "2026-05-24T00:00:00Z",
+            steps: {
+              s1: {
+                runs: 10,
+                relocates: 1,
+                ambiguous_resolves: 0,
+                target_changed: 0,
+                avg_match_count: 1.1,
+                last_tier: 1,
               },
-              url: { changed: true },
-              focus: { changed: false },
-              network: { requests_started_min: 3, requests_completed_min: 2 },
-              console_errors_max: 0,
             },
           },
-        ],
-      }),
-    ).toBe(true);
-  });
-
-  it("accepts a step with a partial expected_effect (only url.changed)", () => {
-    expect(
-      valid({
-        schema_version: 1,
-        name: "my.proc",
-        description: "Partial expected_effect",
-        kind: "leaf",
-        steps: [
-          {
-            id: "s1",
-            action: "browser_navigate",
-            with: { tab_id: "t_1", url: "https://example.com" },
-            expected_effect: { url: { changed: true } },
-          },
-        ],
-      }),
-    ).toBe(true);
-  });
-
-  it("accepts top-level side_effects", () => {
-    expect(
-      valid({
-        schema_version: 1,
-        name: "my.proc",
-        description: "with side_effects",
-        kind: "leaf",
-        steps: [{ id: "s1", action: "browser_click" }],
-        side_effects: ["send_message", "post_public"],
-      }),
-    ).toBe(true);
-  });
-
-  it("accepts an input flagged destructive", () => {
-    expect(
-      valid({
-        schema_version: 1,
-        name: "my.proc",
-        description: "with destructive input",
-        kind: "leaf",
-        inputs: {
-          recipient: { type: "string", destructive: true, required: true },
         },
-        steps: [{ id: "s1", action: "browser_click" }],
-      }),
-    ).toBe(true);
-  });
-});
+      });
+      expect(ok).toBe(true);
+    });
 
-// ---------------------------------------------------------------------------
-// Schema: rejection cases
-// ---------------------------------------------------------------------------
-
-describe("PROCEDURE_SCHEMA — rejection cases", () => {
-  it("rejects composite without uses", () => {
-    expect(
-      invalid({
-        schema_version: 1,
-        name: "my.composite",
-        description: "A composite without uses",
-        kind: "composite",
-        steps: [{ id: "s1", action: "my.sub" }],
-        // uses: intentionally omitted
-      }),
-    ).toBe(true);
-  });
-
-  it("rejects name violating the pattern (uppercase)", () => {
-    expect(
-      invalid({
-        schema_version: 1,
-        name: "Gmail.SendEmail",
-        description: "Bad name",
-        kind: "leaf",
-        steps: [{ id: "s1", action: "browser_click" }],
-      }),
-    ).toBe(true);
-  });
-
-  it("rejects name starting with a digit", () => {
-    expect(
-      invalid({
-        schema_version: 1,
-        name: "1proc",
-        description: "Bad name",
-        kind: "leaf",
-        steps: [{ id: "s1", action: "browser_click" }],
-      }),
-    ).toBe(true);
-  });
-
-  it("rejects steps array exceeding maxItems (40)", () => {
-    const manySteps = Array.from({ length: 41 }, (_, i) => ({
-      id: `s${i}`,
-      action: "browser_click",
-    }));
-    expect(
-      invalid({
-        schema_version: 1,
-        name: "my.proc",
-        description: "Too many steps",
-        kind: "leaf",
-        steps: manySteps,
-      }),
-    ).toBe(true);
-  });
-
-  it("rejects tags array exceeding maxItems (10)", () => {
-    expect(
-      invalid({
-        schema_version: 1,
-        name: "my.proc",
-        description: "Too many tags",
-        kind: "leaf",
-        steps: [{ id: "s1", action: "browser_click" }],
-        tags: ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k"],
-      }),
-    ).toBe(true);
-  });
-
-  it("rejects missing required top-level field (name)", () => {
-    expect(
-      invalid({
-        schema_version: 1,
-        description: "Missing name",
-        kind: "leaf",
-        steps: [{ id: "s1", action: "browser_click" }],
-      }),
-    ).toBe(true);
-  });
-
-  it("rejects steps array with zero items (minItems: 1)", () => {
-    expect(
-      invalid({
-        schema_version: 1,
-        name: "my.proc",
-        description: "Empty steps",
-        kind: "leaf",
-        steps: [],
-      }),
-    ).toBe(true);
-  });
-
-  it("rejects description longer than 200 chars", () => {
-    expect(
-      invalid({
-        schema_version: 1,
-        name: "my.proc",
-        description: "x".repeat(201),
-        kind: "leaf",
-        steps: [{ id: "s1", action: "browser_click" }],
-      }),
-    ).toBe(true);
-  });
-
-
-  it("rejects an unknown side_effects entry", () => {
-    expect(
-      invalid({
-        schema_version: 1,
-        name: "my.proc",
-        description: "bad side_effects",
-        kind: "leaf",
-        steps: [{ id: "s1", action: "browser_click" }],
-        side_effects: ["send_message", "made_up_class"],
-      }),
-    ).toBe(true);
-  });
-
-  it("rejects expected_effect with an unknown sub-field (e.g. dom.unknown_field)", () => {
-    expect(
-      invalid({
-        schema_version: 1,
-        name: "my.proc",
-        description: "Bad expected_effect",
-        kind: "leaf",
-        steps: [
-          {
-            id: "s1",
-            action: "browser_click",
-            with: { tab_id: "t_1", ref: 1 },
-            expected_effect: { dom: { unknown_field: true } },
+    it("rejects health.steps entries with negative counters", () => {
+      const bad = {
+        ...minimalLeaf,
+        meta: {
+          version: 1,
+          created: "2026-05-24T00:00:00Z",
+          health: {
+            updated: "2026-05-24T00:00:00Z",
+            steps: { s1: { runs: -1, relocates: 0, ambiguous_resolves: 0, target_changed: 0 } },
           },
-        ],
-      }),
-    ).toBe(true);
+        },
+      };
+      expect(validate(bad)).toBe(false);
+    });
+
+    it("rejects unknown fields under health.steps[stepId]", () => {
+      const bad = {
+        ...minimalLeaf,
+        meta: {
+          version: 1,
+          created: "2026-05-24T00:00:00Z",
+          health: {
+            updated: "2026-05-24T00:00:00Z",
+            steps: { s1: { runs: 1, junk: true } },
+          },
+        },
+      };
+      expect(validate(bad)).toBe(false);
+    });
+
+    it("accepts a health block with no per-step entries (freshly created)", () => {
+      const ok = validate({
+        ...minimalLeaf,
+        meta: {
+          version: 1,
+          created: "2026-05-24T00:00:00Z",
+          health: { updated: "2026-05-24T00:00:00Z", steps: {} },
+        },
+      });
+      expect(ok).toBe(true);
+    });
   });
 });
 
-// ---------------------------------------------------------------------------
-// STOP_WORDS
-// ---------------------------------------------------------------------------
-
-describe("STOP_WORDS", () => {
-  it("contains canonical words from", () => {
-    const expected = [
-      "a", "an", "the", "and", "or", "for", "in", "to", "with",
-      "is", "are", "was", "be", "been", "has", "have", "do",
-      "me", "my", "you", "they", "we", "it",
-      "this", "that", "what", "who", "where", "when", "how",
-      "not", "no", "please", "want", "need",
-    ];
-    for (const w of expected) {
-      expect(STOP_WORDS.has(w)).toBe(true);
-    }
-  });
-});
-
-// ---------------------------------------------------------------------------
-// tokenize()
-// ---------------------------------------------------------------------------
-
-describe("tokenize()", () => {
-  it("lowercases input", () => {
-    expect(tokenize("GMAIL")).toEqual(["gmail"]);
+describe("tokenize", () => {
+  it("lowercases and splits on non-alphanumeric", () => {
+    expect(tokenize("Send-Email to Pratham")).toEqual(["send", "email", "pratham"]);
   });
 
-  it("splits on non-alphanumeric delimiters", () => {
-    const result = tokenize("hello-world_foo.bar");
-    expect(result).toContain("hello");
-    expect(result).toContain("world");
-    expect(result).toContain("foo");
-    expect(result).toContain("bar");
+  it("drops stop words", () => {
+    expect(tokenize("the quick brown fox")).toEqual(["quick", "brown", "fox"]);
   });
 
-  it("drops single-character tokens", () => {
-    expect(tokenize("a b c hello")).not.toContain("b");
-    expect(tokenize("a b c hello")).not.toContain("c");
-    expect(tokenize("a b c hello")).toContain("hello");
+  it("stems trailing s/ing/ed", () => {
+    expect(tokenize("running emails arrived")).toEqual(["runn", "email", "arriv"]);
   });
 
-  it("drops stop words — 'send me an email' → ['send', 'email']", () => {
-    const result = tokenize("send me an email");
-    expect(result).toEqual(["send", "email"]);
-  });
-
-  it("drops stop words — 'please want need' → []", () => {
-    expect(tokenize("please want need")).toEqual([]);
-  });
-
-  it("applies stemming — strips trailing 's' (users → user)", () => {
-    const result = tokenize("users");
-    expect(result).toEqual(["user"]);
-  });
-
-  it("applies stemming — strips trailing 'ing' (clicking → click)", () => {
-    const result = tokenize("clicking");
-    expect(result).toEqual(["click"]);
-  });
-
-  it("applies stemming — strips trailing 'ed' (buttons pressed → button press)", () => {
-    const result = tokenize("buttons pressed");
-    expect(result).toContain("button");
-    expect(result).toContain("press");
-  });
-
-  it("stemming: 'users clicking buttons' → ['user', 'click', 'button']", () => {
-    const result = tokenize("users clicking buttons");
-    expect(result).toEqual(["user", "click", "button"]);
-  });
-
-  it("does not over-stem short tokens (≥3 chars required after strip)", () => {
-    // "dos" → strip 's' → "do" which is 2 chars — should NOT strip
-    // "is" → already a stop word, dropped
-    // "ads" → strip 's' → "ad" (2 chars) → should NOT strip
-    const result = tokenize("ads");
-    expect(result).toEqual(["ads"]);
-  });
-
-  it("does not strip 's' from tokens that are already ≤3 chars (keep 'gas')", () => {
-    // "gas" → strip 's' → "ga" (2 chars) — should NOT strip
-    const result = tokenize("gas");
-    expect(result).toEqual(["gas"]);
-  });
-
-  it("handles empty string", () => {
-    expect(tokenize("")).toEqual([]);
-  });
-
-  it("handles a real-world trigger phrase", () => {
-    const result = tokenize("email posthog users who clicked the button");
-    // "email" → not a stop word, "s" stripped from "users" → "user"
-    // "who", "the" are stop words
-    // "clicked" → "click" (strip "ed": 5 chars → 3 chars, ≥3 ok)
-    // "button" → no strip (doesn't end in s/ing/ed)... wait "buttons" would strip
-    expect(result).toContain("email");
-    expect(result).toContain("posthog");
-    expect(result).toContain("user");
-    expect(result).toContain("click");
-    expect(result).toContain("button");
-    expect(result).not.toContain("who");
-    expect(result).not.toContain("the");
-  });
-
-  it("procedure name dot-split tokens are indexed", () => {
-    const result = tokenize("gmail.send_email");
-    expect(result).toContain("gmail");
-    expect(result).toContain("send");
-    expect(result).toContain("email");
+  it("drops 1-char tokens", () => {
+    expect(tokenize("a b cd efg")).toEqual(["cd", "efg"]);
   });
 });

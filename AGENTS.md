@@ -151,44 +151,63 @@ browserops runs in **auto-approve mode by default**: risky actions (`browser_exe
 
 If the user has opted into gating (via `--approval=gate`, `BROWSEROPS_APPROVAL=gate` env var, or the extension popup toggle), risky actions will be gated — respect a `USER_DECLINED` response and do not retry.
 
-## Authoring new procedures (browserops-teach)
+## Procedures (deterministic-first flows with LLM fallback)
 
-> **Experimental — off by default.** The five procedure tools only appear in your catalogue when the user has run `browserops feature enable procedures`. With the feature off, neither the procedure store nor the browserops-teach skill are usable — direct `browser_*` orchestration is the only path.
+> **Experimental — off by default.** The six procedure tools (`procedures_search`, `_get`, `_save`, `_delete`, `_execute`, `_resume`) plus the two locator helpers (`browser_locate`, `browser_propose_locator`) only appear in your catalogue when the user has run `browserops feature enable procedures`. With the feature off, the procedure store, the executor, and the browserops-teach skill aren't reachable — direct `browser_*` orchestration is the only path.
 
-When `procedures_search` returns nothing trusted for a non-trivial flow AND the user signals they want to remember it ("learn to do X", "figure this out and save it", "remember how to <task>"), the **`browserops-teach` skill** at `~/.claude/skills/browserops-teach/SKILL.md` (mirrored to `skills/browserops-teach.md`) is the canonical guide. It covers the autonomous flow end-to-end: pre-flight checks, the three hard safety gates that justify a single user clarifier, the per-app safe-dummy registry, the in-context YAML authoring loop, the goal-grounded verification predicate, and the single-message report format.
+### The unified runtime
 
-Don't try to drive procedure authoring from this file alone — the skill is the source of truth.
+Each procedure step targets an element via a **semantic Locator descriptor** (re-resolved against the live a11y tree every step), polls a **retrying `expect:` predicate** until match or timeout, and escalates through an **explicit per-step fallback ladder** (`strict | retry | relocate | relocate_then_llm | llm`) when reality doesn't match the spec. The top-level **`forbidden{locators, actions}`** block is enforced on every dispatch including LLM-proposed resume patches.
 
-If `procedures_search` DOES return a trusted match at score ≥0.5, point the user at the existing procedure. The skill is for new flows, not reruns of existing ones.
+`procedures_execute({name, tab_id, inputs?, strict?})` returns one of:
+- `{completed: true, status: "completed"}` — all steps + top-level `verify:` passed.
+- `{status: "halted", divergence}` — strict failure; no LLM fallback was available.
+- `{status: "needs_assist", execution_id, envelope}` — paused; the envelope carries the failing step, the resolution attempts, the safety constraints, and a preview of remaining steps. Resume via `procedures_resume(execution_id, patch)` where `patch` is one of `{kind:"resume_with", with:{locator?, params?}}`, `{kind:"insert_steps", steps:[...]}`, or `{kind:"give_up", reason?}`.
+- `{status: "gave_up"}` — terminal after a `give_up` patch.
 
-### What changed (vs. the old teach + autoteach pair)
+Pass `strict: true` to refuse every LLM-fallback path even if a step declares one. Mandatory for CI / batch runs and for the post-authoring verification run that flips `bump_success: true → status: trusted`.
 
-The old `teach` and `autoteach` features and their 16 tools (`procedures_teach_*` + `procedures_autoteach_*`) are gone. With autonomous-by-default, the agent watches its own `browser_*` calls and authors the YAML in its own context — no separate keystroke recorder, no iterative bridge-side replay loop. One feature flag (`procedures`), five sync tools + one execute, one skill.
+### Locator descriptors + the uniqueness scorer
+
+A `Locator` is one of `{role, name, aria_label, data_testid, href, attr, has_text, has_text_not, in_frame, near, nth, scope}` — at least one field required. Stability tiers (used by the proposer):
+
+- **Tier 1 (author/contract-controlled, survives rebuilds):** `aria_label`, `data_testid` (matches `data-testid` / `data-test` / `data-qa`), `href`, `attr{name,value}`, `role`, `in_frame`.
+- **Tier 2 (text-derived, churns on copy/DOM changes):** `name`, `has_text`, `has_text_not`, `near`.
+- **Tier 3 (fragile):** `nth` — depends on document order, breaks when a sibling appears.
+
+`browser_propose_locator({tab_id, ref})` is the author-time helper. Given a target ref (from `browser_read`), it walks a candidate ladder and returns `{unique, locator, tier, fragile, warnings, candidates}` — the smallest, highest-tier descriptor that resolves to exactly that element. Prefer the proposed descriptor over hand-written `{role, name}` pairs. `browser_locate({tab_id, locator})` is the runtime resolver the executor calls before every step — you rarely call it directly.
+
+### Drift health + auto-demote
+
+The executor records per-step health (runs, relocates, ambiguous_resolves, target_changed, avg_match_count, last_tier) into `meta.health` after every run. On `procedures_save({bump_success:true})`, the runtime checks the prior health and refuses the trusted flip when:
+- relocate-rate > 0.4 across ≥5 runs, OR
+- target_changed > 0 across ≥3 runs, OR
+- last_tier === 3 AND relocate-rate > 0.1.
+
+The save still proceeds, but the response carries `{demoted: true, demote_reason: "..."}` and the procedure persists as draft. Surface `demote_reason` to the user — don't claim success.
+
+### Composition
+
+A `do: procedure_call` step recurses into another saved procedure in-process (no extension round-trip). Composite procedures declare `kind: composite` + `uses: [<leaf names>]`. **Caveat:** pass `tab_id: "{{tab_id}}"` inside `with.inputs` of the procedure_call step — top-level `tab_id` is ignored on the recursive call.
 
 ### Storage
 
-`~/browserops/procedures/` holds the YAML files plus the `index.json` search manifest. No transient session state on disk; the agent's own conversation context is the session. Override the root with `BROWSEROPS_PROCEDURES_DIR`.
+`~/browserops/procedures/` holds the YAML files plus the `index.json` search manifest. Schema lives in `packages/shared/src/procedures.ts`; execute loop, validator, search, handlers, and the drift-health recorder in `packages/bridge/src/procedures/`. Override the storage root with `BROWSEROPS_PROCEDURES_DIR`.
 
-## Procedure authoring rules
+### Authoring (browserops-teach skill)
 
-> Applies whenever the `procedures` feature is enabled and you're authoring or maintaining procedure YAML. With `procedures` off these tools and rules don't apply — the user is on the minimal `browser_*`-only path.
+When `procedures_search` returns nothing trusted for a non-trivial flow AND the user signals they want to remember it ("learn to do X", "figure this out and save it", "remember how to <task>"), the **`browserops-teach` skill** at `~/.claude/skills/browserops-teach/SKILL.md` (mirrored to `skills/browserops-teach.md`) is the canonical guide. It owns the autonomous flow end-to-end: pre-flight reuse check, the three hard safety gates (cross-user side effects / money or account irreversibility / genuinely unparseable goal), the per-app safe-dummy registry, the `browser_propose_locator`-driven YAML authoring loop, strict-mode verification + an external goal-grounded predicate, and drift-health-aware promotion. Don't drive authoring from this file alone — the skill is the source of truth.
 
-### Never save an untested procedure
-- Write the procedure → run it in the same session → fix what breaks → then call `procedures_save` with `bump_success: true`.
-- A procedure is trusted only when it has been saved with `bump_success: true` (which flips status:draft → status:trusted) and the current UI still matches what was verified.
-- For multi-step flows: test each leaf individually first, then compose.
-- Treat the live UI as source of truth. If the next screen, button label, or route is not confirmed, do not guess it.
-- Model every stable UI transition as its own leaf. Split setup, onboarding, branching, and final extraction into separate procedures.
-- Keep leaves executable, not descriptive. Each leaf should have explicit inputs, concrete waits, and a concrete success condition.
-- Use only fields supported by `packages/shared/src/procedures.ts` and tools defined in `packages/shared/src/tools.ts`.
-- If a step returns structured data, bind and consume the exact returned field names. Do not invent `magic_url`, `api_key`, or similar outputs.
-- Prefer `browser_read` / `browser_query_selector` / `browser_click_by_text` / `browser_type` on the real element over guessed coordinates or broad JS when the UI can be addressed directly.
-- Use `browser_execute_js` only when the UI genuinely requires it, and keep the script narrow enough that it is still tied to one page state.
-- Any step that waits for async state must use `browser_wait_for` or `browser_wait_for_idle` with an explicit timeout. Do not use `browser_reload` for polling.
-- Branching logic must be explicit. If the UI can take different paths, write separate steps or leaves for each path and wire the composite to the right one.
-- Add `success_criteria` for any leaf whose completion is otherwise ambiguous.
-- Verify each leaf against the live site before saving the composite that depends on it.
+If `procedures_search` returns a trusted match at score ≥0.5, point the user at the existing procedure rather than re-authoring.
 
-### Use `browser_wait_for` for polling, not manual reloads
-- Any step that waits for async state (email arriving, page loading, element appearing) must use a `browser_wait_for` action step with an explicit `timeout`.
-- Never use `browser_reload` as a substitute for polling — it fires once and does not retry.
+## Procedure authoring rules (summary; skill is canonical)
+
+- **Never save an untested procedure.** Write → run via `procedures_execute({strict: true})` → fix → save with `bump_success: true`. Trusted only when the strict run was clean AND the live UI still matches.
+- **Use `browser_propose_locator` for every control.** Don't eyeball `{role, name}` — tier-1 fields the proposer finds (aria_label/data_testid/href/attr) survive UI rebuilds; text-derived names don't.
+- **Declare `expect:` on every action step with a positive success criterion.** Required on any step whose `fallback.strategy` is `llm` — without it the runtime can't tell when to ask for help.
+- **Declare `forbidden{locators, actions}` for nearby destructive controls.** A misfired LLM patch on Gmail can click "Delete message" instead of "Send". One `{name: "/^delete/i"}` regex stops it before dispatch.
+- **Declare a top-level `verify:` block.** It's the one-shot success predicate evaluated after the last step (`text_visible: "Sent"`, `url_matches: "/inbox/"`, `network_endpoint: "/sendmessage"`, etc.).
+- **Branching is explicit.** Different UI paths → separate steps or separate leaves wired by a composite.
+- **No `browser_reload` for polling.** Use `do: wait` with an explicit `timeout_ms` (the underlying `browser_wait_for`).
+- **Use `do: js` only when the UI is genuinely not addressable** (canvas/WebGL/badly-marked-up SPA). Otherwise prefer locator-driven steps.
+- **Use only fields in `packages/shared/src/procedures.ts` and tools in `packages/shared/src/tools.ts`.** No `expected_effect` / `success_criteria` / `on_fail` / `for_each` / `preconditions` — those legacy fields are gone.

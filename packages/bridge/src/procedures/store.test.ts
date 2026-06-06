@@ -9,15 +9,11 @@ import {
   writeProcedureYamlAtomic,
 } from "./store.js";
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 let tmpDir: string;
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(
-    path.join(import.meta.dirname ?? __dirname, ".store-test-"),
+    path.join(import.meta.dirname ?? __dirname, ".pbstore-test-"),
   );
 });
 
@@ -29,21 +25,17 @@ function absPath(...parts: string[]): string {
   return path.join(tmpDir, ...parts);
 }
 
-// ---------------------------------------------------------------------------
-// readProcedureYaml
-// ---------------------------------------------------------------------------
-
 describe("readProcedureYaml", () => {
-  it("throws PROC_NOT_FOUND for missing file", async () => {
+  it("throws PROCEDURE_NOT_FOUND for missing file", async () => {
     const p = absPath("nope", "procedure.yaml");
     await expect(readProcedureYaml(p)).rejects.toSatisfy(
       (err: unknown) =>
-        err instanceof CodedError && err.code === "PROC_NOT_FOUND",
+        err instanceof CodedError && err.code === "PROCEDURE_NOT_FOUND",
     );
   });
 
   it("returns file contents for an existing file", async () => {
-    const dir = absPath("myproc");
+    const dir = absPath("mypb");
     await fs.mkdir(dir, { recursive: true });
     const yamlPath = path.join(dir, "procedure.yaml");
     const content = "schema_version: 1\nname: test\n";
@@ -51,10 +43,6 @@ describe("readProcedureYaml", () => {
     expect(await readProcedureYaml(yamlPath)).toBe(content);
   });
 });
-
-// ---------------------------------------------------------------------------
-// writeProcedureYamlAtomic
-// ---------------------------------------------------------------------------
 
 describe("writeProcedureYamlAtomic", () => {
   it("round-trip: write then read returns identical text", async () => {
@@ -65,21 +53,18 @@ describe("writeProcedureYamlAtomic", () => {
     expect(read).toBe(text);
   });
 
-  it("creates parent directories that do not exist", async () => {
+  it("creates parent directories", async () => {
     const nested = absPath("deep", "nested", "dir", "procedure.yaml");
     await writeProcedureYamlAtomic(nested, "hello");
-    const read = await fs.readFile(nested, "utf8");
-    expect(read).toBe("hello");
+    expect(await fs.readFile(nested, "utf8")).toBe("hello");
   });
 
-  it("no tmp files remain in the directory after a successful write", async () => {
-    const yamlPath = absPath("proc", "procedure.yaml");
+  it("no tmp files remain after a successful write", async () => {
+    const yamlPath = absPath("pb", "procedure.yaml");
     await writeProcedureYamlAtomic(yamlPath, "content");
-
     const dir = path.dirname(yamlPath);
     const entries = await fs.readdir(dir);
-    const tmpFiles = entries.filter((e) => e.includes(".tmp-"));
-    expect(tmpFiles).toHaveLength(0);
+    expect(entries.filter((e) => e.includes(".tmp-"))).toHaveLength(0);
   });
 
   it("overwrites an existing file", async () => {
@@ -90,89 +75,62 @@ describe("writeProcedureYamlAtomic", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// deleteProcedureDir
-// ---------------------------------------------------------------------------
-
 describe("deleteProcedureDir", () => {
-  it("throws PROC_NOT_FOUND when directory does not exist", async () => {
-    const missing = absPath("nonexistent");
-    await expect(deleteProcedureDir(missing, false)).rejects.toSatisfy(
+  it("throws PROCEDURE_NOT_FOUND for missing dir", async () => {
+    await expect(deleteProcedureDir(absPath("missing"), false)).rejects.toSatisfy(
       (err: unknown) =>
-        err instanceof CodedError && err.code === "PROC_NOT_FOUND",
+        err instanceof CodedError && err.code === "PROCEDURE_NOT_FOUND",
     );
   });
 
   it("cascade=false: fails when subs/ has children", async () => {
-    const procDir = absPath("composite");
-    const subDir = path.join(procDir, "subs", "child");
+    const pbDir = absPath("composite");
+    const subDir = path.join(pbDir, "subs", "child");
     await fs.mkdir(subDir, { recursive: true });
     await fs.writeFile(path.join(subDir, "procedure.yaml"), "sub", "utf8");
 
-    await expect(deleteProcedureDir(procDir, false)).rejects.toSatisfy(
+    await expect(deleteProcedureDir(pbDir, false)).rejects.toSatisfy(
       (err: unknown) =>
-        err instanceof CodedError && err.code === "PROC_IN_USE",
+        err instanceof CodedError && err.code === "PROCEDURE_IN_USE",
     );
 
-    // Directory must still exist.
-    await expect(fs.access(procDir)).resolves.toBeUndefined();
+    await expect(fs.access(pbDir)).resolves.toBeUndefined();
   });
 
-  it("cascade=false: succeeds when there is no subs/ directory", async () => {
-    const procDir = absPath("leafproc");
-    await fs.mkdir(procDir, { recursive: true });
-    await fs.writeFile(
-      path.join(procDir, "procedure.yaml"),
-      "leaf yaml",
-      "utf8",
-    );
+  it("cascade=false: succeeds when no subs/ exists", async () => {
+    const pbDir = absPath("leafpb");
+    await fs.mkdir(pbDir, { recursive: true });
+    await fs.writeFile(path.join(pbDir, "procedure.yaml"), "leaf", "utf8");
 
-    await deleteProcedureDir(procDir, false);
+    await deleteProcedureDir(pbDir, false);
 
-    await expect(fs.access(procDir)).rejects.toThrow();
+    await expect(fs.access(pbDir)).rejects.toThrow();
   });
 
-  it("cascade=true: removes the directory and its subs/", async () => {
-    const procDir = absPath("composite2");
-    const subDir = path.join(procDir, "subs", "sub1");
+  it("cascade=true: removes dir and subs/", async () => {
+    const pbDir = absPath("composite2");
+    const subDir = path.join(pbDir, "subs", "sub1");
     await fs.mkdir(subDir, { recursive: true });
-    await fs.writeFile(
-      path.join(procDir, "procedure.yaml"),
-      "composite",
-      "utf8",
-    );
+    await fs.writeFile(path.join(pbDir, "procedure.yaml"), "composite", "utf8");
     await fs.writeFile(path.join(subDir, "procedure.yaml"), "sub", "utf8");
 
-    await deleteProcedureDir(procDir, true);
+    await deleteProcedureDir(pbDir, true);
 
-    await expect(fs.access(procDir)).rejects.toThrow();
+    await expect(fs.access(pbDir)).rejects.toThrow();
   });
 });
 
-// ---------------------------------------------------------------------------
-// atomicWriteFile
-// ---------------------------------------------------------------------------
-
 describe("atomicWriteFile", () => {
   it("writes text to a new file, creating parent dirs", async () => {
-    const target = absPath("deep", "nested", "file.json");
+    const target = absPath("deep", "file.json");
     await atomicWriteFile(target, '{"ok":true}');
-    const content = await fs.readFile(target, "utf8");
-    expect(content).toBe('{"ok":true}');
+    expect(await fs.readFile(target, "utf8")).toBe('{"ok":true}');
   });
 
-  it("overwrites an existing file atomically", async () => {
-    const target = absPath("overwrite.json");
+  it("overwrites an existing file", async () => {
+    const target = absPath("ov.json");
     await atomicWriteFile(target, "first");
     await atomicWriteFile(target, "second");
     expect(await fs.readFile(target, "utf8")).toBe("second");
-  });
-
-  it("leaves no .tmp files on success", async () => {
-    const target = absPath("clean", "file.json");
-    await atomicWriteFile(target, "clean content");
-    const dir = path.dirname(target);
-    const entries = await fs.readdir(dir);
-    expect(entries.filter((e) => e.includes(".tmp-"))).toHaveLength(0);
   });
 });

@@ -314,13 +314,16 @@ const REF_CODES = [
 ] as const satisfies readonly ErrorCode[];
 const MUTATING_CODES = ["RATE_LIMITED"] as const satisfies readonly ErrorCode[];
 const RISKY_CODES = ["RISKY_ACTION_DENIED"] as const satisfies readonly ErrorCode[];
-const PROC_CODES = [
-  "PROC_NOT_FOUND",
-  "PROC_ALREADY_EXISTS",
-  "PROC_SCHEMA_INVALID",
-  "PROC_IN_USE",
-  "PROC_OWNER_INVALID",
-  "PROC_DOMAIN_INVALID",
+const PROCEDURE_CODES = [
+  "PROCEDURE_NOT_FOUND",
+  "PROCEDURE_ALREADY_EXISTS",
+  "PROCEDURE_SCHEMA_INVALID",
+  "PROCEDURE_IN_USE",
+  "PROCEDURE_OWNER_INVALID",
+  "PROCEDURE_RESUME_EXPIRED",
+  "PROCEDURE_RESUME_INVALID",
+  "PROCEDURE_BUDGET_EXCEEDED",
+  "PROCEDURE_FORBIDDEN",
 ] as const satisfies readonly ErrorCode[];
 const LORE_CODES = [
   "LORE_NOT_FOUND",
@@ -1654,44 +1657,33 @@ const setCdp: ToolDef = {
 } as const;
 
 // ---------------------------------------------------------------------------
-// Procedures tools
+// Procedure tools (feature: "procedures")
+//
+// Six tools in this family:
+//   procedures_search / _get / _save / _delete — store CRUD
+//   procedures_execute — runs a procedure; may halt with needs_assist
+//   procedures_resume  — resume a needs_assist execution with an LLM patch
+//
+// The runtime is deterministic-first: each step resolves a semantic Locator
+// against the live a11y tree (browser_locate), polls a retrying `expect:`
+// predicate, and escalates through the per-step fallback ladder
+// (strict | retry | relocate | relocate_then_llm | llm). Author-time
+// uniqueness is measured by `browser_propose_locator` and drift health
+// is auto-recorded into the YAML's meta.health for auto-demote on save.
 // ---------------------------------------------------------------------------
 
 const procedureNamePattern = "^[a-z][a-z0-9._-]{0,79}$";
 const scopePattern = "^(all|shared|composite:[a-z][a-z0-9._-]{0,79})$";
 const domainPattern = "^[a-z][a-z0-9_-]*$";
 
-/** Shared metadata-only entry shape returned by list/search (no YAML body). */
-const entrySchema: JSONSchemaObject = {
-  type: "object",
-  properties: {
-    name: { type: "string" },
-    kind: { type: "string" },
-    domain: { type: "string" },
-    description: { type: "string" },
-    inputs: { type: "array", items: { type: "string" } },
-    triggers: { type: "array", items: { type: "string" } },
-    tags: { type: "array", items: { type: "string" } },
-    usedBy: { type: "array", items: { type: "string" } },
-  },
-} as const;
-
 const proceduresSearch: ToolDef = {
   name: "procedures_search",
   feature: "procedures",
   description:
-    "Full-text search over the procedure catalogue using pre-tokenized index fields. " +
-    "Returns ranked metadata-only matches; retrieve the YAML body with procedures_get. " +
-    "Scoring is coverage-based: `score` is the fraction of distinct query tokens that appear " +
-    "anywhere in the procedure's union of indexed-field tokens (name + triggers + description + " +
-    "inputs + tags + domain). A 4-token query that matches 2 tokens scores 0.5 regardless of which " +
-    "fields they hit; ties are broken by a weighted-sum signal that favours name + trigger matches. " +
-    "By default only status:trusted procedures are returned — pass include_drafts:true to also see draft entries " +
-    "(authored but not yet success-confirmed). " +
-    "Draft fallback: when include_drafts is false AND the trusted result set is empty, draft hits are surfaced " +
-    "under a separate `drafts` key so they aren't silently missed. Treat them as suggestions, not trusted hits — " +
-    "verify against the live UI before relying on them. " +
-    'REQUIRED ARGUMENTS: {"query": "<search tokens>"}. Example: {"query": "github sign in"}.',
+    "Search the procedure catalogue by free-form query (token coverage + name/trigger/description ranking). " +
+    "Returns metadata-only matches; use procedures_get for the YAML body. " +
+    "Excludes status:draft entries by default; pass include_drafts:true to see them. " +
+    'REQUIRED ARGUMENTS: {"query": "<text>"}.',
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -1699,33 +1691,11 @@ const proceduresSearch: ToolDef = {
     properties: {
       query: { type: "string", minLength: 1, maxLength: 200 },
       limit: { type: "integer", minimum: 1, maximum: 25, default: 10 },
-      min_score: {
-        type: "number",
-        minimum: 0,
-        maximum: 1,
-        default: 0.2,
-        description:
-          "Minimum coverage ratio (matched query tokens / total query tokens) for a procedure to surface. " +
-          "Default 0.2 means at least 1 in 5 query tokens must appear somewhere in the procedure's indexed fields.",
-      },
+      min_score: { type: "number", minimum: 0, maximum: 1, default: 0.2 },
       domain: { type: "string", pattern: domainPattern },
       scope: { type: "string", pattern: scopePattern, default: "all" },
-      deep: {
-        type: "boolean",
-        default: false,
-        description:
-          "When true, step-body tokens join the indexed-field union before coverage is computed, " +
-          "so a query whose tokens only appear inside step actions/args can still surface (slower; loads YAML).",
-      },
-      include_drafts: {
-        type: "boolean",
-        default: false,
-        description:
-          "When true, also returns procedures with status:draft (authored via " +
-          "procedures_save but not yet promoted to trusted by a successful run). " +
-          "Off by default so search results stay scoped to procedures that have " +
-          "been verified at least once.",
-      },
+      deep: { type: "boolean", default: false },
+      include_drafts: { type: "boolean", default: false },
     },
   },
   outputSchema: {
@@ -1733,24 +1703,55 @@ const proceduresSearch: ToolDef = {
     additionalProperties: false,
     required: ["matches", "total", "truncated"] as const,
     properties: {
-      matches: { type: "array", items: { type: "object" } },
-      total: { type: "integer" },
+      matches: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["name", "kind", "description", "inputs", "triggers", "side_effects", "score"] as const,
+          properties: {
+            name: { type: "string" },
+            kind: { enum: ["leaf", "composite"] as const },
+            domain: { type: ["string", "null"] },
+            description: { type: "string" },
+            goal: { type: "string" },
+            inputs: { type: "array", items: { type: "string" } },
+            triggers: { type: "array", items: { type: "string" } },
+            side_effects: { type: "array", items: { type: "string" } },
+            score: { type: "number", minimum: 0, maximum: 1 },
+            snippet: { type: "string" },
+          },
+        },
+      },
+      total: { type: "integer", minimum: 0 },
       truncated: { type: "boolean" },
       drafts: { type: "array", items: { type: "object" } },
     },
   },
   action_weight: 0,
   risky: "never",
-  errorCodes: [...BASE_CODES, ...PROC_CODES] as const,
+  errorCodes: [...BASE_CODES, ...PROCEDURE_CODES] as const,
 } as const;
+
+const procedureMetaOutSchema: JSONSchemaObject = {
+  type: "object",
+  additionalProperties: true,
+  required: ["version", "created", "last_verified", "status"] as const,
+  properties: {
+    version: { type: "integer", minimum: 1 },
+    created: { type: "string" },
+    last_verified: { type: "string" },
+    status: { enum: ["draft", "trusted"] as const },
+    health: { type: "object", additionalProperties: true },
+  },
+};
 
 const proceduresGet: ToolDef = {
   name: "procedures_get",
   feature: "procedures",
   description:
-    "Retrieve the full raw YAML body and metadata for a single procedure by name. " +
-    "Errors with PROC_NOT_FOUND if the name does not exist in the index. " +
-    'REQUIRED ARGUMENTS: {"name": "<procedure name>"}. Example: {"name": "tempmail.get_email"}.',
+    "Fetch the YAML body + metadata for a procedure by name. " +
+    'REQUIRED ARGUMENTS: {"name": "<procedure name>"}.',
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -1766,36 +1767,24 @@ const proceduresGet: ToolDef = {
     properties: {
       yaml: { type: "string" },
       path: { type: "string" },
-      meta: {
-        type: "object",
-        additionalProperties: false,
-        required: ["version", "created", "last_verified", "status"] as const,
-        properties: {
-          version: { type: "integer" },
-          created: { type: "string" },
-          last_verified: { type: "string" },
-          status: { enum: ["draft", "trusted"] as const },
-        },
-      },
+      meta: procedureMetaOutSchema,
     },
   },
   action_weight: 0,
   risky: "never",
-  errorCodes: [...BASE_CODES, ...PROC_CODES] as const,
+  errorCodes: [...BASE_CODES, ...PROCEDURE_CODES] as const,
 } as const;
 
 const proceduresSave: ToolDef = {
   name: "procedures_save",
   feature: "procedures",
   description:
-    "Validate and persist a procedure YAML. Parses, schema-validates, resolves uses: references, " +
-    "then atomically writes to disk and rebuilds the search index. " +
-    "Set overwrite: true to update an existing procedure. " +
-    "Set bump_success: true on a save you've personally verified end-to-end " +
-    "(procedure ran cleanly against the live UI in this same session) — that " +
-    "flips status from draft to trusted so procedures_search starts returning " +
-    "the entry by default. Do NOT set bump_success on an untested save. " +
-    'REQUIRED ARGUMENTS: {"name": "<procedure name>", "yaml": "<full YAML body>"}.',
+    "Create or update a procedure from YAML. Validates schema + forbidden + binding shape before write. " +
+    "Set bump_success:true after a clean run to flip status from draft to trusted. " +
+    "The runtime refuses to bump trusted when drift health on the existing YAML " +
+    "exceeds threshold (auto-demote) — the response carries {demoted:true, demote_reason:'...'} " +
+    "and the save persists as draft. " +
+    'REQUIRED ARGUMENTS: {"name": "<id>", "yaml": "<text>"}.',
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -1805,40 +1794,32 @@ const proceduresSave: ToolDef = {
       yaml: { type: "string", minLength: 1, maxLength: 65536 },
       owner: { type: "string", pattern: procedureNamePattern },
       overwrite: { type: "boolean", default: false },
-      bump_success: {
-        type: "boolean",
-        default: false,
-        description:
-          "When true, mark the procedure as status:trusted so it shows up " +
-          "in procedures_search by default. Use this only when you've " +
-          "actually verified the procedure works against the live UI — " +
-          "never on the initial untested write.",
-      },
+      bump_success: { type: "boolean", default: false },
     },
   },
   outputSchema: {
     type: "object",
-    additionalProperties: false,
+    additionalProperties: true,
     required: ["saved", "path", "version"] as const,
     properties: {
       saved: { const: true },
       path: { type: "string" },
-      version: { type: "integer" },
+      version: { type: "integer", minimum: 1 },
+      demoted: { type: "boolean" },
+      demote_reason: { type: "string" },
     },
   },
   action_weight: 0.5,
   risky: "never",
-  errorCodes: [...BASE_CODES, ...PROC_CODES] as const,
+  errorCodes: [...BASE_CODES, ...PROCEDURE_CODES] as const,
 } as const;
 
 const proceduresDelete: ToolDef = {
   name: "procedures_delete",
   feature: "procedures",
   description:
-    "Delete a procedure by name, cascading to sub-procedures for composites. " +
-    "Refuses if the procedure is referenced by others unless force: true is set. " +
-    "Rebuilds the search index after deletion. " +
-    'REQUIRED ARGUMENTS: {"name": "<procedure name>"}.',
+    "Remove a procedure from the store. Refuses if other composites reference it unless force:true. " +
+    'REQUIRED ARGUMENTS: {"name": "<id>"}.',
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -1859,126 +1840,126 @@ const proceduresDelete: ToolDef = {
   },
   action_weight: 0.5,
   risky: "never",
-  errorCodes: [...BASE_CODES, ...PROC_CODES] as const,
+  errorCodes: [...BASE_CODES, ...PROCEDURE_CODES] as const,
 } as const;
 
-/** Shared step result shape used in procedures_execute output. */
-const stepResultSchema: JSONSchemaObject = {
+const procedureStepResultSchema: JSONSchemaObject = {
   type: "object",
-  additionalProperties: false,
+  additionalProperties: true,
   required: ["id", "action", "matched"] as const,
   properties: {
     id: { type: "string" },
     action: { type: "string" },
-    observed_effect: pageEffectSchema,
     matched: { type: "boolean" },
-    warnings: { type: "array", items: { type: "string" } },
+    attempts: { type: "integer", minimum: 1 },
+    resolved_by: {
+      enum: ["first_try", "retry", "relocate", "llm", "halted"] as const,
+    },
   },
-} as const;
+};
 
 const proceduresExecute: ToolDef = {
   name: "procedures_execute",
   feature: "procedures",
   description:
-    "Replay a saved procedure step by step with effect verification. " +
-    "Loads the procedure by name, substitutes {{var}} input placeholders, " +
-    "then dispatches each step's browser_* tool call through the extension. " +
-    "After each step the observed page_effect is compared to the step's " +
-    "expected_effect (loose assertions: dom.any, url.changed, focus.changed, " +
-    "network.requests_started_min, etc.). Divergence halts execution and " +
-    "returns a structured report naming the step and specific reason. " +
-    'REQUIRED ARGUMENTS: {"name": "<procedure name>"}.',
+    "Run a procedure end-to-end. Resolves semantic locators against the live page, auto-waits, polls expect predicates, " +
+    "and applies the per-step fallback ladder (retry → relocate → llm). " +
+    "If a step's fallback resolves to llm (and strict:false), the runner halts and returns " +
+    '{"status":"needs_assist","execution_id":"<id>","envelope":{...}}. ' +
+    "Resume via procedures_resume(execution_id, patch). " +
+    'REQUIRED ARGUMENTS: {"name": "<procedure>", "tab_id": "<tab>"}.',
   inputSchema: {
     type: "object",
     additionalProperties: false,
-    required: ["name"] as const,
+    required: ["name", "tab_id"] as const,
     properties: {
-      name: {
-        type: "string",
-        pattern: procedureNamePattern,
-        description: "Procedure name, e.g. 'slack.search_messages'.",
-      },
-      inputs: {
-        type: "object",
-        additionalProperties: true,
-        description: "Values for procedure input params ({{var}} substitution).",
-      },
-      continue_on_warning: {
+      name: { type: "string", pattern: procedureNamePattern },
+      tab_id: tabIdSchema,
+      inputs: { type: "object", additionalProperties: true, default: {} },
+      strict: {
         type: "boolean",
         default: false,
         description:
-          "Reserved for Phase 6. When true, soft divergences do not halt execution. " +
-          "Phase 5 always halts on any mismatch regardless of this flag.",
+          "Refuse all LLM fallback paths even when steps declare them. Use for CI / batch runs " +
+          "and post-authoring verification before bump_success:true.",
       },
-      max_steps: {
+      max_tool_calls: {
         type: "integer",
-        minimum: 1,
-        description:
-          "Safety cap on the number of steps to execute. " +
-          "Defaults to the total step count of the procedure.",
+        minimum: 0,
+        maximum: 100,
+        description: "Global cap on tool_call budget spent by fallback strategies.",
       },
     },
   },
   outputSchema: {
     type: "object",
-    additionalProperties: false,
-    required: ["completed", "steps_executed", "step_results"] as const,
+    additionalProperties: true,
+    required: ["completed", "status", "steps_executed", "step_results", "used_llm_fallback"] as const,
     properties: {
-      completed: {
-        type: "boolean",
-        description: "True when all steps executed without divergence.",
+      completed: { type: "boolean" },
+      status: {
+        enum: ["completed", "needs_assist", "gave_up", "halted"] as const,
       },
-      steps_executed: {
-        type: "integer",
-        minimum: 0,
-        description: "Number of steps attempted (including the diverging step if any).",
-      },
-      step_results: {
-        type: "array",
-        items: stepResultSchema,
-        description: "Per-step execution record in order.",
-      },
-      final_step: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          id: { type: "string" },
-          observed_effect: pageEffectSchema,
-          expected_effect: { type: "object", additionalProperties: true },
-          divergence: { type: "string" },
-        },
-        description: "Summary of the last executed step.",
-      },
-      divergence: {
-        type: "object",
-        additionalProperties: false,
-        required: ["step_id", "step_index", "reason"] as const,
-        properties: {
-          step_id: { type: "string" },
-          step_index: { type: "integer", minimum: 0 },
-          reason: { type: "string" },
-          observed: pageEffectSchema,
-          expected: { type: "object", additionalProperties: true },
-        },
-        description: "Present only when completed is false and a step diverged.",
-      },
+      steps_executed: { type: "integer", minimum: 0 },
+      step_results: { type: "array", items: procedureStepResultSchema },
+      execution_id: { type: "string" },
+      envelope: { type: "object", additionalProperties: true },
+      divergence: { type: "object", additionalProperties: true },
+      used_llm_fallback: { type: "boolean" },
+      verify_passed: { type: "boolean" },
     },
   },
   action_weight: 1,
   risky: "never",
   errorCodes: [
     ...BASE_CODES,
-    ...PROC_CODES,
+    ...PROCEDURE_CODES,
+    ...TAB_CODES,
     "EXTENSION_DISCONNECTED",
     "RATE_LIMITED",
-    "RISKY_ACTION_DENIED",
-    "TAB_NOT_FOUND",
-    "REF_STALE",
-    "REF_NOT_FOUND",
+    "LOCATOR_NOT_FOUND",
+    "LOCATOR_AMBIGUOUS",
+    "ELEMENT_NOT_ACTIONABLE",
   ] as const,
 } as const;
 
-
+const proceduresResume: ToolDef = {
+  name: "procedures_resume",
+  feature: "procedures",
+  description:
+    "Resume a suspended procedure execution with a patch. Three patch kinds: " +
+    "(1) resume_with{locator?, params?} — retry the failing step with a fresh descriptor; " +
+    "(2) insert_steps{steps[]} — run corrective steps then continue from the original step; " +
+    "(3) give_up{reason?} — abandon the run. " +
+    "Every step the patch introduces goes through the same forbidden guard as a normal dispatch. " +
+    'REQUIRED ARGUMENTS: {"execution_id": "<id>", "patch": {<patch>}}.',
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["execution_id", "patch"] as const,
+    properties: {
+      execution_id: { type: "string", minLength: 1 },
+      patch: {
+        type: "object",
+        additionalProperties: true,
+        required: ["kind"] as const,
+        properties: {
+          kind: { enum: ["resume_with", "insert_steps", "give_up"] as const },
+        },
+      },
+    },
+  },
+  outputSchema: proceduresExecute.outputSchema,
+  action_weight: 1,
+  risky: "never",
+  errorCodes: [
+    ...BASE_CODES,
+    ...PROCEDURE_CODES,
+    ...TAB_CODES,
+    "EXTENSION_DISCONNECTED",
+    "LOCATOR_NOT_FOUND",
+  ] as const,
+} as const;
 // ---------------------------------------------------------------------------
 // Cross-agent lore tools (feature: "lore")
 //
@@ -2246,6 +2227,165 @@ const releaseTab: ToolDef = {
 } as const;
 
 // ---------------------------------------------------------------------------
+// Procedure locator helpers: browser_locate (resolver) + browser_propose_locator (uniqueness scorer)
+// ---------------------------------------------------------------------------
+
+const locatorInputSchema: JSONSchemaObject = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    role: { type: "string", minLength: 1, maxLength: 40 },
+    name: { type: "string", minLength: 1, maxLength: 400 },
+    aria_label: { type: "string", minLength: 1, maxLength: 400 },
+    data_testid: { type: "string", minLength: 1, maxLength: 200 },
+    href: { type: "string", minLength: 1, maxLength: 400 },
+    attr: {
+      type: "object",
+      additionalProperties: false,
+      required: ["name", "value"] as const,
+      properties: {
+        name: { type: "string", minLength: 1, maxLength: 80 },
+        value: { type: "string", minLength: 1, maxLength: 400 },
+      },
+    },
+    has_text: { type: "string", minLength: 1, maxLength: 400 },
+    has_text_not: { type: "string", minLength: 1, maxLength: 400 },
+    in_frame: { type: "string", minLength: 1, maxLength: 400 },
+    near: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        ref: { type: "integer", minimum: 1 },
+        locator: { type: "object", additionalProperties: true },
+        radius_px: { type: "number", minimum: 0 },
+      },
+    },
+    nth: { type: "integer", minimum: 0 },
+    scope: { enum: ["viewport", "document"] as const },
+  },
+};
+
+const browserLocate: ToolDef = {
+  name: "browser_locate",
+  feature: "procedures",
+  description:
+    "Resolve a semantic Locator descriptor (role/name/aria_label/data_testid/href/attr/has_text/nth/...) against the tab's current a11y snapshot and return matching refs. " +
+    "Operates against the in-memory ref-cache, so a prior browser_read or browser_quick_read on the same tab is required. " +
+    "Returns LOCATOR_NOT_FOUND when nothing matches; the procedure executor polls + refreshes the snapshot to handle dynamic UIs. " +
+    'REQUIRED ARGUMENTS: {"tab_id": "<id>", "locator": {<descriptor>}}.',
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["tab_id", "locator"] as const,
+    properties: {
+      tab_id: tabIdSchema,
+      locator: locatorInputSchema,
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["matches", "used_snapshot"] as const,
+    properties: {
+      matches: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["ref", "role", "name", "selector"] as const,
+          properties: {
+            ref: { type: "integer", minimum: 1 },
+            role: { type: "string" },
+            name: { type: "string" },
+            selector: { type: "string" },
+          },
+        },
+      },
+      used_snapshot: { enum: ["current", "previous", "none"] as const },
+    },
+  },
+  action_weight: 0,
+  risky: "never",
+  errorCodes: [
+    ...BASE_CODES,
+    ...TAB_CODES,
+    "LOCATOR_NOT_FOUND",
+    "LOCATOR_AMBIGUOUS",
+    "ELEMENT_NOT_ACTIONABLE",
+  ] as const,
+} as const;
+
+const browserProposeLocator: ToolDef = {
+  name: "browser_propose_locator",
+  feature: "procedures",
+  description:
+    "Author-time helper: given a target ref in the tab's current a11y snapshot, propose the smallest, highest-stability-tier Locator descriptor that resolves to exactly that element. " +
+    "Walks a candidate ladder — tier 1 (aria_label / data_testid / href / attr) → tier 2 (role+name composites) → tier 3 (nth, flagged fragile). " +
+    "Returns the chosen descriptor plus tier, unique flag, fragile flag, warnings, and the full candidate trace. " +
+    "Use this from the browserops-teach skill (or any procedure-authoring flow) so saved locators are measured-unique, not eyeballed. " +
+    'REQUIRED ARGUMENTS: {"tab_id": "<id>", "ref": <number>}. A prior browser_read (a11y_tree, augment:true) on the same tab is required to populate the ref-cache.',
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["tab_id", "ref"] as const,
+    properties: {
+      tab_id: tabIdSchema,
+      ref: {
+        type: "integer",
+        minimum: 1,
+        description: "The ref id (from browser_read) of the target element.",
+      },
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["unique", "locator", "tier", "fragile", "warnings", "candidates"] as const,
+    properties: {
+      unique: {
+        type: "boolean",
+        description: "True when the chosen locator resolved to exactly the target ref.",
+      },
+      locator: {
+        ...locatorInputSchema,
+        description: "Chosen descriptor — the smallest, highest-tier candidate that worked.",
+      },
+      tier: {
+        enum: [1, 2, 3] as const,
+        description:
+          "Stability tier of the chosen descriptor. 1=author-controlled (aria_label/data_testid/href/attr/role), 2=text-derived (name/has_text), 3=fragile (nth).",
+      },
+      fragile: {
+        type: "boolean",
+        description: "True when only the tier-3 (nth) candidate matched.",
+      },
+      warnings: {
+        type: "array",
+        items: { type: "string", maxLength: 400 },
+        description: "Author-facing warnings (e.g. 'fell through to nth — descriptor is fragile').",
+      },
+      candidates: {
+        type: "array",
+        description: "Full trace of considered candidates with their match counts. Debug-grade.",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["locator", "matches", "tier"] as const,
+          properties: {
+            locator: locatorInputSchema,
+            matches: { type: "integer", minimum: 0 },
+            tier: { enum: [1, 2, 3] as const },
+          },
+        },
+      },
+    },
+  },
+  action_weight: 0,
+  risky: "never",
+  errorCodes: [...BASE_CODES, ...TAB_CODES, "LOCATOR_NOT_FOUND", "REF_NOT_FOUND"] as const,
+} as const;
+
+// ---------------------------------------------------------------------------
 // Public catalogue
 // ---------------------------------------------------------------------------
 
@@ -2382,10 +2522,13 @@ export const TOOL_DEFS: readonly ToolDef[] = [
   proceduresSave,
   proceduresDelete,
   proceduresExecute,
+  proceduresResume,
   loreSave,
   loreSearch,
   loreGet,
   loreDelete,
+  browserLocate,
+  browserProposeLocator,
 ] as const;
 
 export const TOOL_DEF_MAP: Record<string, ToolDef> = Object.freeze(
