@@ -1,7 +1,7 @@
 /**
  * Locator stability tier classifier.
  *
- * The uniqueness scorer (packages/bridge/src/playbooks/locator-propose.ts)
+ * The uniqueness scorer (packages/extension/src/lib/locator-propose.ts)
  * uses these tiers to prefer one candidate over another. Tier 1 is the
  * goal: author/contract-controlled signals that survive UI rebuilds
  * (aria-label, data-testid, href, attr, role, in_frame). Tier 2 is OK

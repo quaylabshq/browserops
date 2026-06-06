@@ -5,11 +5,11 @@
  * Result: { matches: Array<{ref, role, name, selector}>, used_snapshot: "current" | "previous" | "none" }
  *
  * Strategy in v1: operate against the in-memory RefCache snapshot for the
- * tab. The playbook executor on the bridge takes care of refreshing the
+ * tab. The procedure executor on the bridge takes care of refreshing the
  * snapshot via browser_read before each locate call (and polling on miss).
  *
  * No polling here — the extension side is one-shot. Polling lives in the
- * bridge's playbook execute loop so it can apply retry/relocate budgets
+ * bridge's procedure execute loop so it can apply retry/relocate budgets
  * uniformly across primitives.
  */
 import type { ErrorCode, Locator } from "@browserops/shared";
@@ -77,7 +77,7 @@ export function registerLocateHandler(router: Router, deps: LocateDeps): void {
 
       const snapshot = deps.refCache.get(params.tab_id);
       if (snapshot === undefined) {
-        // No snapshot — the caller (playbook executor) is expected to have
+        // No snapshot — the caller (procedure executor) is expected to have
         // primed the cache via browser_read before locating. Surface a
         // distinct error so the bridge can decide whether to refresh-and-
         // retry vs. fail outright.
@@ -102,6 +102,6 @@ export function registerLocateHandler(router: Router, deps: LocateDeps): void {
         used_snapshot: "current",
       };
     },
-    { feature: "playbooks" },
+    { feature: "procedures" },
   );
 }

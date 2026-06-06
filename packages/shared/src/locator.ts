@@ -2,12 +2,12 @@
  * Locator descriptor — a Playwright-style semantic selector that gets
  * re-resolved against the live a11y tree on every step.
  *
- * Playbook authors hand-write these; the extension's locator resolver
+ * Procedure authors hand-write these (or let browser_propose_locator pick); the extension's locator resolver
  * (packages/extension/src/background/handlers/locate.ts) does the matching.
  *
  * Serialised regex form: `/source/flags` — YAML carries strings; the
  * helpers below convert between live RegExp objects and the persisted
- * form so a playbook YAML file round-trips losslessly.
+ * form so a procedure YAML file round-trips losslessly.
  */
 
 /**
@@ -205,7 +205,7 @@ export function isLocatorEmpty(loc: Locator | undefined | null): boolean {
 
 /**
  * Inline JSON-Schema fragment for a Locator — referenced from the
- * playbook schema and from the optional `locator:` field on action
+ * procedure schema and from the optional `locator:` field on action
  * inputs.
  *
  * Untyped so consumers don't have to import the JSONSchemaObject type

@@ -2227,7 +2227,7 @@ const releaseTab: ToolDef = {
 } as const;
 
 // ---------------------------------------------------------------------------
-// Playbooks: browser_locate (semantic-locator resolver, opt-in via feature)
+// Procedure locator helpers: browser_locate (resolver) + browser_propose_locator (uniqueness scorer)
 // ---------------------------------------------------------------------------
 
 const locatorInputSchema: JSONSchemaObject = {

@@ -6,7 +6,7 @@
  *
  * Uses the in-memory RefCache snapshot for the tab — the caller is
  * expected to have primed it via browser_read (a11y_tree, augment:true)
- * first. Same contract as browser_locate; the playbook executor's
+ * first. Same contract as browser_locate; the procedure executor's
  * auto-prime applies here too once this is invoked from inside the
  * execute loop.
  *
@@ -100,6 +100,6 @@ export function registerProposeLocatorHandler(
         candidates: result.candidates,
       };
     },
-    { feature: "playbooks" },
+    { feature: "procedures" },
   );
 }
