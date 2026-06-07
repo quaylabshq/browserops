@@ -6,11 +6,11 @@ produced them.
 
 ## Context
 
-| Run | Connector | Success | Notes |
-|---|---|---|---|
-| Run 1 | 0.0.7 | 17/30 (57%) | pre-PR, synthetic-dispatch default |
-| Run 2 | 0.0.9 | 22/30 (73%) | post-PR #6 (CDP-trusted input default) |
-| Browser-harness baseline | n/a | 26/30 (~86%) | screenshot-driven, Python-script per-call |
+| Run                      | Connector | Success      | Notes                                     |
+| ------------------------ | --------- | ------------ | ----------------------------------------- |
+| Run 1                    | 0.0.7     | 17/30 (57%)  | pre-PR, synthetic-dispatch default        |
+| Run 2                    | 0.0.9     | 22/30 (73%)  | post-PR #6 (CDP-trusted input default)    |
+| Browser-harness baseline | n/a       | 26/30 (~86%) | screenshot-driven, Python-script per-call |
 
 PR #7 (`feat/trusted-input-long-tail`) adds: full key-event geometry,
 two-stage hover, screenshot byte budget, auto-IIFE in execute_js, and
@@ -115,7 +115,7 @@ browser-harness structurally avoids these loops.
 **The single highest-leverage change.** Have `browser_click`,
 `browser_type`, `browser_press`, `browser_hover` return a small thumbnail
 of the post-action viewport alongside `page_effect`. Default ~256-wide
-JPEG, ~3KB. The agent's *next inference* sees both the structural and
+JPEG, ~3KB. The agent's _next inference_ sees both the structural and
 visual state.
 
 Why this matters: browser-harness's reliability comes from
@@ -181,7 +181,7 @@ deprecation window; no protocol break needed.
 ## Tier 5 — Deferred / out of scope
 
 - **Linear listbox click no-op (m11)** — workaround works (type-to-filter
-  + Enter). Investigation only, no shipping plan.
+  - Enter). Investigation only, no shipping plan.
 - **TrustedHTML on Gmail body** — known limitation; agents have a robust
   `execute_js` + `execCommand('insertText')` workaround.
 - **Notion add-subpage / Linear create / Slack DM flows** — these belong
