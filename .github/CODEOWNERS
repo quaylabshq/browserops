@@ -1,0 +1,23 @@
+# Repo-wide default — every PR pings the maintainers.
+*                                  @whysosaket
+
+# Wire protocol changes need extra eyes — a tweak here ripples through bridge + extension + every published consumer.
+/packages/shared/src/protocol.ts   @whysosaket
+/packages/shared/src/tools.ts      @whysosaket
+/packages/shared/src/procedures.ts @whysosaket
+/packages/shared/src/errors.ts     @whysosaket
+
+# Safety-critical paths.
+/packages/bridge/src/safety.ts     @whysosaket
+/packages/bridge/src/token.ts      @whysosaket
+/packages/bridge/src/ws-server.ts  @whysosaket
+/packages/bridge/src/rate-limiter.ts @whysosaket
+
+# Release surface.
+/packages/cli/package.json         @whysosaket
+/packages/bridge/package.json      @whysosaket
+/packages/shared/package.json      @whysosaket
+/scripts/bump-version.mjs          @whysosaket
+
+# Skills are agent-facing — out-of-sync skills cause silent procedure failures.
+/skills/                           @whysosaket
