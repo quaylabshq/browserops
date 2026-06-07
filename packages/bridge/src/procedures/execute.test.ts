@@ -105,6 +105,47 @@ describe("procedure execute — strict mode", () => {
     expect(ws.calls[0]?.params["url"]).toBe("https://example.com");
   });
 
+  it("satisfies a text_visible expect via a live text-mode read", async () => {
+    // Regression: the tool result for an action does not carry rendered
+    // page text, so a text_visible predicate could never match. The expect
+    // poll must fetch live text (browser_read mode:"text") and merge it.
+    await writeYaml("shared/text_expect/procedure.yaml", {
+      schema_version: 1,
+      name: "text.expect",
+      description: "text visible expect",
+      kind: "leaf",
+      steps: [
+        {
+          id: "go",
+          do: "navigate",
+          with: { url: "https://example.com" },
+          expect: { text_visible: "Welcome", timeout_ms: 1000, poll_interval_ms: 50 },
+        },
+      ],
+    });
+
+    const ws = stubWsBridge([
+      {
+        method: "browser_navigate",
+        response: { final_url: "https://example.com", page_effect: emptyPageEffect() },
+      },
+      // The text predicate triggers a live text-mode read carrying the page text.
+      {
+        method: "browser_read",
+        response: { content: "Welcome home", url: "https://example.com", title: "Example" },
+      },
+    ]);
+
+    const exec = makeProcedureExecutor(ws);
+    const result = await exec({ name: "text.expect", tab_id: "t_1", inputs: {} });
+
+    expect(result.completed).toBe(true);
+    const textReads = ws.calls.filter(
+      (c) => c.method === "browser_read" && c.params["mode"] === "text",
+    );
+    expect(textReads.length).toBeGreaterThanOrEqual(1);
+  });
+
   it("auto-primes the ref-cache via browser_read before every locator step", async () => {
     // Two-step procedure so we can assert the prime fires twice.
     await writeYaml("shared/auto_prime/procedure.yaml", {
