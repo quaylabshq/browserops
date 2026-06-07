@@ -165,9 +165,9 @@ When destructive inputs need a verification value, default to
        changes (e.g. #inbox → #inbox?compose=new) no-op when you're
        already on that route, so the dialog never opens. Author the entry
        as THREE steps: (1) `do: navigate` to the app's base view; (2)
-       `do: wait` for the entry control to be present (real
-       browser_wait_for — its text search works where the `text_visible`
-       expect predicate may not); (3) `do: click` the entry control via
+       `do: wait` for the entry control to be present (browser_wait_for is
+       the purpose-built readiness gate — cheaper than polling a text
+       predicate); (3) `do: click` the entry control via
        its proposed locator with `expect: { new_dialog: ... }`. This is
        what makes the flow work whether the tab starts on the app or on
        some unrelated page.
@@ -409,15 +409,15 @@ tool result directly and can't silently no-op:
     - visual_delta_at_least                     → viewport visibly changed
     - focus_moved_to                            → focus landed somewhere
     - url_matches                               → URL changed (navigate too)
+    - text_visible / text_invisible             → rendered text present/gone
 
-  USE WITH CARE:
-    - text_visible / text_invisible — depends on the runtime populating
-      page text into the observation. If a text predicate "never matches"
-      on text you can plainly SEE on the page, don't fight it: switch to an
-      effect-based predicate (new_dialog for "a thing opened",
-      network_endpoint_seen for "it submitted", dom_removed_min for "the
-      dialog closed"). A structurally-impossible predicate loops authoring
-      forever.
+  COST NOTE: text_visible / text_invisible (and any verify{} block) make the
+  runtime fetch live page text via browser_read(mode:"text") on every poll —
+  correct, but a round-trip per poll. When an effect-based predicate
+  expresses the same success (new_dialog for "a thing opened",
+  network_endpoint_seen for "it submitted", dom_removed_min for "the dialog
+  closed"), prefer it — it reads straight from the action's effect envelope
+  with no extra call.
 
 Map a strict-run divergence to the layer that actually failed BEFORE you
 touch the YAML — re-editing locators won't fix a runtime fault:
@@ -426,7 +426,7 @@ touch the YAML — re-editing locators won't fix a runtime fault:
   |-----------------------------------------------------|---------------------|--------|
   | "no ref-cache snapshot for this tab"                | runtime auto-prime  | Not your locator — surface the prime bug. |
   | url "" on a navigate that clearly moved             | runtime observation | URL not captured for this tool — use an effect predicate or report. |
-  | text_visible "<text you can see>" not found         | predicate unsupported | Switch to an effect-based predicate. |
+  | text_visible "<text you can see>" not found         | timing / wrong string | Text is fetched live now — it isn't there yet (add a `do: wait`) or your string/regex is off. |
   | "locator matched no elements" (descriptor looks ok) | timing / not loaded | Add a `do: wait` for the control before the step. |
   | "locator matched no elements" (descriptor wrong)    | bad locator         | Re-propose on a fresh snapshot; prefer tier-1. |
   | "no new dialog matched ..." after a real open       | wrong dialog name   | Loosen the new_dialog regex / drop to `new_dialog: true`. |
