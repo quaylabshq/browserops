@@ -507,7 +507,7 @@ async function tryStepOnce(
     try {
       await wsBridge.callExtension(
         "browser_read",
-        { tab_id, mode: "a11y_tree", scope: { kind: "viewport" }, augment: true },
+        { tab_id, mode: "a11y_tree", scope: "viewport", augment: true },
         DEFAULT_TOOL_TIMEOUT_MS,
       );
     } catch {
@@ -937,7 +937,11 @@ function buildObservation(toolResult: unknown): Observation | undefined {
     }
   }
 
+  // browser_navigate returns the landed URL as `final_url`, not `url`.
+  // Accept both so url_matches works on navigate steps as well as on
+  // tools that surface `url` directly.
   if (typeof r["url"] === "string") obs.url = r["url"] as string;
+  else if (typeof r["final_url"] === "string") obs.url = r["final_url"] as string;
   if (typeof r["title"] === "string") obs.title = r["title"] as string;
 
   return obs;
