@@ -31,7 +31,7 @@ export default defineConfig({
   platform: "node",
   bundle: true,
   clean: true,
-  sourcemap: true,
+  sourcemap: false,
   dts: false,
   noExternal: ["@browserops/shared"],
   onSuccess: async () => {

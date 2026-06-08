@@ -1,8 +1,26 @@
 {
   "name": "@browserops/shared",
   "version": "0.0.9",
-  "private": true,
   "type": "module",
+  "description": "Shared protocol types, tool catalogue, error codes, and procedure schema for the browserops MCP server and Chrome extension.",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "browserops",
+    "browser-automation",
+    "types"
+  ],
+  "homepage": "https://github.com/quaylabshq/browserops#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/quaylabshq/browserops.git",
+    "directory": "packages/shared"
+  },
+  "bugs": {
+    "url": "https://github.com/quaylabshq/browserops/issues"
+  },
+  "license": "MIT",
+  "author": "Saket Aryan",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -11,16 +29,27 @@
       "default": "./dist/index.js"
     }
   },
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.d.ts",
+    "!dist/**/*.test.*",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc -b",
     "dev": "tsc -b --watch",
     "typecheck": "tsc -b --noEmit",
     "clean": "rm -rf dist *.tsbuildinfo",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepublishOnly": "pnpm build"
   },
   "devDependencies": {
     "ajv": "^8.17.0",
     "typescript": "^5.4.0",
-    "vitest": "^2.0.0"
+    "vitest": "^3.2.6"
   }
 }

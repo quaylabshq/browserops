@@ -28,9 +28,14 @@
     "browserops-daemon": "./dist/daemon.js",
     "browserops-shim": "./dist/shim.js"
   },
+  "exports": {
+    "./package.json": "./package.json"
+  },
   "files": [
-    "dist",
-    "README.md"
+    "dist/**/*.js",
+    "dist/assets/**",
+    "README.md",
+    "LICENSE"
   ],
   "publishConfig": {
     "access": "public"
@@ -54,11 +59,11 @@
   },
   "devDependencies": {
     "@browserops/shared": "workspace:*",
-    "@types/node": "^20.14.0",
+    "@types/node": "^22.19.20",
     "@types/ws": "^8.5.12",
     "tsup": "^8.3.0",
     "tsx": "^4.19.0",
     "typescript": "^5.4.0",
-    "vitest": "^2.0.0"
+    "vitest": "^3.2.6"
   }
 }

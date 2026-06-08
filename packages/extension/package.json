@@ -14,12 +14,12 @@
     "@browserops/shared": "workspace:*"
   },
   "devDependencies": {
-    "@crxjs/vite-plugin": "^2.4.0",
+    "@crxjs/vite-plugin": "^2.5.0",
     "@tailwindcss/vite": "^4.2.4",
     "@types/chrome": "^0.0.270",
     "tailwindcss": "^4.2.4",
     "typescript": "^5.4.0",
-    "vite": "^5.4.0",
-    "vitest": "^2.0.0"
+    "vite": "^6.4.3",
+    "vitest": "^3.2.6"
   }
 }
