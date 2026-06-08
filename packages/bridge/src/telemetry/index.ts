@@ -8,8 +8,7 @@ import { join } from "node:path";
 import { STATE_DIR_NAME } from "@browserops/shared";
 import { PostHogHttpClient } from "./posthog-http.js";
 import { loadOrCreateInstallId } from "./install-id.js";
-import { isTelemetryEnabled } from "./opt-out.js";
-import { buildCommonProps, captureEvent } from "./events.js";
+import { isTelemetryEnabled, isEmailAliasEnabled } from "./opt-out.js";
 
 const DEFAULT_API_KEY = "phc_BNdKUvhapUoZEdt9iXT7eYZgoWrthrZtWuRpPqQ94Nz8";
 const DEFAULT_HOST = "https://us.i.posthog.com";
@@ -54,17 +53,13 @@ let singleton: PostHogHttpClient | null = null;
  * install-id load, or identify enqueue is swallowed and returns a disabled
  * stub client. Telemetry must never break the daemon or CLI.
  */
-export async function initTelemetry(
-  opts: TelemetryInitOptions = {},
-): Promise<TelemetryInitResult> {
+export async function initTelemetry(opts: TelemetryInitOptions = {}): Promise<TelemetryInitResult> {
   try {
     const enabled = isTelemetryEnabled();
     const { id: distinctId, created: installCreated } = await loadOrCreateInstallId();
 
-    const apiKey =
-      process.env["BROWSEROPS_POSTHOG_KEY"] || opts.apiKey || DEFAULT_API_KEY;
-    const host =
-      process.env["BROWSEROPS_POSTHOG_HOST"] || opts.host || DEFAULT_HOST;
+    const apiKey = process.env["BROWSEROPS_POSTHOG_KEY"] || opts.apiKey || DEFAULT_API_KEY;
+    const host = process.env["BROWSEROPS_POSTHOG_HOST"] || opts.host || DEFAULT_HOST;
 
     const client = new PostHogHttpClient({
       apiKey,
@@ -83,7 +78,8 @@ export async function initTelemetry(
       };
       if (opts.bridgeVersion) set["bridge_version"] = opts.bridgeVersion;
       if (opts.cliVersion) set["cli_version"] = opts.cliVersion;
-      const email = await readIdentityEmail();
+      const emailConsent = isEmailAliasEnabled();
+      const email = emailConsent ? await readIdentityEmail() : undefined;
       if (email) set["email"] = email;
       client.identify(set, { first_seen: new Date().toISOString() });
       if (email) client.alias(email);
@@ -118,12 +114,14 @@ export function resetTelemetryForTest(): void {
 }
 
 export { PostHogHttpClient } from "./posthog-http.js";
-export { isTelemetryEnabled, DO_NOT_TRACK_ENV } from "./opt-out.js";
 export {
-  loadOrCreateInstallId,
-  installIdPath,
-  INSTALL_ID_FILENAME,
-} from "./install-id.js";
+  isTelemetryEnabled,
+  isEmailAliasEnabled,
+  DO_NOT_TRACK_ENV,
+  BROWSEROPS_TELEMETRY_ENV,
+  BROWSEROPS_ALIAS_EMAIL_ENV,
+} from "./opt-out.js";
+export { loadOrCreateInstallId, installIdPath, INSTALL_ID_FILENAME } from "./install-id.js";
 export { captureEvent, buildCommonProps } from "./events.js";
 export type { CommonProps } from "./events.js";
 export { redact, isAllowedEvent } from "./redact.js";
