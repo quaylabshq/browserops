@@ -27,14 +27,6 @@ function stubChannel(): ConfirmationChannel {
   };
 }
 
-function stubChannelAllow(): ConfirmationChannel {
-  return {
-    async awaitConfirmation() {
-      return { allow: true };
-    },
-  };
-}
-
 function stubLogger(): Logger {
   return { async write() {} } as unknown as Logger;
 }

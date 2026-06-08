@@ -6,7 +6,7 @@ import { isDaemonAlive } from "../lib/daemon.js";
 import { getSafeMode, getFeatureStates } from "../lib/config.js";
 import { STATE_DIR, tokenPath } from "../lib/paths.js";
 import { DEFAULT_WS_PORT, ENV } from "@browserops/shared";
-import { ok, err, info, warn } from "../lib/ui.js";
+import { ok, err, warn } from "../lib/ui.js";
 
 interface Check {
   ok: boolean;
@@ -143,7 +143,11 @@ function tcpConnect(port: number): Promise<boolean> {
     const conn = createConnection({ host: "127.0.0.1", port });
     const done = (result: boolean): void => {
       conn.removeAllListeners();
-      try { conn.destroy(); } catch { /* ignore */ }
+      try {
+        conn.destroy();
+      } catch {
+        /* ignore */
+      }
       resolve(result);
     };
     conn.once("connect", () => done(true));

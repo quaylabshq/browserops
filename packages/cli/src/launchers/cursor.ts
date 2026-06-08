@@ -1,6 +1,6 @@
 import { spawnSync, spawn } from "node:child_process";
 import { ensureDaemonRunning } from "../lib/daemon.js";
-import { ok, info, warn, c } from "../lib/ui.js";
+import { ok, info, c } from "../lib/ui.js";
 
 const BIN = "cursor";
 
@@ -71,11 +71,11 @@ export async function runCursorLauncher(task: string): Promise<void> {
 
   process.stdout.write(
     `\n${c.bold("─────────────────────────────────────────────")}\n` +
-    `${c.bold("Cursor is opening. Open its chat (Ctrl/Cmd+L) and paste:")}\n\n` +
-    `  ${c.cyan(prompt)}\n\n` +
-    (copied
-      ? `${c.green("✓")} Copied to clipboard — just paste.\n`
-      : `${c.yellow("!")} Could not copy automatically — paste the line above.\n`) +
-    `${c.bold("─────────────────────────────────────────────")}\n\n`,
+      `${c.bold("Cursor is opening. Open its chat (Ctrl/Cmd+L) and paste:")}\n\n` +
+      `  ${c.cyan(prompt)}\n\n` +
+      (copied
+        ? `${c.green("✓")} Copied to clipboard — just paste.\n`
+        : `${c.yellow("!")} Could not copy automatically — paste the line above.\n`) +
+      `${c.bold("─────────────────────────────────────────────")}\n\n`,
   );
 }
