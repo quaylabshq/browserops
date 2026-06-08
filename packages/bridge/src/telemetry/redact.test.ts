@@ -49,7 +49,9 @@ describe("redact", () => {
   });
 
   it("mcp.* drops events whose tool isn't in TOOL_DEF_MAP", () => {
-    expect(redact("mcp.browser_secret_thing", { tool_name: "browser_secret_thing", ok: true })).toEqual({});
+    expect(
+      redact("mcp.browser_secret_thing", { tool_name: "browser_secret_thing", ok: true }),
+    ).toEqual({});
   });
 
   it("collapses non-canonical error_code to UNKNOWN", () => {
