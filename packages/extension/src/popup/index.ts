@@ -147,7 +147,7 @@ killBtn.addEventListener("click", () => {
 });
 
 optionsBtn.addEventListener("click", () => {
-  chrome.runtime.openOptionsPage();
+  void chrome.runtime.openOptionsPage();
 });
 
 runSetupBtn.addEventListener("click", () => {

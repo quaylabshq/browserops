@@ -47,14 +47,12 @@ export function installMutationObserver(windowId: string): void {
     characterData: true,
   });
   state.observer = observer;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (window as any)[key] = state;
 }
 
 /** Disconnect the observer and return accumulated counts. */
 export function readMutationObserver(windowId: string): MutationCounts {
   const key = `__browserops_mutation_${windowId}__` as keyof Window;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const state = (window as any)[key] as MutationState | undefined;
   if (!state) {
     return { added: 0, removed: 0, attr: 0, char: 0 };
@@ -64,7 +62,6 @@ export function readMutationObserver(windowId: string): MutationCounts {
   } catch {
     /* best-effort */
   }
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   delete (window as any)[key];
   return {
     added: state.added,
@@ -147,9 +144,7 @@ export function snapshotFocusAndDialogs(): {
   };
 
   const dialogs: DialogSnapshot[] = [];
-  const nodes = document.querySelectorAll<HTMLElement>(
-    '[role="dialog"], [role="alertdialog"]',
-  );
+  const nodes = document.querySelectorAll<HTMLElement>('[role="dialog"], [role="alertdialog"]');
   let scanned = 0;
   for (const el of nodes) {
     if (scanned++ >= 200) break;
