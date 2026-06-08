@@ -4,6 +4,7 @@ import { createConnection, createServer, type Server as NetServer, type Socket }
 import { dirname } from "node:path";
 import {
   DAEMON_PROTOCOL_VERSION,
+  MAX_FRAME_BYTES,
   isShimBye,
   isShimMcpIn,
   isShimRegister,
@@ -15,7 +16,9 @@ import {
 import type { Logger } from "./logger.js";
 import type { DaemonSession } from "./daemon-sessions.js";
 
-const MAX_LINE_BYTES = 16 * 1024 * 1024;
+// Shim ↔ daemon JSONL framing is capped to the same per-frame budget as the
+// extension WebSocket so the two transports stay in lockstep.
+const MAX_LINE_BYTES = MAX_FRAME_BYTES;
 
 export interface DaemonSocketHandlers {
   /**
@@ -24,7 +27,10 @@ export interface DaemonSocketHandlers {
    * supplied connection. Throwing here will cause the daemon to send a
    * register_nak and close the socket.
    */
-  onSession(connection: ShimConnection, register: { client_info?: { name: string; version: string } }): Promise<DaemonSession> | DaemonSession;
+  onSession(
+    connection: ShimConnection,
+    register: { client_info?: { name: string; version: string } },
+  ): Promise<DaemonSession> | DaemonSession;
 }
 
 /**
@@ -83,9 +89,7 @@ export class DaemonSocketServer {
     if (existsSync(socketPath)) {
       const live = await probeSocket(socketPath);
       if (live) {
-        throw new Error(
-          `daemon socket at ${socketPath} is already owned by a live process`,
-        );
+        throw new Error(`daemon socket at ${socketPath} is already owned by a live process`);
       }
       await unlink(socketPath).catch(() => {
         /* ignore — race with another cleanup */
@@ -93,12 +97,14 @@ export class DaemonSocketServer {
     }
 
     this.server = createServer((socket) => this.handleConnection(socket));
-    this.server.on("error", (err) =>
-      void this.opts.logger.write({
-        dir: "system",
-        event: "daemon_socket_error",
-        error: String(err),
-      }),
+    this.server.on(
+      "error",
+      (err) =>
+        void this.opts.logger.write({
+          dir: "system",
+          event: "daemon_socket_error",
+          error: String(err),
+        }),
     );
 
     await new Promise<void>((resolve, reject) => {
@@ -117,7 +123,11 @@ export class DaemonSocketServer {
   async stop(): Promise<void> {
     this.shuttingDown = true;
     for (const conn of this.conns) {
-      try { conn.socket.destroy(); } catch { /* ignore */ }
+      try {
+        conn.socket.destroy();
+      } catch {
+        /* ignore */
+      }
     }
     this.conns.clear();
     if (this.server) {
@@ -142,12 +152,14 @@ export class DaemonSocketServer {
     socket.setEncoding("utf8");
     socket.on("data", (chunk: string) => this.onData(state, chunk));
     socket.on("close", () => this.onClose(state, "socket_close"));
-    socket.on("error", (err) =>
-      void this.opts.logger.write({
-        dir: "system",
-        event: "daemon_conn_error",
-        error: String(err),
-      }),
+    socket.on(
+      "error",
+      (err) =>
+        void this.opts.logger.write({
+          dir: "system",
+          event: "daemon_conn_error",
+          error: String(err),
+        }),
     );
   }
 
@@ -155,7 +167,11 @@ export class DaemonSocketServer {
     state.buffer += chunk;
     if (state.buffer.length > MAX_LINE_BYTES) {
       void this.opts.logger.write({ dir: "system", event: "daemon_conn_oversize" });
-      try { state.socket.destroy(); } catch { /* ignore */ }
+      try {
+        state.socket.destroy();
+      } catch {
+        /* ignore */
+      }
       return;
     }
     let idx: number;
@@ -220,7 +236,11 @@ export class DaemonSocketServer {
     }
     if (isShimBye(msg)) {
       this.onClose(state, msg.reason ?? "shim_bye");
-      try { state.socket.end(); } catch { /* ignore */ }
+      try {
+        state.socket.end();
+      } catch {
+        /* ignore */
+      }
       return;
     }
 
@@ -238,7 +258,11 @@ export class DaemonSocketServer {
         else state.closeHandlers.push(handler);
       },
       close: (reason) => {
-        try { state.socket.end(); } catch { /* ignore */ }
+        try {
+          state.socket.end();
+        } catch {
+          /* ignore */
+        }
         this.onClose(state, reason);
       },
     };
@@ -246,13 +270,21 @@ export class DaemonSocketServer {
 
   private send(state: ConnState, msg: DaemonToShim): void {
     if (state.closed) return;
-    try { state.socket.write(JSON.stringify(msg) + "\n"); } catch { /* ignore */ }
+    try {
+      state.socket.write(JSON.stringify(msg) + "\n");
+    } catch {
+      /* ignore */
+    }
   }
 
   private nak(state: ConnState, reason: DaemonRegisterNak["reason"], message: string): void {
     const nak: DaemonRegisterNak = { type: "register_nak", reason, message };
     this.send(state, nak);
-    try { state.socket.end(); } catch { /* ignore */ }
+    try {
+      state.socket.end();
+    } catch {
+      /* ignore */
+    }
   }
 
   private onClose(state: ConnState, reason: string): void {
@@ -260,7 +292,11 @@ export class DaemonSocketServer {
     state.closed = true;
     this.conns.delete(state);
     for (const h of state.closeHandlers) {
-      try { h(reason); } catch { /* ignore */ }
+      try {
+        h(reason);
+      } catch {
+        /* ignore */
+      }
     }
     state.closeHandlers.length = 0;
   }
@@ -278,7 +314,11 @@ export async function probeSocket(path: string): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
     const sock = createConnection(path);
     const cleanup = (): void => {
-      try { sock.destroy(); } catch { /* ignore */ }
+      try {
+        sock.destroy();
+      } catch {
+        /* ignore */
+      }
     };
     sock.once("connect", () => {
       cleanup();
@@ -314,20 +354,24 @@ export async function acquirePidfile(path: string): Promise<boolean> {
       /* ignore */
     });
   }
-  await writeFile(path, String(process.pid), { flag: "wx" }).catch(async (err: NodeJS.ErrnoException) => {
-    // Race: another process won the wx open. Re-check liveness; if alive, surrender.
-    if (err.code === "EEXIST") {
-      const raw = await readFile(path, "utf8").catch(() => "");
-      const pid = Number.parseInt(raw.trim(), 10);
-      if (Number.isFinite(pid) && pid > 0 && pidIsAlive(pid)) {
-        throw new Error("pidfile_taken");
+  await writeFile(path, String(process.pid), { flag: "wx" }).catch(
+    async (err: NodeJS.ErrnoException) => {
+      // Race: another process won the wx open. Re-check liveness; if alive, surrender.
+      if (err.code === "EEXIST") {
+        const raw = await readFile(path, "utf8").catch(() => "");
+        const pid = Number.parseInt(raw.trim(), 10);
+        if (Number.isFinite(pid) && pid > 0 && pidIsAlive(pid)) {
+          throw new Error("pidfile_taken");
+        }
+        await unlink(path).catch(() => {
+          /* ignore */
+        });
+        await writeFile(path, String(process.pid));
+        return;
       }
-      await unlink(path).catch(() => { /* ignore */ });
-      await writeFile(path, String(process.pid));
-      return;
-    }
-    throw err;
-  });
+      throw err;
+    },
+  );
   return true;
 }
 
@@ -335,7 +379,9 @@ export async function releasePidfile(path: string): Promise<void> {
   try {
     const raw = await readFile(path, "utf8");
     if (Number.parseInt(raw.trim(), 10) === process.pid) {
-      await unlink(path).catch(() => { /* ignore */ });
+      await unlink(path).catch(() => {
+        /* ignore */
+      });
     }
   } catch {
     /* ignore */

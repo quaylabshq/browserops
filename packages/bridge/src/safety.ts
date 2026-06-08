@@ -38,7 +38,7 @@ export interface ConfirmationChannel {
  * - `browser_click` on a sensitive URL → risky (no ref-metadata inspection yet).
  *
  * Refinement to include ref role/name and password-field detection is
- * deferred to v2 per plan 06 open questions.
+ * intentionally deferred — the rule today is coarse but predictable.
  */
 export class Safety {
   private readonly approvalMode: "auto" | "gate";
@@ -64,9 +64,7 @@ export class Safety {
     // Log startup state. --autoconfirm (sets BROWSEROPS_AUTOCONFIRM=1) is now a no-op since
     // auto-approve is the default.
     if (autoconfirmEnv === "1") {
-      process.stderr.write(
-        `[browserops] ${ENV.AUTOCONFIRM}=1 is now the default; ignoring.\n`,
-      );
+      process.stderr.write(`[browserops] ${ENV.AUTOCONFIRM}=1 is now the default; ignoring.\n`);
     }
   }
 

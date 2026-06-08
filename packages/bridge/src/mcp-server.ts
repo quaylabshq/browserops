@@ -35,7 +35,12 @@ import { buildServerInstructions } from "./server-instructions.js";
 import { createPromptRegistry } from "./prompts.js";
 import { checkBreaker, recordResult as recordBreakerResult } from "./circuit-breaker.js";
 import { renderBoxDrawing } from "./observe/box-drawing-render.js";
-import { buildCommonProps, captureEvent, getTelemetry, type CommonProps } from "./telemetry/index.js";
+import {
+  buildCommonProps,
+  captureEvent,
+  getTelemetry,
+  type CommonProps,
+} from "./telemetry/index.js";
 
 /**
  * Minimal shape McpBridgeServer needs to talk to the extension.
@@ -64,26 +69,26 @@ export interface WSBridgeLike {
   g.__browserops_console_shimmed = true;
 
   let warned = false;
-  const redirect = (method: string) => (...args: unknown[]): void => {
-    if (!warned) {
-      warned = true;
+  const redirect =
+    (method: string) =>
+    (...args: unknown[]): void => {
+      if (!warned) {
+        warned = true;
+        try {
+          process.stderr.write(
+            `[browserops-bridge] console.${method} redirected to stderr (stdout is reserved for MCP)\n`,
+          );
+        } catch {
+          /* ignore */
+        }
+      }
       try {
-        process.stderr.write(
-          `[browserops-bridge] console.${method} redirected to stderr (stdout is reserved for MCP)\n`,
-        );
+        const line = args.map((a) => (typeof a === "string" ? a : safeJson(a))).join(" ");
+        process.stderr.write(line + "\n");
       } catch {
         /* ignore */
       }
-    }
-    try {
-      const line = args
-        .map((a) => (typeof a === "string" ? a : safeJson(a)))
-        .join(" ");
-      process.stderr.write(line + "\n");
-    } catch {
-      /* ignore */
-    }
-  };
+    };
   // Keep console.error/console.warn on stderr (their default) — only redirect
   // the ones that default to stdout.
   console.log = redirect("log");
@@ -111,10 +116,10 @@ type AjvCtor = new (opts?: Record<string, unknown>) => {
 type AddFormatsFn = (ajv: unknown) => unknown;
 
 const Ajv: AjvCtor =
-  ((AjvModule as unknown as { default?: AjvCtor }).default ?? (AjvModule as unknown as AjvCtor));
+  (AjvModule as unknown as { default?: AjvCtor }).default ?? (AjvModule as unknown as AjvCtor);
 const addFormats: AddFormatsFn =
-  ((addFormatsModule as unknown as { default?: AddFormatsFn }).default ??
-    (addFormatsModule as unknown as AddFormatsFn));
+  (addFormatsModule as unknown as { default?: AddFormatsFn }).default ??
+  (addFormatsModule as unknown as AddFormatsFn);
 
 // ---------------------------------------------------------------------------
 // Types
@@ -211,8 +216,14 @@ export class McpBridgeServer {
   private readonly deps: McpBridgeDeps;
   private readonly server: Server;
   private readonly validators = new Map<string, ValidateFunction>();
-  private readonly procedureHandlers: Record<string, (raw: Record<string, unknown>) => Promise<unknown>>;
-  private readonly loreHandlers: Record<string, (raw: Record<string, unknown>) => Promise<unknown>>;
+  private readonly procedureHandlers: Record<
+    string,
+    (raw: Record<string, unknown>) => Promise<unknown>
+  >;
+  private readonly loreHandlers: Record<
+    string,
+    (raw: Record<string, unknown>) => Promise<unknown>
+  >;
   private readonly commonProps: CommonProps;
   private transport?: Transport;
   /**
@@ -458,14 +469,15 @@ export class McpBridgeServer {
         } catch (err) {
           const code = extractErrorCode(err);
           const message = err instanceof Error ? err.message : String(err);
-          const details = err instanceof Error && "details" in err
-            ? (err as { details?: unknown }).details
-            : undefined;
+          const details =
+            err instanceof Error && "details" in err
+              ? (err as { details?: unknown }).details
+              : undefined;
           result = await this.reply(id, name, toolError({ code, message, details }));
         }
         // procedures_* calls are not traced — they're meta-RPC, not browser
-        // interactions useful for procedure compilation (Phase 4). Telemetry
-        // still fires; record() suppresses the trace path internally.
+        // interactions useful for procedure compilation. Telemetry still
+        // fires; record() suppresses the trace path internally.
         this.record(id, name, params, originalParamKeys, startMs, result, undefined);
         return result;
       }
@@ -483,9 +495,10 @@ export class McpBridgeServer {
         } catch (err) {
           const code = extractErrorCode(err);
           const message = err instanceof Error ? err.message : String(err);
-          const details = err instanceof Error && "details" in err
-            ? (err as { details?: unknown }).details
-            : undefined;
+          const details =
+            err instanceof Error && "details" in err
+              ? (err as { details?: unknown }).details
+              : undefined;
           result = await this.reply(id, name, toolError({ code, message, details }));
         }
         this.record(id, name, params, originalParamKeys, startMs, result, undefined);
@@ -550,15 +563,29 @@ export class McpBridgeServer {
     // 7. Risky-action gate.
     if (
       def.risky === "always" ||
-      (def.risky === "conditional" && this.deps.safety.checkRisky({ tool: name, params, tab }).risky)
+      (def.risky === "conditional" &&
+        this.deps.safety.checkRisky({ tool: name, params, tab }).risky)
     ) {
       const verdict =
         def.risky === "always"
           ? { risky: true as const, reason: `${name} is always risky` }
           : this.deps.safety.checkRisky({ tool: name, params, tab });
       const reason = verdict.reason ?? `${name} requires approval`;
-      const tab_hostname = tab?.url ? (() => { try { return new URL(tab.url).hostname; } catch { return undefined; } })() : undefined;
-      const decision = await this.deps.safety.requireApproval({ tool: name, params, reason, tab_hostname });
+      const tab_hostname = tab?.url
+        ? (() => {
+            try {
+              return new URL(tab.url).hostname;
+            } catch {
+              return undefined;
+            }
+          })()
+        : undefined;
+      const decision = await this.deps.safety.requireApproval({
+        tool: name,
+        params,
+        reason,
+        tab_hostname,
+      });
       if (!decision.allow) {
         const result = await this.reply(
           id,
@@ -649,7 +676,6 @@ export class McpBridgeServer {
    *
    * Empty sessionId disables ownership entirely so the legacy bridge
    * entry — which has no session model — keeps working unchanged.
-   * Phase 5 deletes that path along with the empty-session fallback.
    */
   private resolveTab(
     toolName: string,
@@ -720,10 +746,12 @@ export class McpBridgeServer {
     }
 
     if (toolName === "browser_current_tab") {
-      const obj = (extResult && typeof extResult === "object")
-        ? (extResult as Record<string, unknown>)
-        : undefined;
-      const reportedId = obj && typeof obj["tab_id"] === "string" ? (obj["tab_id"] as string) : undefined;
+      const obj =
+        extResult && typeof extResult === "object"
+          ? (extResult as Record<string, unknown>)
+          : undefined;
+      const reportedId =
+        obj && typeof obj["tab_id"] === "string" ? (obj["tab_id"] as string) : undefined;
 
       if (reportedId) {
         const rec = this.deps.tabs.getVisibleTo(reportedId, sessionId);
@@ -785,7 +813,6 @@ export class McpBridgeServer {
       }
     });
   }
-
 
   /**
    * Joint hook for trace + telemetry. emitTrace preserves its existing
@@ -872,9 +899,12 @@ export class McpBridgeServer {
     }
 
     if (toolName === "browser_screenshot" && !result.isError && parsedResult) {
-      if (typeof parsedResult["width"] === "number") props["screenshot_width_px"] = parsedResult["width"];
-      if (typeof parsedResult["height"] === "number") props["screenshot_height_px"] = parsedResult["height"];
-      if (typeof parsedResult["format"] === "string") props["screenshot_format"] = parsedResult["format"];
+      if (typeof parsedResult["width"] === "number")
+        props["screenshot_width_px"] = parsedResult["width"];
+      if (typeof parsedResult["height"] === "number")
+        props["screenshot_height_px"] = parsedResult["height"];
+      if (typeof parsedResult["format"] === "string")
+        props["screenshot_format"] = parsedResult["format"];
     }
 
     if (toolName === "browser_navigate" && tab?.url && typeof input["url"] === "string") {
@@ -910,7 +940,11 @@ export class McpBridgeServer {
       // Parse the value back out of the text content.
       const text = result.content[0]?.text ?? "";
       let value: unknown = text;
-      try { value = JSON.parse(text); } catch { /* leave as string */ }
+      try {
+        value = JSON.parse(text);
+      } catch {
+        /* leave as string */
+      }
       traceResult = { ok: true, value };
     } else {
       const text = result.content[0]?.text ?? "";
@@ -920,7 +954,9 @@ export class McpBridgeServer {
         const parsed = JSON.parse(text) as { code?: unknown; message?: unknown };
         if (typeof parsed.code === "string") errorCode = parsed.code;
         if (typeof parsed.message === "string") errorMessage = parsed.message;
-      } catch { /* leave defaults */ }
+      } catch {
+        /* leave defaults */
+      }
       traceResult = { ok: false, error_code: errorCode, error_message: errorMessage };
     }
 
@@ -945,11 +981,7 @@ export class McpBridgeServer {
     return DEFAULT_TOOL_TIMEOUT_MS;
   }
 
-  private async reply(
-    id: string,
-    method: string,
-    result: ToolCallResult,
-  ): Promise<ToolCallResult> {
+  private async reply(id: string, method: string, result: ToolCallResult): Promise<ToolCallResult> {
     const base: Record<string, unknown> = {
       dir: "mcp_out",
       id,
@@ -1054,9 +1086,7 @@ function extractErrorCode(err: unknown): ErrorCode {
   return "INTERNAL";
 }
 
-function formatAjvErrors(
-  errors: ValidateFunction["errors"] | null | undefined,
-): string {
+function formatAjvErrors(errors: ValidateFunction["errors"] | null | undefined): string {
   if (!errors || errors.length === 0) return "invalid params";
   return errors
     .map((e) => {
@@ -1079,4 +1109,3 @@ function stripTopLevelUnions(schema: unknown): unknown {
   }
   return out;
 }
-
