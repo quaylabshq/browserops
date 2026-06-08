@@ -2,11 +2,10 @@
 
 > MCP stdio server for [browserops](https://www.npmjs.com/package/browserops). End-users typically want the [`browserops`](https://www.npmjs.com/package/browserops) CLI package — it installs this transitively.
 
-`@browserops/bridge` ships the `browserops-bridge` binary: a local Node process that
+`@browserops/bridge` ships two binaries:
 
-- speaks MCP over stdio to your AI client (Claude Code, Cursor, Codex CLI, Continue, Windsurf, …)
-- runs a WebSocket primary on `ws://127.0.0.1:57321` that the [browserops Chrome extension](https://github.com/quaylabshq/browserops/tree/main/packages/extension) connects to
-- forwards `browser_*` and `procedures_*` tool calls into the user's live Chrome tabs
+- **`browserops-daemon`** — long-running Node process. Hosts the WebSocket primary on `ws://127.0.0.1:57321` that the [browserops Chrome extension](https://github.com/quaylabshq/browserops/tree/main/packages/extension) connects to, plus the rate limiter, risky-action gate, and procedure runtime.
+- **`browserops-shim`** — per-MCP-client stdio adapter. Speaks MCP over stdio to your AI client (Claude Code, Cursor, Codex CLI, Continue, Windsurf, …) and forwards `browser_*` / `procedures_*` calls into the daemon over a local Unix socket.
 
 ## Install
 
@@ -27,7 +26,7 @@ npm i -g @browserops/bridge
 ```json
 {
   "mcpServers": {
-    "browserops": { "command": "browserops-bridge" }
+    "browserops": { "command": "browserops-shim" }
   }
 }
 ```
@@ -36,9 +35,11 @@ Codex CLI (`~/.codex/config.toml`):
 
 ```toml
 [mcp_servers.browserops]
-command = "browserops-bridge"
+command = "browserops-shim"
 args = []
 ```
+
+The shim auto-starts the daemon on first use and reuses it across MCP clients.
 
 ## Exposed prompts
 

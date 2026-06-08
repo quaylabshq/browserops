@@ -103,17 +103,17 @@ Two independent gates:
 
 **Launcher-side** — when you run `browserops "task"`, by default the CLI spawns the launcher with its permission prompts skipped so the agent can finish without pausing on every tool call:
 
-| Launcher | What we pass |
-|---|---|
-| Claude Code | `claude --dangerously-skip-permissions` |
-| Codex CLI | `codex exec --full-auto` (skips approvals, keeps the codex sandbox on) |
-| Cursor | no CLI flag — set **Settings → Agent → Auto-Run** to "Allow" inside Cursor |
+| Launcher    | What we pass                                                               |
+| ----------- | -------------------------------------------------------------------------- |
+| Claude Code | `claude --dangerously-skip-permissions`                                    |
+| Codex CLI   | `codex exec --full-auto` (skips approvals, keeps the codex sandbox on)     |
+| Cursor      | no CLI flag — set **Settings → Agent → Auto-Run** to "Allow" inside Cursor |
 
 Restore the launcher's own per-action prompts with `browserops config set safe_mode true`. Browser-side gating (above) is unaffected.
 
 ## Procedure runtime
 
-Procedures are named, parameterized, replayable action graphs stored under `~/browserops/procedures/`. The agent can search and run them with `procedures_search` / `procedures_execute` instead of re-planning from a screenshot every time. Six bundled examples seed on first run; you can save your own with `procedures_save`.
+Procedures are named, parameterized, replayable action graphs stored under `~/browserops/procedures/`. The agent can search and run them with `procedures_search` / `procedures_execute` instead of re-planning from a screenshot every time. The store ships empty; you (or the `browserops-teach` Claude skill) author and save procedures on-demand with `procedures_save`.
 
 ## Architecture
 
@@ -121,7 +121,7 @@ Procedures are named, parameterized, replayable action graphs stored under `~/br
 MCP client (Claude Code / Cursor / Codex / …)
       │ stdio MCP
       ▼
-browserops-bridge   ← Node daemon · MCP server · WebSocket primary · rate limiter · risky-action gate
+browserops-shim (stdio MCP adapter) → browserops-daemon (Node process · WebSocket primary · rate limiter · risky-action gate · procedure runtime)
       │ ws://127.0.0.1:57321 (token-authed)
       ▼
 browserops Chrome extension   ← chrome.tabs / chrome.scripting / chrome.debugger
