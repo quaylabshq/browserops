@@ -60,7 +60,7 @@ const KNOWN_SUBCOMMANDS = new Set([
 const cli = cac("browserops");
 
 cli
-  .command("init", "First-run wizard: token, daemon, MCP-client install, Claude skill")
+  .command("init", "First-run wizard: token, daemon, MCP-client install, Chrome extension pair")
   .option("--yes", "Non-interactive: accept all defaults")
   .option("--no-mcp", "Skip MCP-client install")
   .option("--no-skill", "Skip Claude skill install")
@@ -70,6 +70,8 @@ cli
   )
   .option("--features <list>", "Comma-separated experimental features to enable (procedures,lore)")
   .option("--dry-run", "Print what would change without writing")
+  .option("--repair", "Clear the pinned extension ID and re-pair the Chrome extension")
+  .option("--skip-extension", "Don't open the Chrome Web Store or wait for the extension to pair")
   .action((opts) => runInit(opts));
 
 cli.command("start", "Start the bridge daemon (no-op if already running)").action(() => runStart());
