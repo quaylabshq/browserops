@@ -1,7 +1,7 @@
 /**
  * Cross-agent lore store schema.
  *
- * Memories live as one markdown file per entry under
+ * Lore entries live as one markdown file per entry under
  * ~/browserops/lore/<name>.md, with YAML frontmatter at the top
  * carrying the metadata fields below and a markdown body underneath.
  * The store is owned by the bridge and exposed to every MCP client via

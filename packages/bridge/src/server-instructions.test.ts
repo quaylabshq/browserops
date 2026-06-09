@@ -2,8 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { FeatureName } from "@browserops/shared";
 import { buildServerInstructions } from "./server-instructions.js";
 
-const set = (...names: FeatureName[]) =>
-  new Set<FeatureName>(names) as ReadonlySet<FeatureName>;
+const set = (...names: FeatureName[]) => new Set<FeatureName>(names) as ReadonlySet<FeatureName>;
 
 describe("buildServerInstructions — procedures gating", () => {
   it("includes the Procedure runtime section when procedures is enabled", () => {

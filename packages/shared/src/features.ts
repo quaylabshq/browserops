@@ -13,10 +13,7 @@
  * extension router dispatch) cover everything else.
  */
 
-export const FEATURES = [
-  "procedures",
-  "lore",
-] as const;
+export const FEATURES = ["procedures", "lore"] as const;
 
 export type FeatureName = (typeof FEATURES)[number];
 

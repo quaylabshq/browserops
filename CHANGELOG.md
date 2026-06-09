@@ -9,6 +9,7 @@ Before 1.0, the `0.MINOR.PATCH` line follows: `MINOR` for breaking changes, `PAT
 ### Added
 
 - Public OSS launch: root `LICENSE`, `SECURITY.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, GitHub issue + PR templates, `CODEOWNERS`.
+- **Cross-agent lore.** New experimental `lore` feature gates four MCP tools (`lore_save`, `lore_search`, `lore_get`, `lore_delete`) over a markdown-frontmatter store at `~/browserops/lore/<name>.md`. Visible to every MCP client connected to the same browserops bridge, so a lesson saved from one session is reusable in another. Names match `^[a-z][a-z0-9._-]{0,79}$`; entry types are `user | feedback | project | reference`. Storage root is overridable via `BROWSEROPS_LORE_DIR`. Sits alongside (not on top of) Claude Code's auto-memory at `~/.claude/projects/.../memory/`.
 - Telemetry consent surface: `BROWSEROPS_TELEMETRY=0` env to disable, `BROWSEROPS_ALIAS_EMAIL=1` env required to alias the install-id to the user's email (default: never aliased).
 - Dedicated `## Telemetry` README section documenting the exact field allowlist and disable channels.
 
@@ -56,7 +57,7 @@ Before 1.0, the `0.MINOR.PATCH` line follows: `MINOR` for breaking changes, `PAT
 
 ### Added
 
-- **Procedure runtime feature (formerly "playbooks").** Five MCP tools (`procedures_search/get/save/delete/execute`) gated behind the `procedures` feature flag. Storage at `~/browserops/procedures/`, search index at `index.json`.
+- **Procedure runtime (formerly "playbooks").** Five MCP tools (`procedures_search/get/save/delete/execute`) gated behind the `procedures` feature flag. Storage at `~/browserops/procedures/`, search index at `index.json`.
 - **`procedures_resume` patch protocol.** Three patch kinds: `resume_with`, `insert_steps`, `give_up`. Lets the agent recover from a `needs_assist` halt without restarting the procedure.
 - **Strict mode for `procedures_execute`.** Refuses every LLM-fallback path even if a step declares one. Mandatory for CI runs and the post-authoring verification flip.
 - **Forbidden-locator + forbidden-action guard.** Top-level `forbidden:{locators, actions}` enforced on every dispatch, including LLM-proposed resume patches.

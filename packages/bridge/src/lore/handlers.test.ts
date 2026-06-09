@@ -1,20 +1,13 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  handleLoreDelete,
-  handleLoreGet,
-  handleLoreSave,
-  handleLoreSearch,
-} from "./handlers.js";
+import { handleLoreDelete, handleLoreGet, handleLoreSave, handleLoreSearch } from "./handlers.js";
 import { CodedError } from "./store.js";
 
 let tmpRoot: string;
 
 beforeEach(async () => {
-  tmpRoot = await fs.mkdtemp(
-    path.join(import.meta.dirname ?? __dirname, ".handlers-test-"),
-  );
+  tmpRoot = await fs.mkdtemp(path.join(import.meta.dirname ?? __dirname, ".handlers-test-"));
   process.env["BROWSEROPS_LORE_DIR"] = tmpRoot;
 });
 
@@ -40,8 +33,7 @@ describe("handleLoreSave", () => {
   it("rejects a duplicate without replace and accepts with replace:true", async () => {
     await handleLoreSave({ ...VALID });
     await expect(handleLoreSave({ ...VALID })).rejects.toSatisfy(
-      (err: unknown) =>
-        err instanceof CodedError && err.code === "LORE_ALREADY_EXISTS",
+      (err: unknown) => err instanceof CodedError && err.code === "LORE_ALREADY_EXISTS",
     );
     const second = await handleLoreSave({ ...VALID, replace: true });
     expect(second.created).toBe(false);
@@ -49,20 +41,16 @@ describe("handleLoreSave", () => {
 
   it("rejects bad params with INVALID_PARAMS", async () => {
     await expect(handleLoreSave({ ...VALID, name: "" })).rejects.toSatisfy(
-      (err: unknown) =>
-        err instanceof CodedError && err.code === "INVALID_PARAMS",
+      (err: unknown) => err instanceof CodedError && err.code === "INVALID_PARAMS",
     );
-    await expect(
-      handleLoreSave({ ...VALID, type: "bogus" }),
-    ).rejects.toSatisfy(
-      (err: unknown) =>
-        err instanceof CodedError && err.code === "INVALID_PARAMS",
+    await expect(handleLoreSave({ ...VALID, type: "bogus" })).rejects.toSatisfy(
+      (err: unknown) => err instanceof CodedError && err.code === "INVALID_PARAMS",
     );
   });
 });
 
 describe("handleLoreGet", () => {
-  it("returns the body, meta, and path for an existing lore entry", async () => {
+  it("returns the body, meta, and path for an existing entry", async () => {
     await handleLoreSave({ ...VALID });
     const got = await handleLoreGet({ name: VALID.name });
     expect(got.meta.name).toBe(VALID.name);
@@ -72,8 +60,7 @@ describe("handleLoreGet", () => {
 
   it("throws LORE_NOT_FOUND for an unknown name", async () => {
     await expect(handleLoreGet({ name: "nope" })).rejects.toSatisfy(
-      (err: unknown) =>
-        err instanceof CodedError && err.code === "LORE_NOT_FOUND",
+      (err: unknown) => err instanceof CodedError && err.code === "LORE_NOT_FOUND",
     );
   });
 });
@@ -84,8 +71,7 @@ describe("handleLoreDelete", () => {
     const result = await handleLoreDelete({ name: VALID.name });
     expect(result.deleted).toBe(true);
     await expect(handleLoreGet({ name: VALID.name })).rejects.toSatisfy(
-      (err: unknown) =>
-        err instanceof CodedError && err.code === "LORE_NOT_FOUND",
+      (err: unknown) => err instanceof CodedError && err.code === "LORE_NOT_FOUND",
     );
   });
 });
@@ -126,18 +112,14 @@ describe("handleLoreSearch", () => {
   });
 
   it("rejects invalid type filter with INVALID_PARAMS", async () => {
-    await expect(
-      handleLoreSearch({ query: "send", type: "bogus" }),
-    ).rejects.toSatisfy(
-      (err: unknown) =>
-        err instanceof CodedError && err.code === "INVALID_PARAMS",
+    await expect(handleLoreSearch({ query: "send", type: "bogus" })).rejects.toSatisfy(
+      (err: unknown) => err instanceof CodedError && err.code === "INVALID_PARAMS",
     );
   });
 
   it("rejects an empty query with INVALID_PARAMS", async () => {
     await expect(handleLoreSearch({ query: "" })).rejects.toSatisfy(
-      (err: unknown) =>
-        err instanceof CodedError && err.code === "INVALID_PARAMS",
+      (err: unknown) => err instanceof CodedError && err.code === "INVALID_PARAMS",
     );
   });
 });

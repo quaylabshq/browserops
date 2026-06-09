@@ -220,10 +220,7 @@ export class McpBridgeServer {
     string,
     (raw: Record<string, unknown>) => Promise<unknown>
   >;
-  private readonly loreHandlers: Record<
-    string,
-    (raw: Record<string, unknown>) => Promise<unknown>
-  >;
+  private readonly loreHandlers: Record<string, (raw: Record<string, unknown>) => Promise<unknown>>;
   private readonly commonProps: CommonProps;
   private transport?: Transport;
   /**

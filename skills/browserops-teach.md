@@ -21,15 +21,15 @@ three.
 
 ---
 
-## 1. Pre-flight (zero tool cost, before any browser_*)
+## 1. Pre-flight (zero tool cost, before any browser\_\*)
 
 Four checks. Run in order; short-circuit at the first that resolves.
 
 1. **Parse the goal.** Extract `{app, intent, named_entities, destructive_class}`
-   from the user's prompt. e.g. *"save a procedure for sending Gmail email"* →
+   from the user's prompt. e.g. _"save a procedure for sending Gmail email"_ →
    `{app: "gmail", intent: "send_email", named_entities: [], destructive_class: "send"}`.
 
-2. **Read lore.** Load every lore file matching `browserops_*` (app
+2. **Read lore.** Load every lore entry matching `browserops_*` (app
    priors, dummy registry, known failures, locator patterns that worked
    before). After ~3 successful runs against an app, the priors collapse
    exploration to ~2 probes.
@@ -67,17 +67,17 @@ no gate fires. Pratham is named, the user already knows we'll send to him.
 When destructive inputs need a verification value, default to
 **send-to-self** for messaging surfaces.
 
-| App        | Safe dummy when goal is ambiguous                                         |
-|------------|---------------------------------------------------------------------------|
-| Slack      | DM yourself (own user_id from xoxc token in localConfig_v2)               |
-| Gmail      | Email yourself                                                            |
-| Discord    | Self-DM                                                                   |
-| Telegram   | Saved Messages                                                            |
-| Linear     | Test issue in your personal/test project (NEVER a team-wide project)      |
-| Notion     | Page in private workspace                                                 |
-| Twitter/X  | **Draft only.** Never publish autonomously.                               |
-| GitHub     | Comment on a private repo / draft PR / draft issue                        |
-| Calendar   | Event with only yourself as attendee                                      |
+| App       | Safe dummy when goal is ambiguous                                    |
+| --------- | -------------------------------------------------------------------- |
+| Slack     | DM yourself (own user_id from xoxc token in localConfig_v2)          |
+| Gmail     | Email yourself                                                       |
+| Discord   | Self-DM                                                              |
+| Telegram  | Saved Messages                                                       |
+| Linear    | Test issue in your personal/test project (NEVER a team-wide project) |
+| Notion    | Page in private workspace                                            |
+| Twitter/X | **Draft only.** Never publish autonomously.                          |
+| GitHub    | Comment on a private repo / draft PR / draft issue                   |
+| Calendar  | Event with only yourself as attendee                                 |
 
 ---
 
@@ -282,7 +282,7 @@ One message back to the user. Tight format:
   Notes: <caveats / lore updates / next-time hints>
 ```
 
-Anything that *would have been* a mid-flight question lands here as a
+Anything that _would have been_ a mid-flight question lands here as a
 footnote with what you decided and why — the agent's only opportunity to
 get user pushback before the procedure ships.
 
@@ -402,35 +402,28 @@ Not every `expect:`/`verify:` predicate is equally trustworthy. Prefer the
 ones sourced from the action's effect envelope — they're populated from the
 tool result directly and can't silently no-op:
 
-  RELIABLE (effect / page_effect-sourced — reach for these first):
-    - network_endpoint_seen / network_endpoint  → a backend call fired
-    - new_dialog                                → a modal appeared
-    - dom_added_min / dom_removed_min           → DOM mutated / torn down
-    - visual_delta_at_least                     → viewport visibly changed
-    - focus_moved_to                            → focus landed somewhere
-    - url_matches                               → URL changed (navigate too)
-    - text_visible / text_invisible             → rendered text present/gone
+RELIABLE (effect / page_effect-sourced — reach for these first): - network_endpoint_seen / network_endpoint → a backend call fired - new_dialog → a modal appeared - dom_added_min / dom_removed_min → DOM mutated / torn down - visual_delta_at_least → viewport visibly changed - focus_moved_to → focus landed somewhere - url_matches → URL changed (navigate too) - text_visible / text_invisible → rendered text present/gone
 
-  COST NOTE: text_visible / text_invisible (and any verify{} block) make the
-  runtime fetch live page text via browser_read(mode:"text") on every poll —
-  correct, but a round-trip per poll. When an effect-based predicate
-  expresses the same success (new_dialog for "a thing opened",
-  network_endpoint_seen for "it submitted", dom_removed_min for "the dialog
-  closed"), prefer it — it reads straight from the action's effect envelope
-  with no extra call.
+COST NOTE: text_visible / text_invisible (and any verify{} block) make the
+runtime fetch live page text via browser_read(mode:"text") on every poll —
+correct, but a round-trip per poll. When an effect-based predicate
+expresses the same success (new_dialog for "a thing opened",
+network_endpoint_seen for "it submitted", dom_removed_min for "the dialog
+closed"), prefer it — it reads straight from the action's effect envelope
+with no extra call.
 
 Map a strict-run divergence to the layer that actually failed BEFORE you
 touch the YAML — re-editing locators won't fix a runtime fault:
 
-  | Divergence reason                                   | Likely cause        | Action |
-  |-----------------------------------------------------|---------------------|--------|
-  | "no ref-cache snapshot for this tab"                | runtime auto-prime  | Not your locator — surface the prime bug. |
-  | url "" on a navigate that clearly moved             | runtime observation | URL not captured for this tool — use an effect predicate or report. |
-  | text_visible "<text you can see>" not found         | timing / wrong string | Text is fetched live now — it isn't there yet (add a `do: wait`) or your string/regex is off. |
-  | "locator matched no elements" (descriptor looks ok) | timing / not loaded | Add a `do: wait` for the control before the step. |
-  | "locator matched no elements" (descriptor wrong)    | bad locator         | Re-propose on a fresh snapshot; prefer tier-1. |
-  | "no new dialog matched ..." after a real open       | wrong dialog name   | Loosen the new_dialog regex / drop to `new_dialog: true`. |
-  | expect passed but external predicate failed         | weak expect         | Tighten expect; the run was a false positive. |
+| Divergence reason                                   | Likely cause          | Action                                                                                        |
+| --------------------------------------------------- | --------------------- | --------------------------------------------------------------------------------------------- |
+| "no ref-cache snapshot for this tab"                | runtime auto-prime    | Not your locator — surface the prime bug.                                                     |
+| url "" on a navigate that clearly moved             | runtime observation   | URL not captured for this tool — use an effect predicate or report.                           |
+| text_visible "<text you can see>" not found         | timing / wrong string | Text is fetched live now — it isn't there yet (add a `do: wait`) or your string/regex is off. |
+| "locator matched no elements" (descriptor looks ok) | timing / not loaded   | Add a `do: wait` for the control before the step.                                             |
+| "locator matched no elements" (descriptor wrong)    | bad locator           | Re-propose on a fresh snapshot; prefer tier-1.                                                |
+| "no new dialog matched ..." after a real open       | wrong dialog name     | Loosen the new_dialog regex / drop to `new_dialog: true`.                                     |
+| expect passed but external predicate failed         | weak expect           | Tighten expect; the run was a false positive.                                                 |
 
 Rule of thumb: if the same step fails the same way across two edits AND the
 descriptor visibly resolves on the page, suspect the runtime, not your YAML.

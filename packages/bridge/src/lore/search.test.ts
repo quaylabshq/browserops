@@ -99,9 +99,7 @@ describe("searchLore", () => {
 
   it("produces a body-derived snippet trimmed to ≤120 chars", () => {
     const longBody = "abc ".repeat(200);
-    const entries = [
-      entry({ name: "snip", description: "snippet test", body: longBody }),
-    ];
+    const entries = [entry({ name: "snip", description: "snippet test", body: longBody })];
     const result = searchLore(entries, "snippet");
     expect(result.matches[0]?.snippet?.length ?? 0).toBeLessThanOrEqual(120);
   });

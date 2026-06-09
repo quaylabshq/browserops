@@ -2029,7 +2029,7 @@ const loreSave: ToolDef = {
         type: "boolean",
         default: false,
         description:
-          "When true, overwrite an existing lore entry with the same name. Default false rejects duplicates with LORE_ALREADY_EXISTS.",
+          "When true, overwrite an existing entry with the same name. Default false rejects duplicates with LORE_ALREADY_EXISTS.",
       },
     },
   },
@@ -2070,7 +2070,7 @@ const loreSearch: ToolDef = {
       query: { type: "string", minLength: 1, maxLength: 200 },
       type: {
         enum: loreTypeEnum,
-        description: "If set, only return memories whose type matches.",
+        description: "If set, only return lore entries whose type matches.",
       },
       limit: { type: "integer", minimum: 1, maximum: 25, default: 10 },
       min_score: {

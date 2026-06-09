@@ -16,13 +16,7 @@ import {
   type LoreFrontmatter,
   type LoreType,
 } from "@browserops/shared";
-import {
-  CodedError,
-  deleteLore,
-  listLoreEntries,
-  readLore,
-  saveLore,
-} from "./store.js";
+import { CodedError, deleteLore, listLoreEntries, readLore, saveLore } from "./store.js";
 import { searchLore } from "./search.js";
 
 // ---------------------------------------------------------------------------
@@ -51,10 +45,7 @@ function requireName(raw: Record<string, unknown>): string {
 function requireType(raw: Record<string, unknown>): LoreType {
   const v = raw["type"];
   if (typeof v !== "string" || !isLoreType(v)) {
-    throw new CodedError(
-      "INVALID_PARAMS",
-      `type must be one of: ${LORE_TYPES.join(", ")}`,
-    );
+    throw new CodedError("INVALID_PARAMS", `type must be one of: ${LORE_TYPES.join(", ")}`);
   }
   return v;
 }
@@ -93,7 +84,7 @@ function optionalNumber(raw: Record<string, unknown>, key: string): number | und
 export interface SaveResult {
   saved: true;
   path: string;
-  /** True when a new lore entry was created, false when an existing one was overwritten. */
+  /** True when a new entry was created, false when an existing one was overwritten. */
   created: boolean;
 }
 
@@ -135,10 +126,7 @@ export async function handleLoreSearch(raw: Record<string, unknown>): Promise<un
   const query = requireString(raw, "query");
   const typeRaw = optionalString(raw, "type");
   if (typeRaw !== undefined && !isLoreType(typeRaw)) {
-    throw new CodedError(
-      "INVALID_PARAMS",
-      `type filter must be one of: ${LORE_TYPES.join(", ")}`,
-    );
+    throw new CodedError("INVALID_PARAMS", `type filter must be one of: ${LORE_TYPES.join(", ")}`);
   }
   const limit = optionalNumber(raw, "limit");
   const minScore = optionalNumber(raw, "min_score");

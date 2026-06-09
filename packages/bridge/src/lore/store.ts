@@ -34,10 +34,7 @@ import {
  * var in beforeEach.
  */
 function loreRoot(): string {
-  return (
-    process.env["BROWSEROPS_LORE_DIR"] ??
-    path.join(os.homedir(), "browserops", "lore")
-  );
+  return process.env["BROWSEROPS_LORE_DIR"] ?? path.join(os.homedir(), "browserops", "lore");
 }
 
 export function loreStoreRoot(): string {
@@ -66,7 +63,7 @@ export class CodedError extends Error {
 
 // ---------------------------------------------------------------------------
 // Write mutex — serialize concurrent writes so two MCP sessions saving
-// different memories don't race on mkdir + atomic-rename of the same dir.
+// different entries don't race on mkdir + atomic-rename of the same dir.
 // Reads stay outside the chain (atomic rename makes them safe).
 // ---------------------------------------------------------------------------
 
@@ -97,11 +94,10 @@ async function atomicWriteFile(absPath: string, text: string): Promise<void> {
     } catch (err) {
       await fs.unlink(tmpPath).catch(() => undefined);
       const nodeErr = err as NodeJS.ErrnoException;
-      throw new CodedError(
-        "INTERNAL",
-        `failed to write lore: ${absPath}: ${nodeErr.message}`,
-        { path: absPath, cause: nodeErr.code },
-      );
+      throw new CodedError("INTERNAL", `failed to write lore: ${absPath}: ${nodeErr.message}`, {
+        path: absPath,
+        cause: nodeErr.code,
+      });
     }
   });
 }
@@ -136,10 +132,7 @@ function parseFrontmatter(text: string): { meta: LoreFrontmatter; body: string }
 
 function validateFrontmatter(raw: unknown): LoreFrontmatter {
   if (typeof raw !== "object" || raw === null) {
-    throw new CodedError(
-      "LORE_SCHEMA_INVALID",
-      "frontmatter must be a YAML object",
-    );
+    throw new CodedError("LORE_SCHEMA_INVALID", "frontmatter must be a YAML object");
   }
   const obj = raw as Record<string, unknown>;
   const required = ["name", "description", "type", "source", "created", "updated"] as const;
@@ -201,7 +194,7 @@ export interface SaveLoreArgs {
   description: string;
   type: LoreType;
   body: string;
-  /** When true, overwrite an existing lore entry; otherwise rejects with LORE_ALREADY_EXISTS. */
+  /** When true, overwrite an existing entry; otherwise rejects with LORE_ALREADY_EXISTS. */
   replace?: boolean;
   /** Defaults to "mcp-tool" — the CLI passes "cli" instead. */
   source?: "mcp-tool" | "cli";
@@ -287,11 +280,10 @@ export async function readLore(name: string): Promise<LoreEntry> {
         path: absPath,
       });
     }
-    throw new CodedError(
-      "INTERNAL",
-      `failed to read lore${absPath}: ${nodeErr.message}`,
-      { path: absPath, cause: nodeErr.code },
-    );
+    throw new CodedError("INTERNAL", `failed to read lore ${absPath}: ${nodeErr.message}`, {
+      path: absPath,
+      cause: nodeErr.code,
+    });
   }
   const { meta, body } = parseFrontmatter(text);
   return { meta, body, path: absPath };
@@ -316,11 +308,10 @@ export async function deleteLore(name: string): Promise<{ path: string }> {
           path: absPath,
         });
       }
-      throw new CodedError(
-        "INTERNAL",
-        `failed to delete lore${absPath}: ${nodeErr.message}`,
-        { path: absPath, cause: nodeErr.code },
-      );
+      throw new CodedError("INTERNAL", `failed to delete lore ${absPath}: ${nodeErr.message}`, {
+        path: absPath,
+        cause: nodeErr.code,
+      });
     }
     return { path: absPath };
   });
@@ -340,11 +331,10 @@ export async function listLoreEntries(): Promise<LoreEntry[]> {
   } catch (err) {
     const nodeErr = err as NodeJS.ErrnoException;
     if (nodeErr.code === "ENOENT") return [];
-    throw new CodedError(
-      "INTERNAL",
-      `failed to list lore directory ${root}: ${nodeErr.message}`,
-      { path: root, cause: nodeErr.code },
-    );
+    throw new CodedError("INTERNAL", `failed to list lore directory ${root}: ${nodeErr.message}`, {
+      path: root,
+      cause: nodeErr.code,
+    });
   }
   const entries: LoreEntry[] = [];
   await Promise.all(

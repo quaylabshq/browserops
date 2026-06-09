@@ -13,9 +13,7 @@ import {
 let tmpRoot: string;
 
 beforeEach(async () => {
-  tmpRoot = await fs.mkdtemp(
-    path.join(import.meta.dirname ?? __dirname, ".store-test-"),
-  );
+  tmpRoot = await fs.mkdtemp(path.join(import.meta.dirname ?? __dirname, ".store-test-"));
   process.env["BROWSEROPS_LORE_DIR"] = tmpRoot;
 });
 
@@ -64,19 +62,15 @@ describe("saveLore + readLore round-trip", () => {
 
 describe("saveLore error mapping", () => {
   it("rejects an invalid name with INVALID_PARAMS", async () => {
-    await expect(
-      saveLore({ ...BASE, name: "Has Caps" }),
-    ).rejects.toSatisfy(
-      (err: unknown) =>
-        err instanceof CodedError && err.code === "INVALID_PARAMS",
+    await expect(saveLore({ ...BASE, name: "Has Caps" })).rejects.toSatisfy(
+      (err: unknown) => err instanceof CodedError && err.code === "INVALID_PARAMS",
     );
   });
 
   it("rejects a duplicate name without replace:true with LORE_ALREADY_EXISTS", async () => {
     await saveLore({ ...BASE, name: "gamma" });
     await expect(saveLore({ ...BASE, name: "gamma" })).rejects.toSatisfy(
-      (err: unknown) =>
-        err instanceof CodedError && err.code === "LORE_ALREADY_EXISTS",
+      (err: unknown) => err instanceof CodedError && err.code === "LORE_ALREADY_EXISTS",
     );
   });
 
@@ -92,11 +86,8 @@ describe("saveLore error mapping", () => {
   });
 
   it("rejects an empty description with INVALID_PARAMS", async () => {
-    await expect(
-      saveLore({ ...BASE, name: "epsilon", description: "   " }),
-    ).rejects.toSatisfy(
-      (err: unknown) =>
-        err instanceof CodedError && err.code === "INVALID_PARAMS",
+    await expect(saveLore({ ...BASE, name: "epsilon", description: "   " })).rejects.toSatisfy(
+      (err: unknown) => err instanceof CodedError && err.code === "INVALID_PARAMS",
     );
   });
 });
@@ -104,16 +95,14 @@ describe("saveLore error mapping", () => {
 describe("readLore error mapping", () => {
   it("throws LORE_NOT_FOUND when the file does not exist", async () => {
     await expect(readLore("ghost")).rejects.toSatisfy(
-      (err: unknown) =>
-        err instanceof CodedError && err.code === "LORE_NOT_FOUND",
+      (err: unknown) => err instanceof CodedError && err.code === "LORE_NOT_FOUND",
     );
   });
 
   it("throws LORE_SCHEMA_INVALID when the file has no frontmatter", async () => {
     await fs.writeFile(loreFilePath("malformed"), "no frontmatter here", "utf8");
     await expect(readLore("malformed")).rejects.toSatisfy(
-      (err: unknown) =>
-        err instanceof CodedError && err.code === "LORE_SCHEMA_INVALID",
+      (err: unknown) => err instanceof CodedError && err.code === "LORE_SCHEMA_INVALID",
     );
   });
 
@@ -132,8 +121,7 @@ describe("readLore error mapping", () => {
     ].join("\n");
     await fs.writeFile(loreFilePath("bad-type"), text, "utf8");
     await expect(readLore("bad-type")).rejects.toSatisfy(
-      (err: unknown) =>
-        err instanceof CodedError && err.code === "LORE_SCHEMA_INVALID",
+      (err: unknown) => err instanceof CodedError && err.code === "LORE_SCHEMA_INVALID",
     );
   });
 });
@@ -144,15 +132,13 @@ describe("deleteLore", () => {
     const result = await deleteLore("to-delete");
     expect(result.path).toBe(loreFilePath("to-delete"));
     await expect(readLore("to-delete")).rejects.toSatisfy(
-      (err: unknown) =>
-        err instanceof CodedError && err.code === "LORE_NOT_FOUND",
+      (err: unknown) => err instanceof CodedError && err.code === "LORE_NOT_FOUND",
     );
   });
 
   it("throws LORE_NOT_FOUND when the file does not exist", async () => {
     await expect(deleteLore("never")).rejects.toSatisfy(
-      (err: unknown) =>
-        err instanceof CodedError && err.code === "LORE_NOT_FOUND",
+      (err: unknown) => err instanceof CodedError && err.code === "LORE_NOT_FOUND",
     );
   });
 });
