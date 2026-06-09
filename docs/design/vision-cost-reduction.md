@@ -22,7 +22,7 @@ What actually reduces image tokens:
 - **"low" detail mode** (when the API surface exposes it) — caps at ~258
   tokens regardless of dimensions, at the cost of fine-text legibility.
 
-So the cheap answer is *crop tighter and scale down*, not *desaturate*.
+So the cheap answer is _crop tighter and scale down_, not _desaturate_.
 
 ## The "image-like state object" idea
 
@@ -35,14 +35,14 @@ a11y tree).
 
 The full spectrum, in increasing fidelity and cost:
 
-| Approach | What it captures | Approx. cost | Weakness |
-|---|---|---|---|
-| **a11y tree** (current `browser_read`) | role, name, value, hierarchy | ~50–200 tok per visible interactive | No visual state; useless on canvas |
-| **Augmented a11y tree** | a11y + bounding box + visibility + occlusion + fg/bg color + in-viewport | ~30 tok/element extra | Bigger payload; still misses non-interactive visuals |
-| **Set-of-Mark (SoM)** | a11y JSON + low-res screenshot with numbered boxes over interactive elements | a11y + ~400 tok screenshot | Still needs one screenshot |
-| **Full structured render** | every visual property as JSON | 3–9k tok on dense pages | Significant engineering; still no help for canvas |
-| **OCR sidecar** | text + bounding boxes extracted from pixels | ~500 tok | Slow; misses semantics |
-| **Pure screenshot** (current `browser_screenshot`) | everything | 1.5k+ tok | Most of those tokens are wasted on chrome/whitespace |
+| Approach                                           | What it captures                                                             | Approx. cost                        | Weakness                                             |
+| -------------------------------------------------- | ---------------------------------------------------------------------------- | ----------------------------------- | ---------------------------------------------------- |
+| **a11y tree** (current `browser_read`)             | role, name, value, hierarchy                                                 | ~50–200 tok per visible interactive | No visual state; useless on canvas                   |
+| **Augmented a11y tree**                            | a11y + bounding box + visibility + occlusion + fg/bg color + in-viewport     | ~30 tok/element extra               | Bigger payload; still misses non-interactive visuals |
+| **Set-of-Mark (SoM)**                              | a11y JSON + low-res screenshot with numbered boxes over interactive elements | a11y + ~400 tok screenshot          | Still needs one screenshot                           |
+| **Full structured render**                         | every visual property as JSON                                                | 3–9k tok on dense pages             | Significant engineering; still no help for canvas    |
+| **OCR sidecar**                                    | text + bounding boxes extracted from pixels                                  | ~500 tok                            | Slow; misses semantics                               |
+| **Pure screenshot** (current `browser_screenshot`) | everything                                                                   | 1.5k+ tok                           | Most of those tokens are wasted on chrome/whitespace |
 
 The thing a structured render buys you over the existing a11y tree is
 **visual state**: is this button greyed/disabled-looking? Is this row
@@ -69,7 +69,7 @@ Solves ~70% of "do I need vision?" cases in one change.
 
 ### 2. Vision-on-demand with mandatory cropping
 
-Make `browser_screenshot` *require* a `ref` (element) or `region` (bbox)
+Make `browser_screenshot` _require_ a `ref` (element) or `region` (bbox)
 parameter by default; full-viewport becomes opt-in with an explicit flag.
 Forces 100–400 token shots instead of 1500+.
 
@@ -126,14 +126,14 @@ Lynx") fails for reasons that aren't obvious until you try.
 
 **Flavor A — literal ASCII grid.** Map the viewport pixels to a fixed
 character grid (~160×50 cells) and render each element at its scaled pixel
-position. Looks like Lynx output. Costs ~1500–3000 tokens, often *more*
+position. Looks like Lynx output. Costs ~1500–3000 tokens, often _more_
 than a low-detail screenshot. Killer weakness: modern flex/grid, sticky
 headers, overlapping z-index, scroll containers, variable font widths, and
 CJK all break the alignment. Same reason terminal browsers stopped being
 viable on the modern web. **Skip.**
 
 **Flavor B — semantic box-drawing layout summary.** Don't honor pixel
-positions. Render *groupings and ordering* derived from the layout tree
+positions. Render _groupings and ordering_ derived from the layout tree
 (landmarks → sections → flex/grid containers → leaf interactive elements):
 
 ```
@@ -170,17 +170,17 @@ needed. Worth doing as a narrow special-case independent of Flavor B.
 
 ### Where text-visual fits in the matrix
 
-|  | Tokens | Spatial info | Visual state | Works on canvas |
-|---|---|---|---|---|
-| a11y tree | low | none | none | no |
-| augmented a11y | low-med | coordinates only | yes | no |
-| **box-drawing summary (B)** | **low-med** | **rendered structure** | none | no |
-| SoM | med | rendered structure | partial | partial |
-| literal ASCII grid (A) | med-high | rendered (brittle) | none | no |
-| full screenshot | high | full | full | yes |
+|                             | Tokens      | Spatial info           | Visual state | Works on canvas |
+| --------------------------- | ----------- | ---------------------- | ------------ | --------------- |
+| a11y tree                   | low         | none                   | none         | no              |
+| augmented a11y              | low-med     | coordinates only       | yes          | no              |
+| **box-drawing summary (B)** | **low-med** | **rendered structure** | none         | no              |
+| SoM                         | med         | rendered structure     | partial      | partial         |
+| literal ASCII grid (A)      | med-high    | rendered (brittle)     | none         | no              |
+| full screenshot             | high        | full                   | full         | yes             |
 
 Flavor B sits in a genuinely empty spot — cheapest way to give the agent
-*rendered* spatial relationships. Beats bounding-box JSON because the LLM
+_rendered_ spatial relationships. Beats bounding-box JSON because the LLM
 doesn't have to mentally rasterize coordinates, and beats screenshots
 because there are no pixels.
 
@@ -266,7 +266,7 @@ follow-up read in ~95% of action steps.
 ### Piece 2 — `browser_read` can cost more than a screenshot
 
 Screenshot tokens are bounded by viewport dimensions (~258 at low detail,
-~1500 at high). a11y tree tokens grow with *page content*, unbounded.
+~1500 at high). a11y tree tokens grow with _page content_, unbounded.
 
 Cases where a full `browser_read` exceeds a low-detail screenshot today:
 
