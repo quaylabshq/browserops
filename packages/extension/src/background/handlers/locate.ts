@@ -12,7 +12,7 @@
  * bridge's procedure execute loop so it can apply retry/relocate budgets
  * uniformly across primitives.
  */
-import type { ErrorCode, Locator } from "@browserops/shared";
+import type { Locator } from "@browserops/shared";
 import { isLocatorEmpty } from "@browserops/shared";
 import type { Router, Context } from "../router.js";
 import type { RefCache } from "../ref-cache.js";
@@ -40,11 +40,7 @@ interface LocateResult {
   used_snapshot: "current" | "previous" | "none";
 }
 
-function codedError(code: ErrorCode, message: string): Error {
-  const err = new Error(message) as Error & { code: ErrorCode };
-  err.code = code;
-  return err;
-}
+import { codedError } from "../lib/coded-error.js";
 
 function parseParams(raw: Record<string, unknown>): LocateParams {
   const tabId = raw["tab_id"];

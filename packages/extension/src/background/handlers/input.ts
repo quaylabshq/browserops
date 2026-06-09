@@ -60,7 +60,9 @@ type ExpectEffect = "any" | "dom" | "navigation" | "none";
 function parseExpectEffect(raw: unknown): ExpectEffect | undefined {
   if (raw === undefined) return undefined;
   if (raw !== "any" && raw !== "dom" && raw !== "navigation" && raw !== "none") {
-    throw Object.assign(new Error("expect_effect must be any|dom|navigation|none"), { code: "INVALID_PARAMS" as ErrorCode });
+    throw Object.assign(new Error("expect_effect must be any|dom|navigation|none"), {
+      code: "INVALID_PARAMS" as ErrorCode,
+    });
   }
   return raw;
 }
@@ -107,9 +109,11 @@ type ModifierInput = Modifier | "Primary";
 // older Chrome). The extension background service worker has a real
 // navigator, so this reflects the user's OS.
 function isMacPlatform(): boolean {
-  const uaData = (navigator as unknown as {
-    userAgentData?: { platform?: string };
-  }).userAgentData;
+  const uaData = (
+    navigator as unknown as {
+      userAgentData?: { platform?: string };
+    }
+  ).userAgentData;
   if (uaData?.platform) return /mac/i.test(uaData.platform);
   return /mac/i.test(navigator.platform);
 }
@@ -146,7 +150,6 @@ interface ClickAtParams {
 
 type TypeMode = "keystroke" | "paste";
 type ClearMode = "value" | "select_all" | "auto";
-const KEYSTROKE_AUTO_THRESHOLD = 64;
 
 interface TypeParams {
   tab_id: string;
@@ -190,22 +193,10 @@ interface ExecuteJsParams {
   args?: readonly unknown[];
 }
 
-interface ErrorHints {
-  next_action?: string;
-  diagnostic?: Record<string, unknown>;
-}
-
-function codedError(code: ErrorCode, message: string, hints?: ErrorHints): Error {
-  const err = new Error(message) as Error & {
-    code: ErrorCode;
-    next_action?: string;
-    diagnostic?: Record<string, unknown>;
-  };
-  err.code = code;
-  if (hints?.next_action !== undefined) err.next_action = hints.next_action;
-  if (hints?.diagnostic !== undefined) err.diagnostic = hints.diagnostic;
-  return err;
-}
+import { codedError, type ErrorHints } from "../lib/coded-error.js";
+// Re-export for legacy local imports inside the handlers/ tree.
+export { codedError };
+export type { ErrorHints };
 
 function resolveChromeId(tabIdMap: Map<string, number>, tabId: unknown): number {
   if (typeof tabId !== "string") {
@@ -234,30 +225,22 @@ function resolveRef(refCache: RefCache, tabId: string, ref: number): ResolvedRef
   }
   const snap = refCache.get(tabId);
   if (snap === undefined) {
-    throw codedError(
-      "REF_STALE",
-      `no a11y snapshot for tab ${tabId}; call browser_read first`,
-      {
-        next_action:
-          "no a11y snapshot exists — call browser_quick_read or browser_read first to populate refs, then retry the action",
-        diagnostic: { tab_id: tabId, ref, snapshot_present: false },
-      },
-    );
-  }
-  throw codedError(
-    "REF_NOT_FOUND",
-    `ref ${ref} not present in current snapshot for ${tabId}`,
-    {
+    throw codedError("REF_STALE", `no a11y snapshot for tab ${tabId}; call browser_read first`, {
       next_action:
-        "element ref is stale — call browser_quick_read again to get a fresh ref, do not reuse the old one",
-      diagnostic: {
-        tab_id: tabId,
-        ref,
-        snapshot_url: snap.url,
-        snapshot_size: snap.entries.size,
-      },
+        "no a11y snapshot exists — call browser_quick_read or browser_read first to populate refs, then retry the action",
+      diagnostic: { tab_id: tabId, ref, snapshot_present: false },
+    });
+  }
+  throw codedError("REF_NOT_FOUND", `ref ${ref} not present in current snapshot for ${tabId}`, {
+    next_action:
+      "element ref is stale — call browser_quick_read again to get a fresh ref, do not reuse the old one",
+    diagnostic: {
+      tab_id: tabId,
+      ref,
+      snapshot_url: snap.url,
+      snapshot_size: snap.entries.size,
     },
-  );
+  });
 }
 
 function resolveSelector(refCache: RefCache, tabId: string, ref: number): string {
@@ -298,17 +281,29 @@ function cdpModBits(mods: { ctrl: boolean; alt: boolean; shift: boolean; meta: b
 }
 
 async function cdpClick(
-  cdp: CdpManager, chromeId: number,
-  x: number, y: number,
+  cdp: CdpManager,
+  chromeId: number,
+  x: number,
+  y: number,
   button: "left" | "middle" | "right",
   mods: { ctrl: boolean; alt: boolean; shift: boolean; meta: boolean },
 ): Promise<void> {
   const m = cdpModBits(mods);
   await cdp.send(chromeId, "Input.dispatchMouseEvent", {
-    type: "mousePressed", x, y, button, clickCount: 1, modifiers: m,
+    type: "mousePressed",
+    x,
+    y,
+    button,
+    clickCount: 1,
+    modifiers: m,
   });
   await cdp.send(chromeId, "Input.dispatchMouseEvent", {
-    type: "mouseReleased", x, y, button, clickCount: 1, modifiers: m,
+    type: "mouseReleased",
+    x,
+    y,
+    button,
+    clickCount: 1,
+    modifiers: m,
   });
 }
 
@@ -324,49 +319,57 @@ async function cdpType(cdp: CdpManager, chromeId: number, text: string): Promise
  * input — Input.insertText alone leaves canvas grids untouched, which
  * is why typing into a Sheets formula cell silently fails on this path.
  */
-const CHAR_TO_KEY: Readonly<Record<string, { code: string; shift: boolean; vkCode: number }>> = (() => {
-  const m: Record<string, { code: string; shift: boolean; vkCode: number }> = {};
-  for (let i = 0; i < 26; i += 1) {
-    const lower = String.fromCharCode(97 + i);
-    const upper = String.fromCharCode(65 + i);
-    m[lower] = { code: `Key${upper}`, shift: false, vkCode: 65 + i };
-    m[upper] = { code: `Key${upper}`, shift: true,  vkCode: 65 + i };
-  }
-  for (let i = 0; i < 10; i += 1) {
-    const d = String.fromCharCode(48 + i);
-    m[d] = { code: `Digit${d}`, shift: false, vkCode: 48 + i };
-  }
-  const shiftedDigits: Array<[string, string]> = [
-    ["!", "Digit1"], ["@", "Digit2"], ["#", "Digit3"], ["$", "Digit4"],
-    ["%", "Digit5"], ["^", "Digit6"], ["&", "Digit7"], ["*", "Digit8"],
-    ["(", "Digit9"], [")", "Digit0"],
-  ];
-  for (const [ch, code] of shiftedDigits) {
-    const d = code.charAt(code.length - 1);
-    m[ch] = { code, shift: true, vkCode: d.charCodeAt(0) };
-  }
-  const puncts: Array<[string, string, string, number]> = [
-    ["/", "?", "Slash",        191],
-    [".", ">", "Period",       190],
-    [",", "<", "Comma",        188],
-    [";", ":", "Semicolon",    186],
-    ["'", "\"", "Quote",       222],
-    ["`", "~", "Backquote",    192],
-    ["-", "_", "Minus",        189],
-    ["=", "+", "Equal",        187],
-    ["[", "{", "BracketLeft",  219],
-    ["]", "}", "BracketRight", 221],
-    ["\\", "|", "Backslash",   220],
-  ];
-  for (const [base, shifted, code, vk] of puncts) {
-    m[base]    = { code, shift: false, vkCode: vk };
-    m[shifted] = { code, shift: true,  vkCode: vk };
-  }
-  m[" "]  = { code: "Space", shift: false, vkCode: 32 };
-  m["\n"] = { code: "Enter", shift: false, vkCode: 13 };
-  m["\t"] = { code: "Tab",   shift: false, vkCode:  9 };
-  return m;
-})();
+const CHAR_TO_KEY: Readonly<Record<string, { code: string; shift: boolean; vkCode: number }>> =
+  (() => {
+    const m: Record<string, { code: string; shift: boolean; vkCode: number }> = {};
+    for (let i = 0; i < 26; i += 1) {
+      const lower = String.fromCharCode(97 + i);
+      const upper = String.fromCharCode(65 + i);
+      m[lower] = { code: `Key${upper}`, shift: false, vkCode: 65 + i };
+      m[upper] = { code: `Key${upper}`, shift: true, vkCode: 65 + i };
+    }
+    for (let i = 0; i < 10; i += 1) {
+      const d = String.fromCharCode(48 + i);
+      m[d] = { code: `Digit${d}`, shift: false, vkCode: 48 + i };
+    }
+    const shiftedDigits: Array<[string, string]> = [
+      ["!", "Digit1"],
+      ["@", "Digit2"],
+      ["#", "Digit3"],
+      ["$", "Digit4"],
+      ["%", "Digit5"],
+      ["^", "Digit6"],
+      ["&", "Digit7"],
+      ["*", "Digit8"],
+      ["(", "Digit9"],
+      [")", "Digit0"],
+    ];
+    for (const [ch, code] of shiftedDigits) {
+      const d = code.charAt(code.length - 1);
+      m[ch] = { code, shift: true, vkCode: d.charCodeAt(0) };
+    }
+    const puncts: Array<[string, string, string, number]> = [
+      ["/", "?", "Slash", 191],
+      [".", ">", "Period", 190],
+      [",", "<", "Comma", 188],
+      [";", ":", "Semicolon", 186],
+      ["'", '"', "Quote", 222],
+      ["`", "~", "Backquote", 192],
+      ["-", "_", "Minus", 189],
+      ["=", "+", "Equal", 187],
+      ["[", "{", "BracketLeft", 219],
+      ["]", "}", "BracketRight", 221],
+      ["\\", "|", "Backslash", 220],
+    ];
+    for (const [base, shifted, code, vk] of puncts) {
+      m[base] = { code, shift: false, vkCode: vk };
+      m[shifted] = { code, shift: true, vkCode: vk };
+    }
+    m[" "] = { code: "Space", shift: false, vkCode: 32 };
+    m["\n"] = { code: "Enter", shift: false, vkCode: 13 };
+    m["\t"] = { code: "Tab", shift: false, vkCode: 9 };
+    return m;
+  })();
 
 async function cdpTypeKeystroke(cdp: CdpManager, chromeId: number, text: string): Promise<void> {
   // Per-character keyDown + keyUp via Input.dispatchKeyEvent so canvas
@@ -416,7 +419,8 @@ async function cdpTypeKeystroke(cdp: CdpManager, chromeId: number, text: string)
 }
 
 async function cdpPress(
-  cdp: CdpManager, chromeId: number,
+  cdp: CdpManager,
+  chromeId: number,
   token: string,
   mods: { ctrl: boolean; alt: boolean; shift: boolean; meta: boolean },
 ): Promise<void> {
@@ -483,10 +487,7 @@ async function cdpPress(
   });
 }
 
-async function cdpHover(
-  cdp: CdpManager, chromeId: number,
-  x: number, y: number,
-): Promise<void> {
+async function cdpHover(cdp: CdpManager, chromeId: number, x: number, y: number): Promise<void> {
   // Two-stage move. Chrome's input pipeline tracks the last mouse position;
   // when a prior click landed at the same (x, y) the compositor sees the
   // follow-up mouseMoved as a zero-delta no-op and does not dispatch new
@@ -497,10 +498,18 @@ async function cdpHover(
   // forces a position transition; the second move into (x, y) then
   // generates the trusted mouseover/mouseenter pair.
   await cdp.send(chromeId, "Input.dispatchMouseEvent", {
-    type: "mouseMoved", x: 0, y: 0, button: "none", modifiers: 0,
+    type: "mouseMoved",
+    x: 0,
+    y: 0,
+    button: "none",
+    modifiers: 0,
   });
   await cdp.send(chromeId, "Input.dispatchMouseEvent", {
-    type: "mouseMoved", x, y, button: "none", modifiers: 0,
+    type: "mouseMoved",
+    x,
+    y,
+    button: "none",
+    modifiers: 0,
   });
 }
 
@@ -508,7 +517,11 @@ async function cdpHover(
 function injectedElementCenter(selector: string): { x: number; y: number } | null {
   const el = document.querySelector(selector) as HTMLElement | null;
   if (el === null) return null;
-  try { el.scrollIntoView({ block: "center", inline: "center" }); } catch { /* ignore */ }
+  try {
+    el.scrollIntoView({ block: "center", inline: "center" });
+  } catch {
+    /* ignore */
+  }
   const r = el.getBoundingClientRect();
   return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
 }
@@ -662,24 +675,27 @@ function injectedClearField(
   selector: string,
   clearMode: string,
 ): { found: boolean; cleared: boolean } {
-  const root = document.querySelector(selector) as
-    | (HTMLElement & { value?: string })
-    | null;
+  const root = document.querySelector(selector) as (HTMLElement & { value?: string }) | null;
   if (root === null) return { found: false, cleared: false };
   // Drill through role="textbox" wrappers (Slack Quill, Notion ProseMirror,
   // Linear Lexical, Gmail Draft.js): the resolved element often isn't itself
   // contenteditable and has no native value setter, so .value = "" would be a
   // silent no-op on a plain <div>. Prefer the nearest descendant editor.
   const elProto = Object.getPrototypeOf(root) as object | null;
-  const rootHasValueSetter = elProto !== null
-    && Object.getOwnPropertyDescriptor(elProto, "value")?.set !== undefined;
-  const inner = root.isContentEditable || rootHasValueSetter
-    ? null
-    : root.querySelector<HTMLElement & { value?: string }>(
-        '[contenteditable="true"], [contenteditable=""], .ql-editor, [data-slate-editor="true"], .ProseMirror, .public-DraftEditor-content',
-      );
+  const rootHasValueSetter =
+    elProto !== null && Object.getOwnPropertyDescriptor(elProto, "value")?.set !== undefined;
+  const inner =
+    root.isContentEditable || rootHasValueSetter
+      ? null
+      : root.querySelector<HTMLElement & { value?: string }>(
+          '[contenteditable="true"], [contenteditable=""], .ql-editor, [data-slate-editor="true"], .ProseMirror, .public-DraftEditor-content',
+        );
   const el = (inner ?? root) as HTMLElement & { value?: string };
-  try { el.focus(); } catch { /* ignore */ }
+  try {
+    el.focus();
+  } catch {
+    /* ignore */
+  }
 
   const isCE = el.isContentEditable;
 
@@ -691,11 +707,12 @@ function injectedClearField(
   function assignValue(): void {
     if (isCE) return;
     const proto = Object.getPrototypeOf(el as object) as object | null;
-    const setter = proto === null
-      ? undefined
-      : (Object.getOwnPropertyDescriptor(proto, "value")?.set as
-          | ((v: string) => void)
-          | undefined);
+    const setter =
+      proto === null
+        ? undefined
+        : (Object.getOwnPropertyDescriptor(proto, "value")?.set as
+            | ((v: string) => void)
+            | undefined);
     if (setter !== undefined) setter.call(el, "");
     else (el as { value?: string }).value = "";
     el!.dispatchEvent(new Event("input", { bubbles: true }));
@@ -764,13 +781,14 @@ function injectedTypePaste(
   // Linear Lexical, Gmail Draft.js) so we hit the real contenteditable instead
   // of silently no-op'ing a .value assignment on a plain <div>.
   const rootProto = Object.getPrototypeOf(root) as object | null;
-  const rootHasValueSetter = rootProto !== null
-    && Object.getOwnPropertyDescriptor(rootProto, "value")?.set !== undefined;
-  const inner = root.isContentEditable || rootHasValueSetter
-    ? null
-    : root.querySelector<HTMLElement & { value?: string; form?: HTMLFormElement }>(
-        '[contenteditable="true"], [contenteditable=""], .ql-editor, [data-slate-editor="true"], .ProseMirror, .public-DraftEditor-content',
-      );
+  const rootHasValueSetter =
+    rootProto !== null && Object.getOwnPropertyDescriptor(rootProto, "value")?.set !== undefined;
+  const inner =
+    root.isContentEditable || rootHasValueSetter
+      ? null
+      : root.querySelector<HTMLElement & { value?: string; form?: HTMLFormElement }>(
+          '[contenteditable="true"], [contenteditable=""], .ql-editor, [data-slate-editor="true"], .ProseMirror, .public-DraftEditor-content',
+        );
   const el = (inner ?? root) as HTMLElement & { value?: string; form?: HTMLFormElement };
   el.focus();
 
@@ -779,9 +797,12 @@ function injectedTypePaste(
     document.execCommand("insertText", false, text);
   } else {
     const proto = Object.getPrototypeOf(el) as object | null;
-    const setter = proto === null
-      ? undefined
-      : (Object.getOwnPropertyDescriptor(proto, "value")?.set as ((v: string) => void) | undefined);
+    const setter =
+      proto === null
+        ? undefined
+        : (Object.getOwnPropertyDescriptor(proto, "value")?.set as
+            | ((v: string) => void)
+            | undefined);
     const next = (el.value ?? "") + text;
     if (setter !== undefined) {
       setter.call(el, next);
@@ -796,7 +817,12 @@ function injectedTypePaste(
   const after = el.isContentEditable ? (el.textContent ?? "") : (el.value ?? "");
   const lengthDelta = Math.max(0, after.length - before.length);
   const contentPresent = text.length > 0 && after.includes(text);
-  return { found: true, typed: text.length, reflected: contentPresent ? text.length : lengthDelta, content_verified: contentPresent };
+  return {
+    found: true,
+    typed: text.length,
+    reflected: contentPresent ? text.length : lengthDelta,
+    content_verified: contentPresent,
+  };
 }
 
 /**
@@ -814,7 +840,12 @@ function injectedTypeKeystroke(
   submit: boolean,
   delayMs: number,
 ): Promise<{ found: boolean; typed: number; reflected: number; content_verified: boolean }> {
-  return new Promise<{ found: boolean; typed: number; reflected: number; content_verified: boolean }>((resolve) => {
+  return new Promise<{
+    found: boolean;
+    typed: number;
+    reflected: number;
+    content_verified: boolean;
+  }>((resolve) => {
     const root = document.querySelector(selector) as
       | (HTMLElement & { value?: string; form?: HTMLFormElement })
       | null;
@@ -825,21 +856,25 @@ function injectedTypeKeystroke(
     // Drill past role="textbox" wrappers into the real editor so we don't fire
     // per-char events at a plain <div> that no framework is listening to.
     const rootProto = Object.getPrototypeOf(root) as object | null;
-    const rootHasValueSetter = rootProto !== null
-      && Object.getOwnPropertyDescriptor(rootProto, "value")?.set !== undefined;
-    const inner = root.isContentEditable || rootHasValueSetter
-      ? null
-      : root.querySelector<HTMLElement & { value?: string; form?: HTMLFormElement }>(
-          '[contenteditable="true"], [contenteditable=""], .ql-editor, [data-slate-editor="true"], .ProseMirror, .public-DraftEditor-content',
-        );
+    const rootHasValueSetter =
+      rootProto !== null && Object.getOwnPropertyDescriptor(rootProto, "value")?.set !== undefined;
+    const inner =
+      root.isContentEditable || rootHasValueSetter
+        ? null
+        : root.querySelector<HTMLElement & { value?: string; form?: HTMLFormElement }>(
+            '[contenteditable="true"], [contenteditable=""], .ql-editor, [data-slate-editor="true"], .ProseMirror, .public-DraftEditor-content',
+          );
     const el = (inner ?? root) as HTMLElement & { value?: string; form?: HTMLFormElement };
     el.focus();
     const before = el.isContentEditable ? (el.textContent ?? "") : (el.value ?? "");
 
     const proto = Object.getPrototypeOf(el) as object | null;
-    const setter = proto === null
-      ? undefined
-      : (Object.getOwnPropertyDescriptor(proto, "value")?.set as ((v: string) => void) | undefined);
+    const setter =
+      proto === null
+        ? undefined
+        : (Object.getOwnPropertyDescriptor(proto, "value")?.set as
+            | ((v: string) => void)
+            | undefined);
 
     const keyInitFor = (ch: string): KeyboardEventInit => {
       const isPrintable = ch.length === 1;
@@ -901,8 +936,7 @@ function injectedTypeKeystroke(
             // character (Quill, ProseMirror, Slate, Draft.js, Lexical, Gmail,
             // etc.), calling execCommand would double-insert. Check whether
             // content grew — if it did, the framework handled it.
-            const contentGrew =
-              (el.textContent ?? "").length > before.length + index;
+            const contentGrew = (el.textContent ?? "").length > before.length + index;
             if (!contentGrew) {
               document.execCommand("insertText", false, ch);
             }
@@ -951,13 +985,14 @@ function injectedTypeClipboard(
     | null;
   if (root === null) return { found: false, typed: 0, reflected: 0, content_verified: false };
   const rootProto = Object.getPrototypeOf(root) as object | null;
-  const rootHasValueSetter = rootProto !== null
-    && Object.getOwnPropertyDescriptor(rootProto, "value")?.set !== undefined;
-  const inner = root.isContentEditable || rootHasValueSetter
-    ? null
-    : root.querySelector<HTMLElement & { value?: string; form?: HTMLFormElement }>(
-        '[contenteditable="true"], [contenteditable=""], .ql-editor, [data-slate-editor="true"], .ProseMirror, .public-DraftEditor-content',
-      );
+  const rootHasValueSetter =
+    rootProto !== null && Object.getOwnPropertyDescriptor(rootProto, "value")?.set !== undefined;
+  const inner =
+    root.isContentEditable || rootHasValueSetter
+      ? null
+      : root.querySelector<HTMLElement & { value?: string; form?: HTMLFormElement }>(
+          '[contenteditable="true"], [contenteditable=""], .ql-editor, [data-slate-editor="true"], .ProseMirror, .public-DraftEditor-content',
+        );
   const el = (inner ?? root) as HTMLElement & { value?: string; form?: HTMLFormElement };
   el.focus();
 
@@ -993,12 +1028,15 @@ function injectedTypeClipboard(
   after = el.isContentEditable ? (el.textContent ?? "") : (el.value ?? "");
   const lengthDelta = Math.max(0, after.length - before.length);
   const contentPresent = text.length > 0 && after.includes(text);
-  return { found: true, typed: text.length, reflected: contentPresent ? text.length : lengthDelta, content_verified: contentPresent };
+  return {
+    found: true,
+    typed: text.length,
+    reflected: contentPresent ? text.length : lengthDelta,
+    content_verified: contentPresent,
+  };
 }
 
-function dispatchEnterAndSubmit(
-  el: HTMLElement & { form?: HTMLFormElement },
-): void {
+function dispatchEnterAndSubmit(el: HTMLElement & { form?: HTMLFormElement }): void {
   const keyInit: KeyboardEventInit = {
     key: "Enter",
     code: "Enter",
@@ -1022,9 +1060,7 @@ function injectedPress(
   text: string | null,
   modifiers: { ctrl: boolean; alt: boolean; shift: boolean; meta: boolean },
 ): void {
-  const active: HTMLElement =
-    (document.activeElement as HTMLElement | null) ??
-    document.body;
+  const active: HTMLElement = (document.activeElement as HTMLElement | null) ?? document.body;
   const init: KeyboardEventInit = {
     key,
     code,
@@ -1042,8 +1078,16 @@ function injectedPress(
     // gate on them. KeyboardEventInit does not officially carry these, so
     // patch the event after construction.
     if (vkCode !== 0) {
-      try { Object.defineProperty(ev, "keyCode", { value: vkCode, configurable: true }); } catch { /* ignore */ }
-      try { Object.defineProperty(ev, "which",   { value: vkCode, configurable: true }); } catch { /* ignore */ }
+      try {
+        Object.defineProperty(ev, "keyCode", { value: vkCode, configurable: true });
+      } catch {
+        /* ignore */
+      }
+      try {
+        Object.defineProperty(ev, "which", { value: vkCode, configurable: true });
+      } catch {
+        /* ignore */
+      }
     }
     active.dispatchEvent(ev);
   };
@@ -1138,8 +1182,18 @@ function injectedClickByText(spec: ClickByTextSpec): {
   occluder?: { tag: string; text: string; role: string | null } | null;
 } {
   const INTERACTIVE_ROLES = new Set([
-    "button", "link", "textbox", "searchbox", "checkbox", "combobox",
-    "listbox", "option", "menuitem", "tab", "switch", "radio",
+    "button",
+    "link",
+    "textbox",
+    "searchbox",
+    "checkbox",
+    "combobox",
+    "listbox",
+    "option",
+    "menuitem",
+    "tab",
+    "switch",
+    "radio",
   ]);
   const INTERACTIVE_TAGS = new Set(["A", "BUTTON", "INPUT", "TEXTAREA", "SELECT"]);
 
@@ -1236,10 +1290,7 @@ function injectedClickByText(spec: ClickByTextSpec): {
     if (INTERACTIVE_ROLES.has(role) || INTERACTIVE_TAGS.has(el.tagName)) {
       score += 15;
     }
-    if (
-      el.hasAttribute("onclick") ||
-      window.getComputedStyle(el).cursor === "pointer"
-    ) {
+    if (el.hasAttribute("onclick") || window.getComputedStyle(el).cursor === "pointer") {
       score += 10;
     }
     const rect = el.getBoundingClientRect();
@@ -1282,7 +1333,11 @@ function injectedClickByText(spec: ClickByTextSpec): {
     }
   }
 
-  try { el.scrollIntoView({ block: "center", inline: "center" }); } catch { /* ignore */ }
+  try {
+    el.scrollIntoView({ block: "center", inline: "center" });
+  } catch {
+    /* ignore */
+  }
 
   const rect = el.getBoundingClientRect();
   const x = rect.left + rect.width / 2;
@@ -1304,7 +1359,10 @@ function injectedClickByText(spec: ClickByTextSpec): {
     return {
       found: true,
       matched: { role: winner.role, name: winner.name, tag: winner.tag },
-      x, y, occluded, occluder,
+      x,
+      y,
+      occluded,
+      occluder,
     };
   }
 
@@ -1340,7 +1398,11 @@ function injectedClickByText(spec: ClickByTextSpec): {
   el.dispatchEvent(new MouseEvent("mouseenter", { ...baseInit, bubbles: false }));
   el.dispatchEvent(new PointerEvent("pointerdown", pointerInit));
   el.dispatchEvent(new MouseEvent("mousedown", baseInit));
-  try { el.focus(); } catch { /* ignore */ }
+  try {
+    el.focus();
+  } catch {
+    /* ignore */
+  }
   el.dispatchEvent(new PointerEvent("pointerup", pointerInit));
   el.dispatchEvent(new MouseEvent("mouseup", baseInit));
   el.click();
@@ -1368,7 +1430,12 @@ function injectedClickByText(spec: ClickByTextSpec): {
  * function always replaces the first match.
  */
 type FindReplaceSyntheticResult =
-  | { status: "ok"; replaced: number; used_fallback: boolean; kind: "input" | "textarea" | "contenteditable" }
+  | {
+      status: "ok";
+      replaced: number;
+      used_fallback: boolean;
+      kind: "input" | "textarea" | "contenteditable";
+    }
   | { status: "no_target" }
   | { status: "not_found" }
   | { status: "unsupported_kind"; tag: string };
@@ -1382,9 +1449,7 @@ function injectedFindAndReplaceSynthetic(
 ): FindReplaceSyntheticResult {
   const MAX_ITERATIONS = 1024;
   const root: Element | null =
-    selectorOrNull !== null
-      ? document.querySelector(selectorOrNull)
-      : document.activeElement;
+    selectorOrNull !== null ? document.querySelector(selectorOrNull) : document.activeElement;
   if (root === null || !(root instanceof Element)) {
     return { status: "no_target" };
   }
@@ -1473,7 +1538,11 @@ function injectedFindAndReplaceSynthetic(
     let usedFallback = false;
     let searchFromLogical = 0;
     while (replaced < MAX_ITERATIONS) {
-      interface Seg { node: Text; start: number; end: number }
+      interface Seg {
+        node: Text;
+        start: number;
+        end: number;
+      }
       const segs: Seg[] = [];
       const walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT);
       let running = 0;
@@ -1565,10 +1634,7 @@ function injectedFindAndReplaceSynthetic(
 // ---------------------------------------------------------------------------
 
 const MODIFIER_NAMES: readonly Modifier[] = ["Control", "Alt", "Shift", "Meta"] as const;
-const MODIFIER_INPUT_NAMES: readonly ModifierInput[] = [
-  ...MODIFIER_NAMES,
-  "Primary",
-] as const;
+const MODIFIER_INPUT_NAMES: readonly ModifierInput[] = [...MODIFIER_NAMES, "Primary"] as const;
 
 function parseModifiers(raw: unknown): Modifier[] {
   if (raw === undefined) return [];
@@ -1577,10 +1643,7 @@ function parseModifiers(raw: unknown): Modifier[] {
   }
   const out: ModifierInput[] = [];
   for (const m of raw) {
-    if (
-      typeof m !== "string" ||
-      !(MODIFIER_INPUT_NAMES as readonly string[]).includes(m)
-    ) {
+    if (typeof m !== "string" || !(MODIFIER_INPUT_NAMES as readonly string[]).includes(m)) {
       throw codedError(
         "INVALID_PARAMS",
         `modifier must be one of ${MODIFIER_INPUT_NAMES.join(", ")}`,
@@ -1724,23 +1787,6 @@ function resolveClearMode(params: TypeParams): ClearMode | undefined {
   return params.clear_mode;
 }
 
-function resolveTypeMode(_text: string, explicit: TypeMode | undefined): TypeMode {
-  if (explicit !== undefined) return explicit;
-  // Default to paste (Input.insertText). It sets the focused field's value
-  // without firing per-character keydown events, so SPA shortcut handlers
-  // (Notion's space-for-AI trigger, Linear's slash menus, Slack's draft
-  // formatters) don't intercept the typed text mid-stream. The agent saw
-  // this as a ~30-turn recovery loop in h07: typing into an empty Notion
-  // block triggered the AI prompt overlay which captured every subsequent
-  // keystroke into the wrong input. Default-paste prevents that whole
-  // class of failure.
-  //
-  // Canvas-backed editors that need real key events (Google Sheets cell
-  // editor) are detected separately in the browser_type handler and
-  // routed to keystroke mode without the caller having to ask.
-  return "paste";
-}
-
 function parsePress(raw: Record<string, unknown>): PressParams {
   const tab_id = raw["tab_id"];
   const keys = raw["keys"];
@@ -1778,10 +1824,7 @@ function parseScroll(raw: Record<string, unknown>): ScrollParams {
   if (direction !== undefined) {
     const allowed = ["up", "down", "left", "right", "top", "bottom"] as const;
     if (typeof direction !== "string" || !(allowed as readonly string[]).includes(direction)) {
-      throw codedError(
-        "INVALID_PARAMS",
-        `direction must be one of ${allowed.join(", ")}`,
-      );
+      throw codedError("INVALID_PARAMS", `direction must be one of ${allowed.join(", ")}`);
     }
     params.direction = direction as ScrollParams["direction"];
     const amount = raw["amount"];
@@ -2005,7 +2048,10 @@ function injectedAutoDismiss(targetSelector: string): {
       if (/\b(banner|toast|notification|snackbar)\b/.test(cls)) return "banner";
       if (/\b(consent|cookie|gdpr)\b/.test(cls)) return "consent";
       const style = window.getComputedStyle(current);
-      if ((style.position === "fixed" || style.position === "sticky") && parseInt(style.zIndex ?? "0", 10) > 100) {
+      if (
+        (style.position === "fixed" || style.position === "sticky") &&
+        parseInt(style.zIndex ?? "0", 10) > 100
+      ) {
         return "fixed-overlay";
       }
       current = current.parentElement;
@@ -2020,17 +2066,34 @@ function injectedAutoDismiss(targetSelector: string): {
     const title = (el.getAttribute("title") ?? "").toLowerCase();
     if (/\b(close|dismiss)\b/.test(title)) return true;
     const text = (el.textContent ?? "").replace(/\s+/g, "").toLowerCase();
-    if (text === "×" || text === "✕" || text === "x" || text === "close" || text === "notnow" || text === "dismiss" || text === "gotit") return true;
+    if (
+      text === "×" ||
+      text === "✕" ||
+      text === "x" ||
+      text === "close" ||
+      text === "notnow" ||
+      text === "dismiss" ||
+      text === "gotit"
+    )
+      return true;
     return false;
   };
 
   // Strategy 1: ESC.
-  const escInit: KeyboardEventInit = { key: "Escape", code: "Escape", bubbles: true, cancelable: true };
+  const escInit: KeyboardEventInit = {
+    key: "Escape",
+    code: "Escape",
+    bubbles: true,
+    cancelable: true,
+  };
   document.dispatchEvent(new KeyboardEvent("keydown", escInit));
   document.dispatchEvent(new KeyboardEvent("keyup", escInit));
   // Check if ESC worked.
   const hitAfterEsc = document.elementFromPoint(x, y) as HTMLElement | null;
-  if (hitAfterEsc === el || (hitAfterEsc !== null && (el.contains(hitAfterEsc) || hitAfterEsc.contains(el)))) {
+  if (
+    hitAfterEsc === el ||
+    (hitAfterEsc !== null && (el.contains(hitAfterEsc) || hitAfterEsc.contains(el)))
+  ) {
     return { dismissed: true, strategy: "escape", occluder_type };
   }
 
@@ -2043,7 +2106,10 @@ function injectedAutoDismiss(targetSelector: string): {
       (c as HTMLElement).click();
       // Verify target is now accessible.
       const hitAfter = document.elementFromPoint(x, y) as HTMLElement | null;
-      if (hitAfter === el || (hitAfter !== null && (el.contains(hitAfter) || hitAfter.contains(el)))) {
+      if (
+        hitAfter === el ||
+        (hitAfter !== null && (el.contains(hitAfter) || hitAfter.contains(el)))
+      ) {
         return { dismissed: true, strategy: "close_button", occluder_type };
       }
     }
@@ -2057,7 +2123,10 @@ function injectedAutoDismiss(targetSelector: string): {
     if (style.position === "fixed" || style.position === "absolute") {
       backdrop.click();
       const hitAfter = document.elementFromPoint(x, y) as HTMLElement | null;
-      if (hitAfter === el || (hitAfter !== null && (el.contains(hitAfter) || hitAfter.contains(el)))) {
+      if (
+        hitAfter === el ||
+        (hitAfter !== null && (el.contains(hitAfter) || hitAfter.contains(el)))
+      ) {
         return { dismissed: true, strategy: "backdrop_click", occluder_type };
       }
     }
@@ -2162,7 +2231,11 @@ function injectedClickAtPoint(
   };
   el.dispatchEvent(new PointerEvent("pointerdown", pointerInit));
   el.dispatchEvent(new MouseEvent("mousedown", baseInit));
-  try { el.focus(); } catch { /* ignore */ }
+  try {
+    el.focus();
+  } catch {
+    /* ignore */
+  }
   el.dispatchEvent(new PointerEvent("pointerup", pointerInit));
   el.dispatchEvent(new MouseEvent("mouseup", baseInit));
   el.click();
@@ -2199,133 +2272,141 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       const buttonName = params.button ?? "left";
 
       const { result: handlerResult, effect } = await captureEffect(chromeId, async () => {
+        // Persistent CDP path: trusted click via Input.dispatchMouseEvent.
+        if (cdp.isPersistent(chromeId)) {
+          const center = await execInTab(chromeId, injectedElementCenter, [selector] as const);
+          if (center === null) {
+            throw codedError(
+              "REF_STALE",
+              `ref ${params.ref} no longer resolves in tab ${params.tab_id}`,
+              {
+                next_action:
+                  "element ref is stale (DOM changed since last read) — call browser_quick_read again to get a fresh ref, do not reuse the old one",
+                diagnostic: {
+                  ref: params.ref,
+                  tab_id: params.tab_id,
+                  last_known_selector: selector,
+                  stage: "click_cdp_pre_dispatch",
+                },
+              },
+            );
+          }
+          const dispatch = async () => {
+            await cdpClick(cdp, chromeId, center.x, center.y, buttonName, mods);
+            return { clicked: true as const };
+          };
+          if (observeEffects) {
+            const { result, effect } = await withEffectObservation(
+              { chromeTabId: chromeId, windowMs: 300, networkTracker: network },
+              dispatch,
+            );
+            const warning = checkEffectExpectation(effect, expectEffect);
+            return { ...result, page_effect: effect, ...(warning ? { warnings: [warning] } : {}) };
+          }
+          return dispatch();
+        }
 
-      // Persistent CDP path: trusted click via Input.dispatchMouseEvent.
-      if (cdp.isPersistent(chromeId)) {
-        const center = await execInTab(chromeId, injectedElementCenter, [selector] as const);
-        if (center === null) {
+        // Synthetic path.
+        const overlayRaw = raw["overlay"];
+        if (
+          overlayRaw !== undefined &&
+          overlayRaw !== "none" &&
+          overlayRaw !== "simple" &&
+          overlayRaw !== "smart"
+        ) {
+          throw codedError("INVALID_PARAMS", "overlay must be none|simple|smart");
+        }
+        const overlay: "none" | "simple" | "smart" =
+          overlayRaw === "simple" || overlayRaw === "smart" ? overlayRaw : "none";
+        let res = await execInTab(chromeId, injectedClick, [selector, button, mods] as const);
+        if (res.found === false) {
           throw codedError(
             "REF_STALE",
             `ref ${params.ref} no longer resolves in tab ${params.tab_id}`,
-            {
-              next_action:
-                "element ref is stale (DOM changed since last read) — call browser_quick_read again to get a fresh ref, do not reuse the old one",
-              diagnostic: {
-                ref: params.ref,
-                tab_id: params.tab_id,
-                last_known_selector: selector,
-                stage: "click_cdp_pre_dispatch",
-              },
-            },
           );
         }
-        const dispatch = async () => {
-          await cdpClick(cdp, chromeId, center.x, center.y, buttonName, mods);
-          return { clicked: true as const };
+        let dismissedOverlay = false;
+        let dismissStrategy: string | undefined;
+        if (overlay !== "none" && res.occluded === true) {
+          const injected = overlay === "smart" ? injectedAutoDismiss : injectedDismissOverlay;
+          const dismiss = (await execInTab(chromeId, injected, [selector] as const)) as {
+            dismissed: boolean;
+            strategy?: string;
+          };
+          if (dismiss.dismissed) {
+            dismissedOverlay = true;
+            if (overlay === "smart") dismissStrategy = dismiss.strategy;
+            res = await execInTab(chromeId, injectedClick, [selector, button, mods] as const);
+            if (res.found === false) {
+              throw codedError(
+                "REF_STALE",
+                `ref ${params.ref} became stale after overlay dismissal in tab ${params.tab_id}`,
+              );
+            }
+          }
+        }
+
+        type ClickResult = {
+          clicked: boolean;
+          dismissed_overlay?: boolean;
+          occluded?: boolean;
+          occluder?: { tag: string; text: string; role: string | null } | null;
+          retargeted?: boolean;
+          suggestion?: string;
         };
+        const buildResult = (): ClickResult => {
+          const r: ClickResult = { clicked: true };
+          if (dismissedOverlay) {
+            r.dismissed_overlay = true;
+            if (dismissStrategy !== undefined) {
+              r.suggestion = `overlay dismissed via ${dismissStrategy}`;
+            }
+          }
+          if (res.occluded === true) {
+            r.occluded = true;
+            r.occluder = res.occluder ?? null;
+            r.clicked = false;
+            if (overlay === "none") {
+              const occText = (res.occluder?.text ?? "").toLowerCase();
+              if (/cookie|consent|gdpr|accept/.test(occText)) {
+                r.suggestion = "cookie/consent overlay detected — retry with overlay: 'smart'";
+              } else if (res.occluder?.role === "dialog" || res.occluder?.role === "alertdialog") {
+                r.suggestion = "dialog overlay detected — retry with overlay: 'smart'";
+              } else {
+                r.suggestion = "retry with overlay: 'simple' or overlay: 'smart'";
+              }
+            } else {
+              r.suggestion =
+                "overlay could not be dismissed; target element may be permanently covered";
+            }
+          }
+          if (res.retargeted === true) r.retargeted = true;
+          return r;
+        };
+
         if (observeEffects) {
           const { result, effect } = await withEffectObservation(
-            { chromeTabId: chromeId, windowMs: 300, networkTracker: network }, dispatch,
+            { chromeTabId: chromeId, windowMs: 300, networkTracker: network },
+            async () => buildResult(),
           );
           const warning = checkEffectExpectation(effect, expectEffect);
-          return { ...result, page_effect: effect, ...(warning ? { warnings: [warning] } : {}) };
+          const out: typeof result & { page_effect: PageEffect; warnings?: string[] } = {
+            ...result,
+            page_effect: effect,
+          };
+          if (warning !== null) out.warnings = [warning];
+          return out;
         }
-        return dispatch();
-      }
-
-      // Synthetic path.
-      const overlayRaw = raw["overlay"];
-      if (
-        overlayRaw !== undefined &&
-        overlayRaw !== "none" &&
-        overlayRaw !== "simple" &&
-        overlayRaw !== "smart"
-      ) {
-        throw codedError("INVALID_PARAMS", "overlay must be none|simple|smart");
-      }
-      const overlay: "none" | "simple" | "smart" =
-        overlayRaw === "simple" || overlayRaw === "smart" ? overlayRaw : "none";
-      let res = await execInTab(chromeId, injectedClick, [selector, button, mods] as const);
-      if (res.found === false) {
-        throw codedError(
-          "REF_STALE",
-          `ref ${params.ref} no longer resolves in tab ${params.tab_id}`,
-        );
-      }
-      let dismissedOverlay = false;
-      let dismissStrategy: string | undefined;
-      if (overlay !== "none" && res.occluded === true) {
-        const injected = overlay === "smart" ? injectedAutoDismiss : injectedDismissOverlay;
-        const dismiss = await execInTab(chromeId, injected, [selector] as const) as {
-          dismissed: boolean;
-          strategy?: string;
-        };
-        if (dismiss.dismissed) {
-          dismissedOverlay = true;
-          if (overlay === "smart") dismissStrategy = dismiss.strategy;
-          res = await execInTab(chromeId, injectedClick, [selector, button, mods] as const);
-          if (res.found === false) {
-            throw codedError(
-              "REF_STALE",
-              `ref ${params.ref} became stale after overlay dismissal in tab ${params.tab_id}`,
-            );
-          }
+        if (expectEffect !== undefined) {
+          const r = buildResult();
+          return {
+            ...r,
+            warnings: [
+              "expect_effect set but observe_effects:false — no effect data to verify against",
+            ],
+          };
         }
-      }
-
-      type ClickResult = {
-        clicked: boolean;
-        dismissed_overlay?: boolean;
-        occluded?: boolean;
-        occluder?: { tag: string; text: string; role: string | null } | null;
-        retargeted?: boolean;
-        suggestion?: string;
-      };
-      const buildResult = (): ClickResult => {
-        const r: ClickResult = { clicked: true };
-        if (dismissedOverlay) {
-          r.dismissed_overlay = true;
-          if (dismissStrategy !== undefined) {
-            r.suggestion = `overlay dismissed via ${dismissStrategy}`;
-          }
-        }
-        if (res.occluded === true) {
-          r.occluded = true;
-          r.occluder = res.occluder ?? null;
-          r.clicked = false;
-          if (overlay === "none") {
-            const occText = (res.occluder?.text ?? "").toLowerCase();
-            if (/cookie|consent|gdpr|accept/.test(occText)) {
-              r.suggestion = "cookie/consent overlay detected — retry with overlay: 'smart'";
-            } else if (res.occluder?.role === "dialog" || res.occluder?.role === "alertdialog") {
-              r.suggestion = "dialog overlay detected — retry with overlay: 'smart'";
-            } else {
-              r.suggestion = "retry with overlay: 'simple' or overlay: 'smart'";
-            }
-          } else {
-            r.suggestion =
-              "overlay could not be dismissed; target element may be permanently covered";
-          }
-        }
-        if (res.retargeted === true) r.retargeted = true;
-        return r;
-      };
-
-      if (observeEffects) {
-        const { result, effect } = await withEffectObservation(
-          { chromeTabId: chromeId, windowMs: 300, networkTracker: network },
-          async () => buildResult(),
-        );
-        const warning = checkEffectExpectation(effect, expectEffect);
-        const out: typeof result & { page_effect: PageEffect; warnings?: string[] } = { ...result, page_effect: effect };
-        if (warning !== null) out.warnings = [warning];
-        return out;
-      }
-      if (expectEffect !== undefined) {
-        const r = buildResult();
-        return { ...r, warnings: ["expect_effect set but observe_effects:false — no effect data to verify against"] };
-      }
-      return buildResult();
+        return buildResult();
       });
       let verification: { expectation_met?: boolean; mismatch_reason?: string } = {};
       if (params.expected !== undefined) {
@@ -2360,11 +2441,12 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
         if (cdp.isPersistent(chromeId)) {
           await cdpClick(cdp, chromeId, cssX, cssY, buttonName, modifierFlags(modifiers));
         } else {
-          await execInTab(
-            chromeId,
-            injectedClickAtPoint,
-            [cssX, cssY, button, modifierFlags(modifiers)] as const,
-          );
+          await execInTab(chromeId, injectedClickAtPoint, [
+            cssX,
+            cssY,
+            button,
+            modifierFlags(modifiers),
+          ] as const);
         }
         let hit: { tag: string; role: string; name: string; ref: string } | null = null;
         try {
@@ -2417,12 +2499,7 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
         throw codedError("INVALID_PARAMS", "text must be a non-empty string");
       }
       const match = raw["match"];
-      if (
-        match !== undefined &&
-        match !== "exact" &&
-        match !== "prefix" &&
-        match !== "substring"
-      ) {
+      if (match !== undefined && match !== "exact" && match !== "prefix" && match !== "substring") {
         throw codedError("INVALID_PARAMS", "match must be exact|prefix|substring");
       }
       const roleRaw = raw["role"];
@@ -2442,7 +2519,8 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
         const spec: ClickByTextSpec = {
           text,
           matchMode: (match as ClickByTextSpec["matchMode"]) ?? "substring",
-          roleFilter: typeof roleRaw === "string" && roleRaw.length > 0 ? roleRaw.toLowerCase() : null,
+          roleFilter:
+            typeof roleRaw === "string" && roleRaw.length > 0 ? roleRaw.toLowerCase() : null,
           caseSensitive,
           button: BUTTON_INDEX[buttonName],
           modifiers: modifierFlags(mods),
@@ -2492,7 +2570,9 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
 
   router.register(
     "browser_type",
-    async (raw): Promise<{
+    async (
+      raw,
+    ): Promise<{
       typed: number;
       mode: TypeMode;
       cleared?: boolean;
@@ -2506,329 +2586,365 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       const params = parseType(raw);
       const chromeId = resolveChromeId(tabIdMap, params.tab_id);
       const { result: handlerResult, effect } = await captureEffect(chromeId, async () => {
-      // Ref-less typing path (browser-harness-style type_text): inject into
-      // document.activeElement via Input.insertText. The agent is expected
-      // to have called browser_click_at first to focus the target. Skips
-      // the selector lookup, the focus-click, and the clear step — none of
-      // which mean anything without a ref. Useful when no a11y refs are
-      // available (e.g. screenshot-first profiles with browser_read /
-      // browser_quick_read disabled).
-      if (params.ref === undefined) {
-        if (cdp.isPersistent(chromeId)) {
-          await cdpType(cdp, chromeId, params.text);
-          if (params.submit === true) {
-            await cdpPress(cdp, chromeId, "Enter", { ctrl: false, alt: false, shift: false, meta: false });
-          }
-        } else {
-          // Synthetic fallback: dispatch insertText via execCommand on the
-          // active element. Works on contenteditable; form inputs need the
-          // CDP path for trusted events.
-          await execInTab(chromeId, ((text: string) => {
-            const el = document.activeElement as HTMLElement | null;
-            if (el === null) return;
-            try {
-              document.execCommand("insertText", false, text);
-            } catch {
-              if (typeof (el as HTMLInputElement).value === "string") {
-                const cur = (el as HTMLInputElement).value;
-                (el as HTMLInputElement).value = cur + text;
-                el.dispatchEvent(new Event("input", { bubbles: true }));
-              }
-            }
-          }) as (text: string) => void, [params.text] as const);
-        }
-        const r: { typed: number; mode: TypeMode } = { typed: params.text.length, mode: "paste" };
-        return r;
-      }
-
-      const ref = resolveRef(refCache, params.tab_id, params.ref);
-      const selector = ref.selector;
-      const submit = params.submit ?? false;
-      const clearMode = resolveClearMode(params);
-      const observeEffects = params.observe_effects !== false;
-      const expectEffect = params.expect_effect;
-      let cleared: boolean | undefined;
-
-      // Mode selection. Default is paste (Input.insertText) because it sets
-      // the focused field's value atomically without firing per-character
-      // keydown events — SPA shortcut handlers (Notion's space-for-AI
-      // overlay, Linear's slash menus) can't intercept the typed text. The
-      // only callers that need real per-key dispatch are canvas-backed
-      // editors that listen for keydown on a hidden input (Google Sheets'
-      // cell editor). Detect those by selector and switch automatically.
-      // Rich editors like ProseMirror / Quill / CodeMirror also prefer
-      // paste, which is now the default — so the prior RICH_SELECTOR_HINTS
-      // gate is no longer needed.
-      const CANVAS_SELECTOR_HINTS = [
-        "#waffle-rich-text-editor",       // Google Sheets cell editor
-        "#docs-texteventtarget-iframe",   // Google Docs body (canvas)
-      ];
-      const looksCanvasEditor = CANVAS_SELECTOR_HINTS.some(h => selector.includes(h));
-      const looksRichEditor = false;       // retained as a binding for diagnostic code below
-      const mode: TypeMode = params.mode !== undefined
-        ? params.mode
-        : looksCanvasEditor ? "keystroke" : "paste";
-
-      // Persistent CDP path: trusted type via Input.insertText.
-      if (cdp.isPersistent(chromeId)) {
-        if (clearMode !== undefined) {
-          const selectAllMod = isMacPlatform()
-            ? { ctrl: false, alt: false, shift: false, meta: true }
-            : { ctrl: true, alt: false, shift: false, meta: false };
-          await cdpPress(cdp, chromeId, "a", selectAllMod);
-          await cdpPress(cdp, chromeId, "Backspace", { ctrl: false, alt: false, shift: false, meta: false });
-          cleared = true;
-        }
-        const dispatch = async () => {
-          // Click the element to focus it, then insert text.
-          const center = await execInTab(chromeId, injectedElementCenter, [selector] as const);
-          if (center === null) {
-            throw codedError("REF_STALE", `ref ${params.ref} no longer resolves in tab ${params.tab_id}`);
-          }
-          await cdpClick(cdp, chromeId, center.x, center.y, "left", { ctrl: false, alt: false, shift: false, meta: false });
-          if (mode === "paste") {
-            // Bulk-assign via Input.insertText — fast for long strings,
-            // sufficient for normal textboxes and contenteditable.
+        // Ref-less typing path (browser-harness-style type_text): inject into
+        // document.activeElement via Input.insertText. The agent is expected
+        // to have called browser_click_at first to focus the target. Skips
+        // the selector lookup, the focus-click, and the clear step — none of
+        // which mean anything without a ref. Useful when no a11y refs are
+        // available (e.g. screenshot-first profiles with browser_read /
+        // browser_quick_read disabled).
+        if (params.ref === undefined) {
+          if (cdp.isPersistent(chromeId)) {
             await cdpType(cdp, chromeId, params.text);
-          } else {
-            // Per-char dispatchKeyEvent — necessary for canvas grids and
-            // keydown-gated editors (Sheets cells, Docs, Figma).
-            await cdpTypeKeystroke(cdp, chromeId, params.text);
-          }
-          if (submit) {
-            await cdpPress(cdp, chromeId, "Enter", { ctrl: false, alt: false, shift: false, meta: false });
-          }
-          const r: { typed: number; mode: TypeMode; cleared?: boolean } = { typed: params.text.length, mode };
-          if (cleared !== undefined) r.cleared = cleared;
-          return r;
-        };
-        if (observeEffects) {
-          const { result, effect } = await withEffectObservation(
-            { chromeTabId: chromeId, windowMs: 300, networkTracker: network }, dispatch,
-          );
-          const warning = checkEffectExpectation(effect, expectEffect);
-          return { ...result, page_effect: effect, ...(warning ? { warnings: [warning] } : {}) };
-        }
-        return dispatch();
-      }
-
-      // Synthetic path.
-      if (clearMode !== undefined) {
-        const clearRes = await execInTab(
-          chromeId,
-          injectedClearField,
-          [selector, clearMode] as const,
-        );
-        if (clearRes.found === false) {
-          throw codedError(
-            "REF_STALE",
-            `ref ${params.ref} no longer resolves in tab ${params.tab_id}`,
-          );
-        }
-        cleared = clearRes.cleared;
-      }
-
-      type TypeResult = {
-        typed: number;
-        mode: TypeMode;
-        cleared?: boolean;
-        escalated_to_cdp?: true;
-      };
-
-      const dispatchSynthetic = async (): Promise<TypeResult> => {
-        let res: { found: boolean; typed: number; reflected: number; content_verified?: boolean };
-        if (mode === "paste") {
-          res = await execInTab(
-            chromeId,
-            injectedTypePaste,
-            [selector, params.text, submit] as const,
-          );
-        } else {
-          // keystroke mode. injectedTypeKeystroke already detects
-          // contenteditable and uses execCommand fallback per-char
-          // when beforeinput doesn't land.
-          const delayMs = params.delay_ms ?? 0;
-          res = await execInTab(
-            chromeId,
-            injectedTypeKeystroke,
-            [selector, params.text, submit, delayMs] as const,
-          );
-        }
-        if (res.found === false) {
-          throw codedError(
-            "REF_STALE",
-            `ref ${params.ref} no longer resolves in tab ${params.tab_id}`,
-            {
-              next_action:
-                "element ref is stale (DOM changed between read and type) — call browser_quick_read again to get a fresh ref, do not reuse the old one",
-              diagnostic: {
-                ref: params.ref,
-                tab_id: params.tab_id,
-                last_known_selector: selector,
-                role: ref.role,
-                stage: "type_synthetic_dispatch",
-                mode,
-              },
-            },
-          );
-        }
-        // If the write didn't land, auto-retry with escalating strategies:
-        // 1. paste mode (execCommand insertText in one shot)
-        // 2. clipboard fallback (synthetic ClipboardEvent paste)
-        // Rich editors (Slack ProseMirror, Gmail Draft.js, Notion) may ignore
-        // synthetic keystrokes but respond to paste or execCommand.
-        if (params.text.length > 0 && res.reflected === 0) {
-          // Strategy 2: paste mode (if we weren't already in paste mode).
-          if (mode !== "paste") {
-            res = await execInTab(
-              chromeId,
-              injectedTypePaste,
-              [selector, params.text, submit] as const,
-            );
-            if (res.found && res.reflected > 0) {
-              const r: TypeResult = { typed: res.reflected, mode: "paste" };
-              if (cleared !== undefined) r.cleared = cleared;
-              return r;
+            if (params.submit === true) {
+              await cdpPress(cdp, chromeId, "Enter", {
+                ctrl: false,
+                alt: false,
+                shift: false,
+                meta: false,
+              });
             }
+          } else {
+            // Synthetic fallback: dispatch insertText via execCommand on the
+            // active element. Works on contenteditable; form inputs need the
+            // CDP path for trusted events.
+            await execInTab(
+              chromeId,
+              ((text: string) => {
+                const el = document.activeElement as HTMLElement | null;
+                if (el === null) return;
+                try {
+                  document.execCommand("insertText", false, text);
+                } catch {
+                  if (typeof (el as HTMLInputElement).value === "string") {
+                    const cur = (el as HTMLInputElement).value;
+                    (el as HTMLInputElement).value = cur + text;
+                    el.dispatchEvent(new Event("input", { bubbles: true }));
+                  }
+                }
+              }) as (text: string) => void,
+              [params.text] as const,
+            );
           }
-          // Strategy 3: clipboard fallback (synthetic paste event + execCommand).
-          res = await execInTab(
-            chromeId,
-            injectedTypeClipboard,
-            [selector, params.text, submit] as const,
-          );
-          if (res.found && res.reflected > 0) {
-            const r: TypeResult = { typed: res.reflected, mode: "paste" };
+          const r: { typed: number; mode: TypeMode } = { typed: params.text.length, mode: "paste" };
+          return r;
+        }
+
+        const ref = resolveRef(refCache, params.tab_id, params.ref);
+        const selector = ref.selector;
+        const submit = params.submit ?? false;
+        const clearMode = resolveClearMode(params);
+        const observeEffects = params.observe_effects !== false;
+        const expectEffect = params.expect_effect;
+        let cleared: boolean | undefined;
+
+        // Mode selection. Default is paste (Input.insertText) because it sets
+        // the focused field's value atomically without firing per-character
+        // keydown events — SPA shortcut handlers (Notion's space-for-AI
+        // overlay, Linear's slash menus) can't intercept the typed text. The
+        // only callers that need real per-key dispatch are canvas-backed
+        // editors that listen for keydown on a hidden input (Google Sheets'
+        // cell editor). Detect those by selector and switch automatically.
+        // Rich editors like ProseMirror / Quill / CodeMirror also prefer
+        // paste, which is now the default — so the prior RICH_SELECTOR_HINTS
+        // gate is no longer needed.
+        const CANVAS_SELECTOR_HINTS = [
+          "#waffle-rich-text-editor", // Google Sheets cell editor
+          "#docs-texteventtarget-iframe", // Google Docs body (canvas)
+        ];
+        const looksCanvasEditor = CANVAS_SELECTOR_HINTS.some((h) => selector.includes(h));
+        const looksRichEditor = false; // retained as a binding for diagnostic code below
+        const mode: TypeMode =
+          params.mode !== undefined ? params.mode : looksCanvasEditor ? "keystroke" : "paste";
+
+        // Persistent CDP path: trusted type via Input.insertText.
+        if (cdp.isPersistent(chromeId)) {
+          if (clearMode !== undefined) {
+            const selectAllMod = isMacPlatform()
+              ? { ctrl: false, alt: false, shift: false, meta: true }
+              : { ctrl: true, alt: false, shift: false, meta: false };
+            await cdpPress(cdp, chromeId, "a", selectAllMod);
+            await cdpPress(cdp, chromeId, "Backspace", {
+              ctrl: false,
+              alt: false,
+              shift: false,
+              meta: false,
+            });
+            cleared = true;
+          }
+          const dispatch = async () => {
+            // Click the element to focus it, then insert text.
+            const center = await execInTab(chromeId, injectedElementCenter, [selector] as const);
+            if (center === null) {
+              throw codedError(
+                "REF_STALE",
+                `ref ${params.ref} no longer resolves in tab ${params.tab_id}`,
+              );
+            }
+            await cdpClick(cdp, chromeId, center.x, center.y, "left", {
+              ctrl: false,
+              alt: false,
+              shift: false,
+              meta: false,
+            });
+            if (mode === "paste") {
+              // Bulk-assign via Input.insertText — fast for long strings,
+              // sufficient for normal textboxes and contenteditable.
+              await cdpType(cdp, chromeId, params.text);
+            } else {
+              // Per-char dispatchKeyEvent — necessary for canvas grids and
+              // keydown-gated editors (Sheets cells, Docs, Figma).
+              await cdpTypeKeystroke(cdp, chromeId, params.text);
+            }
+            if (submit) {
+              await cdpPress(cdp, chromeId, "Enter", {
+                ctrl: false,
+                alt: false,
+                shift: false,
+                meta: false,
+              });
+            }
+            const r: { typed: number; mode: TypeMode; cleared?: boolean } = {
+              typed: params.text.length,
+              mode,
+            };
             if (cleared !== undefined) r.cleared = cleared;
             return r;
-          }
-          const isContentEditable =
-            looksRichEditor || ref.role === "textbox" && /contenteditable/i.test(selector);
-          throw codedError(
-            "WRITE_NOT_REFLECTED",
-            `typed ${params.text.length} characters via keystroke, paste, and clipboard strategies but field content did not change; try browser_set_cdp enabled:true for trusted events`,
-            {
-              next_action: isContentEditable
-                ? "contenteditable / rich editor detected — switch to browser_execute_js with `el.focus(); document.execCommand('insertText', false, <text>)` instead of retrying browser_type"
-                : "value did not reflect — call browser_quick_read again to confirm element is still focusable, then retry once with clear_mode:'auto'; if still failing, fall back to browser_execute_js",
-              diagnostic: {
-                ref: params.ref,
-                tab_id: params.tab_id,
-                selector,
-                role: ref.role,
-                is_contenteditable: isContentEditable,
-                looks_rich_editor: looksRichEditor,
-                expected_value_length: params.text.length,
-                observed_reflected_length: res.reflected,
-                strategies_tried:
-                  mode === "paste"
-                    ? ["paste", "clipboard"]
-                    : ["keystroke", "paste", "clipboard"],
-              },
-            },
-          );
-        }
-        if (params.text.length > 0 && res.reflected >= params.text.length * 2) {
-          throw codedError(
-            "WRITE_AMPLIFIED",
-            `typed ${res.typed} characters but field reflected ${res.reflected} — likely double-insertion by a stacked beforeinput handler`,
-          );
-        }
-        const r: TypeResult = { typed: res.reflected, mode };
-        if (cleared !== undefined) r.cleared = cleared;
-        return r;
-      };
-
-      // Auto-escalate to CDP when all synthetic strategies fail. Without
-      // this, the agent would see WRITE_NOT_REFLECTED, manually call
-      // browser_set_cdp, and re-issue the type — three round-trips plus
-      // model reasoning latency before CDP kicks in. Doing it in-handler
-      // collapses that to one ~500ms attach + one Input.insertText. See
-      // the comment block under the WRITE_NOT_REFLECTED throw above for
-      // the synthetic-strategy ladder we exhausted before getting here.
-      const dispatchWithRescue = async (): Promise<TypeResult> => {
-        try {
-          return await dispatchSynthetic();
-        } catch (err) {
-          const e = err as Error & {
-            code?: string;
-            next_action?: string;
-            diagnostic?: Record<string, unknown>;
           };
-          if (e.code !== "WRITE_NOT_REFLECTED") throw err;
-          // CDP rescue: attach the debugger persistently so this and
-          // subsequent ops on the tab use trusted dispatch.
-          try {
-            await cdp.setPersistent(chromeId, true);
-          } catch (attachErr) {
-            const m = (attachErr as Error)?.message ?? String(attachErr);
+          if (observeEffects) {
+            const { result, effect } = await withEffectObservation(
+              { chromeTabId: chromeId, windowMs: 300, networkTracker: network },
+              dispatch,
+            );
+            const warning = checkEffectExpectation(effect, expectEffect);
+            return { ...result, page_effect: effect, ...(warning ? { warnings: [warning] } : {}) };
+          }
+          return dispatch();
+        }
+
+        // Synthetic path.
+        if (clearMode !== undefined) {
+          const clearRes = await execInTab(chromeId, injectedClearField, [
+            selector,
+            clearMode,
+          ] as const);
+          if (clearRes.found === false) {
             throw codedError(
-              "WRITE_NOT_REFLECTED",
-              `${e.message}; CDP rescue attach failed: ${m}`,
-              {
-                next_action:
-                  "synthetic dispatch failed and chrome.debugger could not attach for CDP rescue — DevTools or another extension may already be attached to this tab; close it and retry",
-                diagnostic: { ...(e.diagnostic ?? {}), cdp_attach_error: m },
-              },
+              "REF_STALE",
+              `ref ${params.ref} no longer resolves in tab ${params.tab_id}`,
             );
           }
-          const center = await execInTab(
-            chromeId,
-            injectedElementCenter,
-            [selector] as const,
-          );
-          if (center === null) {
+          cleared = clearRes.cleared;
+        }
+
+        type TypeResult = {
+          typed: number;
+          mode: TypeMode;
+          cleared?: boolean;
+          escalated_to_cdp?: true;
+        };
+
+        const dispatchSynthetic = async (): Promise<TypeResult> => {
+          let res: { found: boolean; typed: number; reflected: number; content_verified?: boolean };
+          if (mode === "paste") {
+            res = await execInTab(chromeId, injectedTypePaste, [
+              selector,
+              params.text,
+              submit,
+            ] as const);
+          } else {
+            // keystroke mode. injectedTypeKeystroke already detects
+            // contenteditable and uses execCommand fallback per-char
+            // when beforeinput doesn't land.
+            const delayMs = params.delay_ms ?? 0;
+            res = await execInTab(chromeId, injectedTypeKeystroke, [
+              selector,
+              params.text,
+              submit,
+              delayMs,
+            ] as const);
+          }
+          if (res.found === false) {
             throw codedError(
               "REF_STALE",
               `ref ${params.ref} no longer resolves in tab ${params.tab_id}`,
               {
                 next_action:
-                  "element ref went stale during CDP escalation — call browser_quick_read again",
+                  "element ref is stale (DOM changed between read and type) — call browser_quick_read again to get a fresh ref, do not reuse the old one",
                 diagnostic: {
                   ref: params.ref,
                   tab_id: params.tab_id,
-                  selector,
-                  stage: "type_cdp_rescue",
+                  last_known_selector: selector,
+                  role: ref.role,
+                  stage: "type_synthetic_dispatch",
+                  mode,
                 },
               },
             );
           }
-          await cdpClick(
-            cdp, chromeId, center.x, center.y, "left",
-            { ctrl: false, alt: false, shift: false, meta: false },
-          );
-          await cdpType(cdp, chromeId, params.text);
-          if (submit) {
-            await cdpPress(
-              cdp, chromeId, "Enter",
-              { ctrl: false, alt: false, shift: false, meta: false },
+          // If the write didn't land, auto-retry with escalating strategies:
+          // 1. paste mode (execCommand insertText in one shot)
+          // 2. clipboard fallback (synthetic ClipboardEvent paste)
+          // Rich editors (Slack ProseMirror, Gmail Draft.js, Notion) may ignore
+          // synthetic keystrokes but respond to paste or execCommand.
+          if (params.text.length > 0 && res.reflected === 0) {
+            // Strategy 2: paste mode (if we weren't already in paste mode).
+            if (mode !== "paste") {
+              res = await execInTab(chromeId, injectedTypePaste, [
+                selector,
+                params.text,
+                submit,
+              ] as const);
+              if (res.found && res.reflected > 0) {
+                const r: TypeResult = { typed: res.reflected, mode: "paste" };
+                if (cleared !== undefined) r.cleared = cleared;
+                return r;
+              }
+            }
+            // Strategy 3: clipboard fallback (synthetic paste event + execCommand).
+            res = await execInTab(chromeId, injectedTypeClipboard, [
+              selector,
+              params.text,
+              submit,
+            ] as const);
+            if (res.found && res.reflected > 0) {
+              const r: TypeResult = { typed: res.reflected, mode: "paste" };
+              if (cleared !== undefined) r.cleared = cleared;
+              return r;
+            }
+            const isContentEditable =
+              looksRichEditor || (ref.role === "textbox" && /contenteditable/i.test(selector));
+            throw codedError(
+              "WRITE_NOT_REFLECTED",
+              `typed ${params.text.length} characters via keystroke, paste, and clipboard strategies but field content did not change; try browser_set_cdp enabled:true for trusted events`,
+              {
+                next_action: isContentEditable
+                  ? "contenteditable / rich editor detected — switch to browser_execute_js with `el.focus(); document.execCommand('insertText', false, <text>)` instead of retrying browser_type"
+                  : "value did not reflect — call browser_quick_read again to confirm element is still focusable, then retry once with clear_mode:'auto'; if still failing, fall back to browser_execute_js",
+                diagnostic: {
+                  ref: params.ref,
+                  tab_id: params.tab_id,
+                  selector,
+                  role: ref.role,
+                  is_contenteditable: isContentEditable,
+                  looks_rich_editor: looksRichEditor,
+                  expected_value_length: params.text.length,
+                  observed_reflected_length: res.reflected,
+                  strategies_tried:
+                    mode === "paste" ? ["paste", "clipboard"] : ["keystroke", "paste", "clipboard"],
+                },
+              },
             );
           }
-          const out: TypeResult = {
-            typed: params.text.length,
-            mode,
-            escalated_to_cdp: true,
+          if (params.text.length > 0 && res.reflected >= params.text.length * 2) {
+            throw codedError(
+              "WRITE_AMPLIFIED",
+              `typed ${res.typed} characters but field reflected ${res.reflected} — likely double-insertion by a stacked beforeinput handler`,
+            );
+          }
+          const r: TypeResult = { typed: res.reflected, mode };
+          if (cleared !== undefined) r.cleared = cleared;
+          return r;
+        };
+
+        // Auto-escalate to CDP when all synthetic strategies fail. Without
+        // this, the agent would see WRITE_NOT_REFLECTED, manually call
+        // browser_set_cdp, and re-issue the type — three round-trips plus
+        // model reasoning latency before CDP kicks in. Doing it in-handler
+        // collapses that to one ~500ms attach + one Input.insertText. See
+        // the comment block under the WRITE_NOT_REFLECTED throw above for
+        // the synthetic-strategy ladder we exhausted before getting here.
+        const dispatchWithRescue = async (): Promise<TypeResult> => {
+          try {
+            return await dispatchSynthetic();
+          } catch (err) {
+            const e = err as Error & {
+              code?: string;
+              next_action?: string;
+              diagnostic?: Record<string, unknown>;
+            };
+            if (e.code !== "WRITE_NOT_REFLECTED") throw err;
+            // CDP rescue: attach the debugger persistently so this and
+            // subsequent ops on the tab use trusted dispatch.
+            try {
+              await cdp.setPersistent(chromeId, true);
+            } catch (attachErr) {
+              const m = (attachErr as Error)?.message ?? String(attachErr);
+              throw codedError(
+                "WRITE_NOT_REFLECTED",
+                `${e.message}; CDP rescue attach failed: ${m}`,
+                {
+                  next_action:
+                    "synthetic dispatch failed and chrome.debugger could not attach for CDP rescue — DevTools or another extension may already be attached to this tab; close it and retry",
+                  diagnostic: { ...(e.diagnostic ?? {}), cdp_attach_error: m },
+                },
+              );
+            }
+            const center = await execInTab(chromeId, injectedElementCenter, [selector] as const);
+            if (center === null) {
+              throw codedError(
+                "REF_STALE",
+                `ref ${params.ref} no longer resolves in tab ${params.tab_id}`,
+                {
+                  next_action:
+                    "element ref went stale during CDP escalation — call browser_quick_read again",
+                  diagnostic: {
+                    ref: params.ref,
+                    tab_id: params.tab_id,
+                    selector,
+                    stage: "type_cdp_rescue",
+                  },
+                },
+              );
+            }
+            await cdpClick(cdp, chromeId, center.x, center.y, "left", {
+              ctrl: false,
+              alt: false,
+              shift: false,
+              meta: false,
+            });
+            await cdpType(cdp, chromeId, params.text);
+            if (submit) {
+              await cdpPress(cdp, chromeId, "Enter", {
+                ctrl: false,
+                alt: false,
+                shift: false,
+                meta: false,
+              });
+            }
+            const out: TypeResult = {
+              typed: params.text.length,
+              mode,
+              escalated_to_cdp: true,
+            };
+            if (cleared !== undefined) out.cleared = cleared;
+            return out;
+          }
+        };
+
+        if (observeEffects) {
+          const { result, effect } = await withEffectObservation(
+            { chromeTabId: chromeId, windowMs: 300, networkTracker: network },
+            dispatchWithRescue,
+          );
+          const warning = checkEffectExpectation(effect, expectEffect);
+          const out: typeof result & { page_effect: PageEffect; warnings?: string[] } = {
+            ...result,
+            page_effect: effect,
           };
-          if (cleared !== undefined) out.cleared = cleared;
+          if (warning !== null) out.warnings = [warning];
           return out;
         }
-      };
-
-      if (observeEffects) {
-        const { result, effect } = await withEffectObservation(
-          { chromeTabId: chromeId, windowMs: 300, networkTracker: network },
-          dispatchWithRescue,
-        );
-        const warning = checkEffectExpectation(effect, expectEffect);
-        const out: typeof result & { page_effect: PageEffect; warnings?: string[] } = { ...result, page_effect: effect };
-        if (warning !== null) out.warnings = [warning];
-        return out;
-      }
-      if (expectEffect !== undefined) {
-        const r = await dispatchWithRescue();
-        return { ...r, warnings: ["expect_effect set but observe_effects:false — no effect data to verify against"] };
-      }
-      return dispatchWithRescue();
+        if (expectEffect !== undefined) {
+          const r = await dispatchWithRescue();
+          return {
+            ...r,
+            warnings: [
+              "expect_effect set but observe_effects:false — no effect data to verify against",
+            ],
+          };
+        }
+        return dispatchWithRescue();
       });
       let verification: { expectation_met?: boolean; mismatch_reason?: string } = {};
       if (params.expected !== undefined) {
@@ -2840,93 +2956,110 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
     },
   );
 
-  router.register("browser_press", async (raw): Promise<{
-    pressed: true;
-    page_effect?: PageEffect;
-    effect?: Effect;
-    expectation_met?: boolean;
-    mismatch_reason?: string;
-    warnings?: string[];
-  }> => {
-    const params = parsePress(raw);
-    const chromeId = resolveChromeId(tabIdMap, params.tab_id);
-    const { result: handlerResult, effect: pressEffect } = await captureEffect(chromeId, async () => {
-    const observeEffects = params.observe_effects !== false;
-    const expectEffect = params.expect_effect;
-    const keys = params.keys;
-    const terminal = keys[keys.length - 1] ?? "";
-    const modsIn: ModifierInput[] = [];
-    for (let i = 0; i < keys.length - 1; i += 1) {
-      const k = keys[i];
-      if (k !== undefined && (MODIFIER_INPUT_NAMES as readonly string[]).includes(k)) {
-        modsIn.push(k as ModifierInput);
-      }
-    }
-    const mods = resolvePrimary(modsIn);
-    const denyReason = isDestructiveChord(terminal, mods);
-    if (denyReason !== null) {
-      throw codedError("RISKY_ACTION_DENIED", `refused destructive chord: ${denyReason}`);
-    }
-
-    // Persistent CDP path: trusted key events.
-    if (cdp.isPersistent(chromeId)) {
-      const dispatch = async (): Promise<{ pressed: true }> => {
-        await cdpPress(cdp, chromeId, terminal, modifierFlags(mods));
-        return { pressed: true };
-      };
-      if (observeEffects) {
-        const { result, effect } = await withEffectObservation(
-          { chromeTabId: chromeId, windowMs: 300, networkTracker: network }, dispatch,
-        );
-        const warning = checkEffectExpectation(effect, expectEffect);
-        return { ...result, page_effect: effect, ...(warning ? { warnings: [warning] } : {}) };
-      }
-      return dispatch();
-    }
-
-    // Synthetic path. Pre-resolve the key tuple here so the injected fn
-    // ships only the data it needs and stays free of imports. Pass mods
-    // through so Shift chords resolve to shifted text on this path too.
-    const dispatchPress = async (): Promise<{ pressed: true }> => {
-      const kTuple = resolveKey(terminal, modifierFlags(mods));
-      await execInTab(
+  router.register(
+    "browser_press",
+    async (
+      raw,
+    ): Promise<{
+      pressed: true;
+      page_effect?: PageEffect;
+      effect?: Effect;
+      expectation_met?: boolean;
+      mismatch_reason?: string;
+      warnings?: string[];
+    }> => {
+      const params = parsePress(raw);
+      const chromeId = resolveChromeId(tabIdMap, params.tab_id);
+      const { result: handlerResult, effect: pressEffect } = await captureEffect(
         chromeId,
-        injectedPress,
-        [
-          kTuple.key,
-          kTuple.code,
-          kTuple.vkCode,
-          kTuple.text ?? null,
-          modifierFlags(mods),
-        ] as const,
-      );
-      return { pressed: true };
-    };
+        async () => {
+          const observeEffects = params.observe_effects !== false;
+          const expectEffect = params.expect_effect;
+          const keys = params.keys;
+          const terminal = keys[keys.length - 1] ?? "";
+          const modsIn: ModifierInput[] = [];
+          for (let i = 0; i < keys.length - 1; i += 1) {
+            const k = keys[i];
+            if (k !== undefined && (MODIFIER_INPUT_NAMES as readonly string[]).includes(k)) {
+              modsIn.push(k as ModifierInput);
+            }
+          }
+          const mods = resolvePrimary(modsIn);
+          const denyReason = isDestructiveChord(terminal, mods);
+          if (denyReason !== null) {
+            throw codedError("RISKY_ACTION_DENIED", `refused destructive chord: ${denyReason}`);
+          }
 
-    if (observeEffects) {
-      const { result, effect } = await withEffectObservation(
-        { chromeTabId: chromeId, windowMs: 300, networkTracker: network },
-        dispatchPress,
+          // Persistent CDP path: trusted key events.
+          if (cdp.isPersistent(chromeId)) {
+            const dispatch = async (): Promise<{ pressed: true }> => {
+              await cdpPress(cdp, chromeId, terminal, modifierFlags(mods));
+              return { pressed: true };
+            };
+            if (observeEffects) {
+              const { result, effect } = await withEffectObservation(
+                { chromeTabId: chromeId, windowMs: 300, networkTracker: network },
+                dispatch,
+              );
+              const warning = checkEffectExpectation(effect, expectEffect);
+              return {
+                ...result,
+                page_effect: effect,
+                ...(warning ? { warnings: [warning] } : {}),
+              };
+            }
+            return dispatch();
+          }
+
+          // Synthetic path. Pre-resolve the key tuple here so the injected fn
+          // ships only the data it needs and stays free of imports. Pass mods
+          // through so Shift chords resolve to shifted text on this path too.
+          const dispatchPress = async (): Promise<{ pressed: true }> => {
+            const kTuple = resolveKey(terminal, modifierFlags(mods));
+            await execInTab(chromeId, injectedPress, [
+              kTuple.key,
+              kTuple.code,
+              kTuple.vkCode,
+              kTuple.text ?? null,
+              modifierFlags(mods),
+            ] as const);
+            return { pressed: true };
+          };
+
+          if (observeEffects) {
+            const { result, effect } = await withEffectObservation(
+              { chromeTabId: chromeId, windowMs: 300, networkTracker: network },
+              dispatchPress,
+            );
+            const warning = checkEffectExpectation(effect, expectEffect);
+            const out: typeof result & { page_effect: PageEffect; warnings?: string[] } = {
+              ...result,
+              page_effect: effect,
+            };
+            if (warning !== null) out.warnings = [warning];
+            return out;
+          }
+          if (expectEffect !== undefined) {
+            const r = await dispatchPress();
+            return {
+              ...r,
+              warnings: [
+                "expect_effect set but observe_effects:false — no effect data to verify against",
+              ],
+            };
+          }
+          return dispatchPress();
+        },
       );
-      const warning = checkEffectExpectation(effect, expectEffect);
-      const out: typeof result & { page_effect: PageEffect; warnings?: string[] } = { ...result, page_effect: effect };
-      if (warning !== null) out.warnings = [warning];
-      return out;
-    }
-    if (expectEffect !== undefined) {
-      const r = await dispatchPress();
-      return { ...r, warnings: ["expect_effect set but observe_effects:false — no effect data to verify against"] };
-    }
-    return dispatchPress();
-    });
-    let verification: { expectation_met?: boolean; mismatch_reason?: string } = {};
-    if (params.expected !== undefined) {
-      const v = await pollUntilMet(chromeId, pressEffect, params.expected);
-      verification.expectation_met = v.expectation_met;
-      if (v.mismatch_reason !== undefined) verification.mismatch_reason = v.mismatch_reason;
-    }
-    return { ...handlerResult, effect: pressEffect, ...verification };
-  });
+      let verification: { expectation_met?: boolean; mismatch_reason?: string } = {};
+      if (params.expected !== undefined) {
+        const v = await pollUntilMet(chromeId, pressEffect, params.expected);
+        verification.expectation_met = v.expectation_met;
+        if (v.mismatch_reason !== undefined) verification.mismatch_reason = v.mismatch_reason;
+      }
+      return { ...handlerResult, effect: pressEffect, ...verification };
+    },
+  );
 
   router.register("browser_scroll", async (raw): Promise<{ scrolled: true }> => {
     const params = parseScroll(raw);
@@ -2994,14 +3127,20 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       if (cdp.isPersistent(chromeId)) {
         const center = await execInTab(chromeId, injectedElementCenter, [selector] as const);
         if (center === null) {
-          throw codedError("REF_STALE", `ref ${params.ref} no longer resolves in tab ${params.tab_id}`);
+          throw codedError(
+            "REF_STALE",
+            `ref ${params.ref} no longer resolves in tab ${params.tab_id}`,
+          );
         }
         await cdpHover(cdp, chromeId, center.x, center.y);
         return { hovered: true as const };
       }
       const res = await execInTab(chromeId, injectedHover, [selector] as const);
       if (res.found === false) {
-        throw codedError("REF_STALE", `ref ${params.ref} no longer resolves in tab ${params.tab_id}`);
+        throw codedError(
+          "REF_STALE",
+          `ref ${params.ref} no longer resolves in tab ${params.tab_id}`,
+        );
       }
       return { hovered: true as const };
     });
@@ -3012,9 +3151,7 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
     const params = parseFindAndReplace(raw);
     const chromeId = resolveChromeId(tabIdMap, params.tab_id);
     const selectorArg: string | null =
-      params.ref !== undefined
-        ? resolveSelector(refCache, params.tab_id, params.ref)
-        : null;
+      params.ref !== undefined ? resolveSelector(refCache, params.tab_id, params.ref) : null;
     const { result, effect } = await captureEffect(chromeId, async () => {
       const res = await execInTab(chromeId, injectedFindAndReplaceSynthetic, [
         selectorArg,
@@ -3078,7 +3215,11 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       // in an IIFE so the natural pattern just works.
       if (res.exceptionDetails !== undefined) {
         const errText = `${res.exceptionDetails.text} ${res.exceptionDetails.exception?.description ?? ""}`;
-        if (/Illegal return|return\s+(?:statement\s+is\s+)?outside(?:\s+of)?\s+(?:a\s+)?function/i.test(errText)) {
+        if (
+          /Illegal return|return\s+(?:statement\s+is\s+)?outside(?:\s+of)?\s+(?:a\s+)?function/i.test(
+            errText,
+          )
+        ) {
           res = await evaluate(`(() => { ${params.code} })()`);
         }
       }
@@ -3096,7 +3237,8 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
     const tab_id = raw["tab_id"];
     const enabled = raw["enabled"];
     if (typeof tab_id !== "string") throw codedError("INVALID_PARAMS", "tab_id must be a string");
-    if (typeof enabled !== "boolean") throw codedError("INVALID_PARAMS", "enabled must be a boolean");
+    if (typeof enabled !== "boolean")
+      throw codedError("INVALID_PARAMS", "enabled must be a boolean");
     const chromeId = resolveChromeId(tabIdMap, tab_id);
     await cdp.setPersistent(chromeId, enabled);
     return { enabled };

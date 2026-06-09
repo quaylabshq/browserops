@@ -1,4 +1,3 @@
-import type { ErrorCode } from "@browserops/shared";
 import type { Router } from "../router.js";
 
 /**
@@ -25,21 +24,14 @@ interface SafetyPromptParams {
 const SESSION_KEY = "pendingSafetyPrompt";
 const REQUIRE_APPROVAL_KEY = "requireApproval";
 
-const pending = new Map<
-  string,
-  (result: { decision_id: string; allow: boolean }) => void
->();
+const pending = new Map<string, (result: { decision_id: string; allow: boolean }) => void>();
 
 async function isAutoApprove(): Promise<boolean> {
   const s = await chrome.storage.session.get(REQUIRE_APPROVAL_KEY);
   return s[REQUIRE_APPROVAL_KEY] !== true;
 }
 
-function codedError(code: ErrorCode, message: string): Error {
-  const err = new Error(message) as Error & { code: ErrorCode };
-  err.code = code;
-  return err;
-}
+import { codedError } from "../lib/coded-error.js";
 
 function parse(raw: Record<string, unknown>): SafetyPromptParams {
   const tool = raw["tool"];
@@ -72,10 +64,7 @@ function setPendingBadge(): void {
   chrome.action.setBadgeBackgroundColor({ color: "#c1121f" }).catch(() => {});
 }
 
-export function registerSafetyHandler(
-  router: Router,
-  opts: { restoreBadge: () => void },
-): void {
+export function registerSafetyHandler(router: Router, opts: { restoreBadge: () => void }): void {
   router.register("safety_prompt", async (raw) => {
     const p = parse(raw);
 

@@ -1,4 +1,3 @@
-import type { ErrorCode } from "@browserops/shared";
 import type { Router } from "../router.js";
 import type { CdpManager } from "../cdp.js";
 import { execInTab } from "./input.js";
@@ -27,9 +26,10 @@ function readPageMetrics(): {
  * Params: { tab_id, full_page?, format?, quality? }
  * Result: { image_base64, width, height, format }
  *
- * v1: viewport-only capture via chrome.tabs.captureVisibleTab. full_page
- * requires CDP Page.captureScreenshot (deferred — see plan 04-tools.md
- *). width/height are sourced from chrome.tabs.get; if the view
+ * Viewport-only capture via chrome.tabs.captureVisibleTab. full_page
+ * requires CDP Page.captureScreenshot (intentionally deferred — the
+ * full-page path returns INTERNAL today). width/height are sourced from
+ * chrome.tabs.get; if the view
  * geometry is unavailable we fall back to 0/0 placeholders so the result
  * still matches the schema's required keys.
  */
@@ -54,22 +54,21 @@ interface ScreenshotParams {
 // ~800 tokens — markedly cheaper than the legacy 1024px verify-intent default.
 const DEFAULT_LONGEST_EDGE = 768;
 
-const INTENT_PRESETS: Record<ScreenshotIntent, { quality: number; max_dimension: number; full_quality: boolean }> = {
-  glance:         { quality: 20,  max_dimension: 512,  full_quality: false },
-  verify:         { quality: 50,  max_dimension: 1024, full_quality: false },
-  read_text:      { quality: 95,  max_dimension: 2048, full_quality: false },
-  user_requested: { quality: 95,  max_dimension: 8192, full_quality: true  },
+const INTENT_PRESETS: Record<
+  ScreenshotIntent,
+  { quality: number; max_dimension: number; full_quality: boolean }
+> = {
+  glance: { quality: 20, max_dimension: 512, full_quality: false },
+  verify: { quality: 50, max_dimension: 1024, full_quality: false },
+  read_text: { quality: 95, max_dimension: 2048, full_quality: false },
+  user_requested: { quality: 95, max_dimension: 8192, full_quality: true },
 };
 
 // (ScreenshotResult type retired — the action-grade response shape is
 // inlined at the return site so the agent-visible fields match the
 // observation-architecture additions exactly.)
 
-function codedError(code: ErrorCode, message: string): Error {
-  const err = new Error(message) as Error & { code: ErrorCode };
-  err.code = code;
-  return err;
-}
+import { codedError } from "../lib/coded-error.js";
 
 function parseParams(raw: Record<string, unknown>): ScreenshotParams {
   const tabId = raw["tab_id"];
@@ -114,8 +113,16 @@ function parseParams(raw: Record<string, unknown>): ScreenshotParams {
   }
   const intent = raw["intent"];
   if (intent !== undefined) {
-    if (intent !== "glance" && intent !== "verify" && intent !== "read_text" && intent !== "user_requested") {
-      throw codedError("INVALID_PARAMS", "intent must be one of: glance, verify, read_text, user_requested");
+    if (
+      intent !== "glance" &&
+      intent !== "verify" &&
+      intent !== "read_text" &&
+      intent !== "user_requested"
+    ) {
+      throw codedError(
+        "INVALID_PARAMS",
+        "intent must be one of: glance, verify, read_text, user_requested",
+      );
     }
     out.intent = intent;
   }
@@ -155,7 +162,12 @@ function parseParams(raw: Record<string, unknown>): ScreenshotParams {
     }
     const longest = (dims as Record<string, unknown>)["longest_edge"];
     if (longest !== undefined) {
-      if (typeof longest !== "number" || !Number.isInteger(longest) || longest < 1 || longest > 8192) {
+      if (
+        typeof longest !== "number" ||
+        !Number.isInteger(longest) ||
+        longest < 1 ||
+        longest > 8192
+      ) {
         throw codedError("INVALID_PARAMS", "dimensions.longest_edge must be integer in [1,8192]");
       }
       out.dimensions = { longest_edge: longest };
@@ -367,11 +379,15 @@ export function registerScreenshotHandler(
 
     if (fullQuality) {
       // Bypass: capture at the requested format/quality and skip downscale.
-      const image_base64 = await captureViewport(opts.cdp, chromeTabId, tab.windowId, format, quality);
-      const cssW =
-        typeof tab.width === "number" && tab.width > 0 ? tab.width : metrics.inner_w;
-      const cssH =
-        typeof tab.height === "number" && tab.height > 0 ? tab.height : metrics.inner_h;
+      const image_base64 = await captureViewport(
+        opts.cdp,
+        chromeTabId,
+        tab.windowId,
+        format,
+        quality,
+      );
+      const cssW = typeof tab.width === "number" && tab.width > 0 ? tab.width : metrics.inner_w;
+      const cssH = typeof tab.height === "number" && tab.height > 0 ? tab.height : metrics.inner_h;
       const ssW = Math.round(cssW * metrics.dpr);
       const ssH = Math.round(cssH * metrics.dpr);
       const observation_token = cacheObservation({
@@ -404,7 +420,14 @@ export function registerScreenshotHandler(
     // on the returned base64 size so default-intent screenshots stop blowing
     // the agent's context envelope on wide / content-rich pages.
     const captured = await captureViewport(opts.cdp, chromeTabId, tab.windowId, "png", 100);
-    const encoded = await downscaleToBudget(captured, "png", maxDimension, quality, params.region, metrics.dpr);
+    const encoded = await downscaleToBudget(
+      captured,
+      "png",
+      maxDimension,
+      quality,
+      params.region,
+      metrics.dpr,
+    );
     const cssW = params.region?.w ?? metrics.inner_w;
     const cssH = params.region?.h ?? metrics.inner_h;
     const scaleVal = cssW > 0 ? encoded.width / cssW : 1;

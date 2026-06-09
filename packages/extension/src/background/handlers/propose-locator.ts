@@ -14,7 +14,6 @@
  * is the thin MCP/HTTP-style adapter: param validation, snapshot fetch,
  * error coding.
  */
-import type { ErrorCode } from "@browserops/shared";
 import type { Router, Context } from "../router.js";
 import type { RefCache } from "../ref-cache.js";
 import { proposeLocator } from "../../lib/locator-propose.js";
@@ -29,34 +28,21 @@ interface ProposeParams {
   ref: number;
 }
 
-function codedError(code: ErrorCode, message: string): Error {
-  const err = new Error(message) as Error & { code: ErrorCode };
-  err.code = code;
-  return err;
-}
+import { codedError } from "../lib/coded-error.js";
 
 function parseParams(raw: Record<string, unknown>): ProposeParams {
   const tabId = raw["tab_id"];
   if (typeof tabId !== "string") {
-    throw codedError(
-      "INVALID_PARAMS",
-      "browser_propose_locator requires tab_id:string",
-    );
+    throw codedError("INVALID_PARAMS", "browser_propose_locator requires tab_id:string");
   }
   const ref = raw["ref"];
   if (typeof ref !== "number" || !Number.isInteger(ref) || ref < 1) {
-    throw codedError(
-      "INVALID_PARAMS",
-      "browser_propose_locator requires ref:integer (>=1)",
-    );
+    throw codedError("INVALID_PARAMS", "browser_propose_locator requires ref:integer (>=1)");
   }
   return { tab_id: tabId, ref };
 }
 
-export function registerProposeLocatorHandler(
-  router: Router,
-  deps: ProposeDeps,
-): void {
+export function registerProposeLocatorHandler(router: Router, deps: ProposeDeps): void {
   router.register(
     "browser_propose_locator",
     async (raw: Record<string, unknown>, _ctx: Context) => {
@@ -64,10 +50,7 @@ export function registerProposeLocatorHandler(
 
       const chromeTabId = deps.tabIdMap.get(params.tab_id);
       if (chromeTabId === undefined) {
-        throw codedError(
-          "TAB_NOT_FOUND",
-          `tab ${params.tab_id} not registered`,
-        );
+        throw codedError("TAB_NOT_FOUND", `tab ${params.tab_id} not registered`);
       }
 
       const snapshot = deps.refCache.get(params.tab_id);

@@ -1,4 +1,3 @@
-import type { ErrorCode } from "@browserops/shared";
 import { sliceContent } from "@browserops/shared";
 import type { Router } from "../router.js";
 import type { RefCache, RefEntry, RefSnapshot } from "../ref-cache.js";
@@ -13,19 +12,15 @@ import { augment } from "../../lib/a11y-augment.js";
  * v1 coverage:
  *   - "text", "markdown", "sanitized_html": chrome.scripting.executeScript
  *     injects a function into the target tab's MAIN world. sanitized_html is
- *     post-processed in the SW with regex stripping (MV3 SWs have no
- *     DOMParser; see plan 04).
- *   - "a11y_tree": DOM-only walker (no CDP) in the ISOLATED world. See
- *     plan 05-element-refs.md Produces numbered RefEntry[] which are
- *     stored in the shared RefCache for later click/type dereference.
+ *     post-processed in the SW with regex stripping (MV3 SWs have no DOMParser).
+ *   - "a11y_tree": DOM-only walker (no CDP) in the ISOLATED world. Produces
+ *     numbered RefEntry[] which are stored in the shared RefCache for later
+ *     click/type dereference.
  */
 
 type ReadMode = "a11y_tree" | "markdown" | "sanitized_html" | "text";
 
-type ReadScope =
-  | { kind: "viewport" }
-  | { kind: "document" }
-  | { kind: "ref"; ref: string };
+type ReadScope = { kind: "viewport" } | { kind: "document" } | { kind: "ref"; ref: string };
 
 interface ReadParams {
   tab_id: string;
@@ -58,11 +53,7 @@ interface A11yWalkResult {
   matched: boolean;
 }
 
-function codedError(code: ErrorCode, message: string): Error {
-  const err = new Error(message) as Error & { code: ErrorCode };
-  err.code = code;
-  return err;
-}
+import { codedError } from "../lib/coded-error.js";
 
 const READ_MODES: readonly ReadMode[] = [
   "a11y_tree",
@@ -78,10 +69,7 @@ function parseParams(raw: Record<string, unknown>): ReadParams {
   }
   const mode = raw["mode"];
   if (typeof mode !== "string" || !(READ_MODES as readonly string[]).includes(mode)) {
-    throw codedError(
-      "INVALID_PARAMS",
-      `mode must be one of ${READ_MODES.join(", ")}`,
-    );
+    throw codedError("INVALID_PARAMS", `mode must be one of ${READ_MODES.join(", ")}`);
   }
   const verboseRaw = raw["verbose"];
   let verbose = false;
@@ -142,7 +130,11 @@ function parseParams(raw: Record<string, unknown>): ReadParams {
     if (scopeRaw === "viewport") scope = { kind: "viewport" };
     else if (scopeRaw === "document") scope = { kind: "document" };
     else if (scopeRaw.startsWith("ref:")) scope = { kind: "ref", ref: scopeRaw.slice(4) };
-    else throw codedError("INVALID_PARAMS", `scope must be 'viewport'|'document'|'ref:<id>', got ${scopeRaw}`);
+    else
+      throw codedError(
+        "INVALID_PARAMS",
+        `scope must be 'viewport'|'document'|'ref:<id>', got ${scopeRaw}`,
+      );
   }
   const augmentRaw = raw["augment"];
   let augment = true;
@@ -174,10 +166,7 @@ function sanitizeHtml(html: string): string {
     .replace(/<meta\b[^>]*>/gi, "")
     .replace(/<link\b[^>]*>/gi, "")
     .replace(/<!--[\s\S]*?-->/g, "")
-    .replace(
-      /\s(class|style|id|on\w+|data-[\w-]+)\s*=\s*("[^"]*"|'[^']*'|\S+)/gi,
-      "",
-    );
+    .replace(/\s(class|style|id|on\w+|data-[\w-]+)\s*=\s*("[^"]*"|'[^']*'|\S+)/gi, "");
 }
 
 // ---------------------------------------------------------------------------
@@ -209,9 +198,7 @@ function injectedReadOuterHtml(selector: string | null): string | null {
 }
 
 function injectedReadMarkdown(selector: string | null): string | null {
-  const root: Element | null = selector !== null
-    ? document.querySelector(selector)
-    : document.body;
+  const root: Element | null = selector !== null ? document.querySelector(selector) : document.body;
   if (root === null) return null;
   const out: string[] = [];
   const visit = (node: Node, depth: number): void => {
@@ -282,7 +269,10 @@ function injectedReadMarkdown(selector: string | null): string | null {
     for (const child of Array.from(el.childNodes)) visit(child, depth);
   };
   visit(root, 0);
-  return out.join("").replace(/\n{3,}/g, "\n\n").trim();
+  return out
+    .join("")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 /**
@@ -297,22 +287,68 @@ function injectedA11yWalk(
   selector: string | null,
   scopeMode: "viewport" | "document",
   rootSelector: string | null,
-): { entries: Array<{ ref: number; selector: string; role: string; name: string; attrs: Record<string, string> }>; tree: string; matched: boolean } {
+): {
+  entries: Array<{
+    ref: number;
+    selector: string;
+    role: string;
+    name: string;
+    attrs: Record<string, string>;
+  }>;
+  tree: string;
+  matched: boolean;
+} {
   const MAX_REFS = 500;
   const MAX_SELECTOR_DEPTH = 6;
   const NAME_MAX = 80;
 
   const INTERACTIVE_ROLES = new Set([
-    "button", "link", "textbox", "searchbox", "checkbox", "combobox",
-    "listbox", "option", "menuitem", "menuitemcheckbox", "menuitemradio",
-    "tab", "switch", "radio", "slider", "spinbutton", "treeitem",
+    "button",
+    "link",
+    "textbox",
+    "searchbox",
+    "checkbox",
+    "combobox",
+    "listbox",
+    "option",
+    "menuitem",
+    "menuitemcheckbox",
+    "menuitemradio",
+    "tab",
+    "switch",
+    "radio",
+    "slider",
+    "spinbutton",
+    "treeitem",
   ]);
   const STRUCTURAL_ROLES = new Set([
-    "main", "navigation", "banner", "contentinfo", "form", "dialog",
-    "region", "heading", "search", "complementary", "tablist", "tabpanel",
+    "main",
+    "navigation",
+    "banner",
+    "contentinfo",
+    "form",
+    "dialog",
+    "region",
+    "heading",
+    "search",
+    "complementary",
+    "tablist",
+    "tabpanel",
   ]);
   const INTERACTIVE_TAGS = new Set(["a", "button", "input", "textarea", "select"]);
-  const STRUCTURAL_TAGS = new Set(["main", "nav", "header", "footer", "form", "h1", "h2", "h3", "h4", "h5", "h6"]);
+  const STRUCTURAL_TAGS = new Set([
+    "main",
+    "nav",
+    "header",
+    "footer",
+    "form",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+  ]);
 
   const truncate = (s: string): string => {
     const trimmed = s.replace(/\s+/g, " ").trim();
@@ -554,7 +590,14 @@ function injectedA11yWalk(
   // emits only marked elements. In verbose mode the pre-pass is skipped and
   // the legacy (shouldKeep && canEmit) gate is used.
   const CORE_INTERACTIVE = new Set([
-    "button", "link", "textbox", "combobox", "checkbox", "radio", "menuitem", "tab",
+    "button",
+    "link",
+    "textbox",
+    "combobox",
+    "checkbox",
+    "radio",
+    "menuitem",
+    "tab",
   ]);
   const marked: WeakSet<Element> = new WeakSet();
   const markPass = (el: Element): boolean => {
@@ -585,17 +628,24 @@ function injectedA11yWalk(
   };
   // rootSelector (from scope: "ref:<id>") wins over the legacy selector
   // arg — the ref scope is more specific.
-  const rootEl: Element | null = rootSelector !== null
-    ? document.querySelector(rootSelector)
-    : selector !== null
-      ? document.querySelector(selector)
-      : document.body;
+  const rootEl: Element | null =
+    rootSelector !== null
+      ? document.querySelector(rootSelector)
+      : selector !== null
+        ? document.querySelector(selector)
+        : document.body;
 
   if (!verbose && rootEl !== null) {
     markPass(rootEl);
   }
 
-  const entries: Array<{ ref: number; selector: string; role: string; name: string; attrs: Record<string, string> }> = [];
+  const entries: Array<{
+    ref: number;
+    selector: string;
+    role: string;
+    name: string;
+    attrs: Record<string, string>;
+  }> = [];
   const treeLines: string[] = [];
   let truncated = false;
   let truncatedCount = 0;
@@ -604,9 +654,7 @@ function injectedA11yWalk(
   const walk = (el: Element, depth: number): void => {
     if (!canDescend(el)) return;
     const role = roleFor(el);
-    const keep = verbose
-      ? (shouldKeep(el, role) && canEmit(el))
-      : marked.has(el);
+    const keep = verbose ? shouldKeep(el, role) && canEmit(el) : marked.has(el);
     let childDepth = depth;
     if (keep && role !== null) {
       if (refCounter >= MAX_REFS) {
@@ -647,26 +695,6 @@ function injectedA11yWalk(
   }
 
   return { entries, tree: treeLines.join("\n"), matched };
-}
-
-async function execInTab<T>(
-  chromeTabId: number,
-  fn: () => T,
-  world: chrome.scripting.ExecutionWorld = "MAIN",
-): Promise<T> {
-  const results = await chrome.scripting.executeScript({
-    target: { tabId: chromeTabId },
-    func: fn,
-    world,
-  });
-  if (!Array.isArray(results) || results.length === 0) {
-    throw codedError("INTERNAL", "executeScript returned no frames");
-  }
-  const first = results[0];
-  if (first === undefined) {
-    throw codedError("INTERNAL", "executeScript main-frame result missing");
-  }
-  return first.result as T;
 }
 
 async function execInTabWithArgs<A extends readonly unknown[], T>(
@@ -728,9 +756,10 @@ function narrowWalkResult(raw: unknown): A11yWalkResult {
       }
       attrsClean = acc;
     }
-    const entry: RefEntry = attrsClean === undefined
-      ? { ref, selector, role, name }
-      : { ref, selector, role, name, attrs: attrsClean };
+    const entry: RefEntry =
+      attrsClean === undefined
+        ? { ref, selector, role, name }
+        : { ref, selector, role, name, attrs: attrsClean };
     entries.push(entry);
   }
   return { entries, tree, matched };
@@ -783,12 +812,10 @@ function injectedDescribe(selector: string): {
       style.display !== "none" &&
       style.opacity !== "0";
     const disabled =
-      (el as HTMLButtonElement).disabled === true ||
-      el.getAttribute("aria-disabled") === "true";
+      (el as HTMLButtonElement).disabled === true || el.getAttribute("aria-disabled") === "true";
     const focused = document.activeElement === el;
     const checked =
-      (el as HTMLInputElement).checked === true ||
-      el.getAttribute("aria-checked") === "true";
+      (el as HTMLInputElement).checked === true || el.getAttribute("aria-checked") === "true";
     const valueField = (el as HTMLInputElement).value;
     const value = typeof valueField === "string" ? valueField : undefined;
     let name = el.getAttribute("aria-label") ?? "";
@@ -871,12 +898,10 @@ function injectedQuerySelector(
       style.display !== "none" &&
       style.opacity !== "0";
     const disabled =
-      (el as HTMLButtonElement).disabled === true ||
-      el.getAttribute("aria-disabled") === "true";
+      (el as HTMLButtonElement).disabled === true || el.getAttribute("aria-disabled") === "true";
     const focused = document.activeElement === el;
     const checked =
-      (el as HTMLInputElement).checked === true ||
-      el.getAttribute("aria-checked") === "true";
+      (el as HTMLInputElement).checked === true || el.getAttribute("aria-checked") === "true";
     const valueField = (el as HTMLInputElement).value;
     const value = typeof valueField === "string" ? valueField.slice(0, 1024) : undefined;
     let name = el.getAttribute("aria-label") ?? "";
@@ -903,7 +928,12 @@ function injectedQuerySelector(
     try {
       el = document.querySelector(selector);
     } catch (e) {
-      return { found: false, matches: [], total: 0, invalidSelector: String((e as Error)?.message ?? e) };
+      return {
+        found: false,
+        matches: [],
+        total: 0,
+        invalidSelector: String((e as Error)?.message ?? e),
+      };
     }
     if (el === null) return { found: false, matches: [], total: 0 };
     return { found: true, matches: [describeOne(el as HTMLElement)], total: 1 };
@@ -912,7 +942,12 @@ function injectedQuerySelector(
   try {
     list = document.querySelectorAll(selector);
   } catch (e) {
-    return { found: false, matches: [], total: 0, invalidSelector: String((e as Error)?.message ?? e) };
+    return {
+      found: false,
+      matches: [],
+      total: 0,
+      invalidSelector: String((e as Error)?.message ?? e),
+    };
   }
   const total = list.length;
   const out: QuerySelectorState[] = [];
@@ -1048,14 +1083,24 @@ export function registerReadHandler(
         injectedReadText,
         [selectorArg],
       );
-      if (res === null) { matched = false; content = ""; } else { content = res; }
+      if (res === null) {
+        matched = false;
+        content = "";
+      } else {
+        content = res;
+      }
     } else if (params.mode === "markdown") {
       const res = await execInTabWithArgs<readonly [string | null], string | null>(
         chromeTabId,
         injectedReadMarkdown,
         [selectorArg],
       );
-      if (res === null) { matched = false; content = ""; } else { content = res; }
+      if (res === null) {
+        matched = false;
+        content = "";
+      } else {
+        content = res;
+      }
     } else {
       // sanitized_html
       const res = await execInTabWithArgs<readonly [string | null], string | null>(
@@ -1063,7 +1108,12 @@ export function registerReadHandler(
         injectedReadOuterHtml,
         [selectorArg],
       );
-      if (res === null) { matched = false; content = ""; } else { content = sanitizeHtml(res); }
+      if (res === null) {
+        matched = false;
+        content = "";
+      } else {
+        content = sanitizeHtml(res);
+      }
     }
 
     const sliced = sliceContent(content, params.start, effectiveLength);
@@ -1101,9 +1151,15 @@ export function registerReadHandler(
     if (hit === undefined) {
       const snap = opts.refCache.get(tab_id);
       if (snap === undefined) {
-        throw codedError("REF_STALE", `no a11y snapshot for tab ${tab_id}; call browser_read first`);
+        throw codedError(
+          "REF_STALE",
+          `no a11y snapshot for tab ${tab_id}; call browser_read first`,
+        );
       }
-      throw codedError("REF_NOT_FOUND", `ref ${refRaw} not present in current snapshot for ${tab_id}`);
+      throw codedError(
+        "REF_NOT_FOUND",
+        `ref ${refRaw} not present in current snapshot for ${tab_id}`,
+      );
     }
     const entry = hit.entry;
     const results = (await chrome.scripting.executeScript({
@@ -1142,10 +1198,7 @@ export function registerReadHandler(
       throw codedError("INVALID_PARAMS", "tab_id must be a string");
     }
     if (typeof selector !== "string" || selector.length === 0 || selector.length > 2048) {
-      throw codedError(
-        "INVALID_PARAMS",
-        "selector must be a non-empty string up to 2048 chars",
-      );
+      throw codedError("INVALID_PARAMS", "selector must be a non-empty string up to 2048 chars");
     }
     const all = allRaw === true;
     const chromeTabId = opts.tabIdMap.get(tab_id);
@@ -1158,9 +1211,7 @@ export function registerReadHandler(
       func: injectedQuerySelector,
       args: [selector, all, MAX_MATCHES],
     })) as chrome.scripting.InjectionResult[];
-    const res = results[0]?.result as
-      | ReturnType<typeof injectedQuerySelector>
-      | undefined;
+    const res = results[0]?.result as ReturnType<typeof injectedQuerySelector> | undefined;
     if (res === undefined) {
       throw codedError("INTERNAL", "executeScript returned no result");
     }
@@ -1191,21 +1242,67 @@ export function registerReadHandler(
     roleFilter: string | null,
     viewportOnly: boolean,
     maxResults: number,
-  ): { entries: Array<{ ref: number; selector: string; role: string; name: string; attrs: Record<string, string>; rect: { x: number; y: number; width: number; height: number } }>; total: number } {
+  ): {
+    entries: Array<{
+      ref: number;
+      selector: string;
+      role: string;
+      name: string;
+      attrs: Record<string, string>;
+      rect: { x: number; y: number; width: number; height: number };
+    }>;
+    total: number;
+  } {
     const MAX_SELECTOR_DEPTH = 6;
     const NAME_MAX = 80;
 
     const INTERACTIVE_ROLES = new Set([
-      "button", "link", "textbox", "searchbox", "checkbox", "combobox",
-      "listbox", "option", "menuitem", "menuitemcheckbox", "menuitemradio",
-      "tab", "switch", "radio", "slider", "spinbutton", "treeitem",
+      "button",
+      "link",
+      "textbox",
+      "searchbox",
+      "checkbox",
+      "combobox",
+      "listbox",
+      "option",
+      "menuitem",
+      "menuitemcheckbox",
+      "menuitemradio",
+      "tab",
+      "switch",
+      "radio",
+      "slider",
+      "spinbutton",
+      "treeitem",
     ]);
     const STRUCTURAL_ROLES = new Set([
-      "main", "navigation", "banner", "contentinfo", "form", "dialog",
-      "region", "heading", "search", "complementary", "tablist", "tabpanel",
+      "main",
+      "navigation",
+      "banner",
+      "contentinfo",
+      "form",
+      "dialog",
+      "region",
+      "heading",
+      "search",
+      "complementary",
+      "tablist",
+      "tabpanel",
     ]);
     const INTERACTIVE_TAGS = new Set(["a", "button", "input", "textarea", "select"]);
-    const STRUCTURAL_TAGS = new Set(["main", "nav", "header", "footer", "form", "h1", "h2", "h3", "h4", "h5", "h6"]);
+    const STRUCTURAL_TAGS = new Set([
+      "main",
+      "nav",
+      "header",
+      "footer",
+      "form",
+      "h1",
+      "h2",
+      "h3",
+      "h4",
+      "h5",
+      "h6",
+    ]);
 
     const truncate = (s: string): string => {
       const trimmed = s.replace(/\s+/g, " ").trim();
@@ -1220,7 +1317,13 @@ export function registerReadHandler(
       if (style.visibility === "hidden" || style.display === "none") return false;
       if (style.opacity === "0") return false;
       if (viewportOnly) {
-        if (rect.bottom < 0 || rect.top > window.innerHeight || rect.right < 0 || rect.left > window.innerWidth) return false;
+        if (
+          rect.bottom < 0 ||
+          rect.top > window.innerHeight ||
+          rect.right < 0 ||
+          rect.left > window.innerWidth
+        )
+          return false;
       }
       return true;
     };
@@ -1306,7 +1409,8 @@ export function registerReadHandler(
         if (placeholder !== null && placeholder.length > 0) return truncate(placeholder);
         const value = (el as HTMLInputElement).value;
         const inputType = (el.getAttribute("type") ?? "").toLowerCase();
-        if (typeof value === "string" && value.length > 0 && inputType !== "password") return truncate(value);
+        if (typeof value === "string" && value.length > 0 && inputType !== "password")
+          return truncate(value);
       }
       const text = (el.textContent ?? "").trim();
       if (text.length > 0) return truncate(text);
@@ -1321,15 +1425,20 @@ export function registerReadHandler(
       const id = el.getAttribute("id");
       if (id !== null && isSafeId(id)) {
         try {
-          if (document.querySelectorAll(`#${CSS.escape(id)}`).length === 1) return `#${CSS.escape(id)}`;
-        } catch { /* fall through */ }
+          if (document.querySelectorAll(`#${CSS.escape(id)}`).length === 1)
+            return `#${CSS.escape(id)}`;
+        } catch {
+          /* fall through */
+        }
       }
       const testId = el.getAttribute("data-testid");
       if (testId !== null && testId.length > 0) {
         const candidate = `[data-testid="${testId.replace(/"/g, '\\"')}"]`;
         try {
           if (document.querySelectorAll(candidate).length === 1) return candidate;
-        } catch { /* ignore */ }
+        } catch {
+          /* ignore */
+        }
       }
       const parts: string[] = [];
       let node: Element | null = el;
@@ -1355,12 +1464,25 @@ export function registerReadHandler(
       attrs["domType"] = el.tagName.toLowerCase();
       const tag = el.tagName.toLowerCase();
       if (tag === "input") attrs["inputType"] = (el.getAttribute("type") ?? "text").toLowerCase();
-      if (tag === "a") { const href = el.getAttribute("href"); if (href !== null) attrs["href"] = href; }
-      if (tag === "button") { const t = el.getAttribute("type"); if (t !== null) attrs["type"] = t; }
+      if (tag === "a") {
+        const href = el.getAttribute("href");
+        if (href !== null) attrs["href"] = href;
+      }
+      if (tag === "button") {
+        const t = el.getAttribute("type");
+        if (t !== null) attrs["type"] = t;
+      }
       return attrs;
     };
 
-    const entries: Array<{ ref: number; selector: string; role: string; name: string; attrs: Record<string, string>; rect: { x: number; y: number; width: number; height: number } }> = [];
+    const entries: Array<{
+      ref: number;
+      selector: string;
+      role: string;
+      name: string;
+      attrs: Record<string, string>;
+      rect: { x: number; y: number; width: number; height: number };
+    }> = [];
     let total = 0;
     let refCounter = 0;
     const queryLower = query.toLowerCase();
@@ -1384,7 +1506,12 @@ export function registerReadHandler(
                 role,
                 name,
                 attrs: attrsOf(el),
-                rect: { x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) },
+                rect: {
+                  x: Math.round(rect.x),
+                  y: Math.round(rect.y),
+                  width: Math.round(rect.width),
+                  height: Math.round(rect.height),
+                },
               });
             }
           }
@@ -1417,9 +1544,10 @@ export function registerReadHandler(
     const roleFilter = typeof roleRaw === "string" ? roleRaw.toLowerCase() : null;
     let viewportOnly = rawParams["viewport_only"] === true;
     const maxResultsRaw = rawParams["max_results"];
-    const maxResults = typeof maxResultsRaw === "number" && Number.isInteger(maxResultsRaw)
-      ? Math.min(Math.max(maxResultsRaw, 1), 50)
-      : 10;
+    const maxResults =
+      typeof maxResultsRaw === "number" && Number.isInteger(maxResultsRaw)
+        ? Math.min(Math.max(maxResultsRaw, 1), 50)
+        : 10;
 
     // scope is the new viewport/document/ref discriminant. Default 'viewport'
     // matches the observation-architecture plan; legacy viewport_only is
@@ -1430,7 +1558,11 @@ export function registerReadHandler(
       if (scopeRaw === "viewport") scope = "viewport";
       else if (scopeRaw === "document") scope = "document";
       else if (scopeRaw.startsWith("ref:")) scope = { kind: "ref", ref: scopeRaw.slice(4) };
-      else throw codedError("INVALID_PARAMS", `scope must be 'viewport'|'document'|'ref:<id>', got ${scopeRaw}`);
+      else
+        throw codedError(
+          "INVALID_PARAMS",
+          `scope must be 'viewport'|'document'|'ref:<id>', got ${scopeRaw}`,
+        );
     }
     if (scope === "viewport") viewportOnly = true;
     else if (scope === "document") viewportOnly = false;
@@ -1447,14 +1579,19 @@ export function registerReadHandler(
     const raw: unknown = await execInTabWithArgs<
       readonly [string, string | null, boolean, number],
       unknown
-    >(
-      chromeTabId,
-      injectedA11yFind,
-      [query, roleFilter, viewportOnly, maxResults],
-      "ISOLATED",
-    );
+    >(chromeTabId, injectedA11yFind, [query, roleFilter, viewportOnly, maxResults], "ISOLATED");
 
-    const result = raw as { entries: Array<{ ref: number; selector: string; role: string; name: string; attrs: Record<string, string>; rect: { x: number; y: number; width: number; height: number } }>; total: number };
+    const result = raw as {
+      entries: Array<{
+        ref: number;
+        selector: string;
+        role: string;
+        name: string;
+        attrs: Record<string, string>;
+        rect: { x: number; y: number; width: number; height: number };
+      }>;
+      total: number;
+    };
 
     // Store entries in refCache so returned refs can be used with browser_click etc.
     const entriesMap = new Map<number, RefEntry>();
@@ -1476,17 +1613,21 @@ export function registerReadHandler(
     // Augment matches with visual fields by default. The quick_read injected
     // fn already attaches a `rect` so the agent gets bounds either way, but
     // the augmentation pass adds visible / in_viewport / occluded_by / etc.
-    let matches: typeof result.entries | Array<typeof result.entries[number] & {
-      visible?: boolean;
-      in_viewport?: boolean;
-      occluded_by?: string | null;
-      bg_color?: string | null;
-      fg_color?: string | null;
-      opacity?: number;
-      disabled_visual?: boolean;
-      display?: string;
-      flex_direction?: string;
-    }> = result.entries;
+    let matches:
+      | typeof result.entries
+      | Array<
+          (typeof result.entries)[number] & {
+            visible?: boolean;
+            in_viewport?: boolean;
+            occluded_by?: string | null;
+            bg_color?: string | null;
+            fg_color?: string | null;
+            opacity?: number;
+            disabled_visual?: boolean;
+            display?: string;
+            flex_direction?: string;
+          }
+        > = result.entries;
     const augmentFlag = rawParams["augment"];
     if (augmentFlag !== false && result.entries.length > 0) {
       try {
@@ -1519,11 +1660,13 @@ export function registerReadHandler(
     }
 
     if (onlyEnabled || onlyVisible || onlyInViewport) {
-      matches = (matches as Array<{
-        visible?: boolean;
-        in_viewport?: boolean;
-        disabled_visual?: boolean;
-      }>).filter((m) => {
+      matches = (
+        matches as Array<{
+          visible?: boolean;
+          in_viewport?: boolean;
+          disabled_visual?: boolean;
+        }>
+      ).filter((m) => {
         if (onlyEnabled && m.disabled_visual === true) return false;
         if (onlyVisible && m.visible === false) return false;
         if (onlyInViewport && m.in_viewport === false) return false;
@@ -1542,7 +1685,10 @@ export function registerReadHandler(
         if (entry !== undefined) {
           let centerBounds: { x: number; y: number } | null = null;
           try {
-            const probed = await execInTabWithArgs<readonly [string], { x: number; y: number; w: number; h: number } | null>(
+            const probed = await execInTabWithArgs<
+              readonly [string],
+              { x: number; y: number; w: number; h: number } | null
+            >(
               chromeTabId,
               (sel: string) => {
                 const el = document.querySelector(sel);
@@ -1563,9 +1709,11 @@ export function registerReadHandler(
             const cx = centerBounds.x;
             const cy = centerBounds.y;
             const r2 = nr.radius_px * nr.radius_px;
-            matches = (matches as Array<{
-              rect: { x: number; y: number; width: number; height: number };
-            }>).filter((m) => {
+            matches = (
+              matches as Array<{
+                rect: { x: number; y: number; width: number; height: number };
+              }>
+            ).filter((m) => {
               const mx = m.rect.x + m.rect.width / 2;
               const my = m.rect.y + m.rect.height / 2;
               const dx = mx - cx;
@@ -1578,11 +1726,7 @@ export function registerReadHandler(
     }
 
     const region = rawParams["within_region"];
-    if (
-      typeof region === "object" &&
-      region !== null &&
-      !Array.isArray(region)
-    ) {
+    if (typeof region === "object" && region !== null && !Array.isArray(region)) {
       const r = region as { x: number; y: number; w: number; h: number };
       if (
         typeof r.x === "number" &&
@@ -1590,9 +1734,11 @@ export function registerReadHandler(
         typeof r.w === "number" &&
         typeof r.h === "number"
       ) {
-        matches = (matches as Array<{
-          rect: { x: number; y: number; width: number; height: number };
-        }>).filter((m) => {
+        matches = (
+          matches as Array<{
+            rect: { x: number; y: number; width: number; height: number };
+          }>
+        ).filter((m) => {
           const rect = m.rect;
           return (
             rect.x + rect.width > r.x &&
