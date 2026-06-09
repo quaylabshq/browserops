@@ -3,6 +3,16 @@
   "version": "0.0.9",
   "private": true,
   "description": "MCP server that drives a live Chrome browser profile",
+  "license": "MIT",
+  "author": "Saket Aryan",
+  "homepage": "https://github.com/quaylabshq/browserops#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/quaylabshq/browserops.git"
+  },
+  "bugs": {
+    "url": "https://github.com/quaylabshq/browserops/issues"
+  },
   "type": "module",
   "engines": {
     "node": ">=20.10",
@@ -23,6 +33,7 @@
     "test:smoke": "pnpm --filter @browserops/extension test:smoke",
     "clean": "pnpm -r clean && rm -rf node_modules",
     "bump": "node scripts/bump-version.mjs",
+    "prepare": "husky",
     "release": "pnpm -r publish --access public --no-git-checks",
     "release:dry": "pnpm -r publish --access public --no-git-checks --dry-run"
   },
@@ -31,7 +42,18 @@
     "@typescript-eslint/parser": "^8.0.0",
     "concurrently": "^9.0.0",
     "eslint": "^9.0.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^15.5.0",
     "prettier": "^3.0.0",
     "typescript": "^5.4.0"
+  },
+  "lint-staged": {
+    "*.{ts,tsx,mts,js,mjs}": [
+      "prettier --write",
+      "eslint --fix"
+    ],
+    "*.{json,md,yml,yaml}": [
+      "prettier --write"
+    ]
   }
 }

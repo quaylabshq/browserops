@@ -15,12 +15,20 @@ build/
 # Editor
 .vscode/
 .idea/
+.claude/
 *.swp
 .DS_Store
 
 # Env / secrets
 .env
-.env.local
+.env.*
+*.pem
+*.key
+*.p12
+.envrc
+secrets.json
+*.tfstate
+*.tfstate.*
 
 # Scratch
 untitled.html
