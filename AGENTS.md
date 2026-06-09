@@ -21,7 +21,7 @@ user's real Chrome tabs (with existing logins intact)
 
 `packages/shared` holds protocol types, error codes, the tool catalogue, and the procedure schema — consumed by both bridge and extension.
 
-**Tool naming.** MCP tools use underscore form (`browser_navigate`, `procedures_search`) to stay within the MCP-spec `^[a-zA-Z0-9_-]+$` pattern. Procedure *names* (e.g. `tempmail.get_email`) are internal identifiers and stay dotted — they're YAML filenames, not MCP tool names.
+**Tool naming.** MCP tools use underscore form (`browser_navigate`, `procedures_search`) to stay within the MCP-spec `^[a-zA-Z0-9_-]+$` pattern. Procedure _names_ (e.g. `tempmail.get_email`) are internal identifiers and stay dotted — they're YAML filenames, not MCP tool names.
 
 **Wire protocol.** The bridge translates each MCP `tools/call` into a WebSocket `{type:"request", id, method, params, timeout_ms}` envelope. The extension routes `method` to a handler registered in `packages/extension/src/background/handlers/`. Responses go back as `{type:"response", id, ok, result|error}`.
 
@@ -29,17 +29,17 @@ user's real Chrome tabs (with existing logins intact)
 
 ## Where to look
 
-| Want to understand… | File |
-|---|---|
-| The tool catalogue (names, schemas, descriptions) | `packages/shared/src/tools.ts` |
-| MCP dispatch pipeline (validate → rate-limit → risky-gate → forward) | `packages/bridge/src/mcp-server.ts` |
-| Bridge↔extension WebSocket protocol | `packages/shared/src/protocol.ts` + `packages/bridge/src/ws-server.ts` + `packages/extension/src/background/ws-client.ts` |
-| Extension handlers (what actually runs in Chrome) | `packages/extension/src/background/handlers/` |
-| Procedure YAML schema + search ranker | `packages/shared/src/procedures.ts` + `packages/bridge/src/procedures/` |
-| Error codes + WebSocket close codes | `packages/shared/src/errors.ts` |
-| Rate limiter + risky-action gate | `packages/bridge/src/rate-limiter.ts` + `packages/bridge/src/safety.ts` |
-| browserops-teach skill (autonomous procedure authoring, replaces teach + autoteach) | `~/.claude/skills/browserops-teach/SKILL.md` (mirror at `skills/browserops-teach.md`) |
-| User-facing setup (registration for every major MCP client) | `README.md` |
+| Want to understand…                                                                 | File                                                                                                                      |
+| ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| The tool catalogue (names, schemas, descriptions)                                   | `packages/shared/src/tools.ts`                                                                                            |
+| MCP dispatch pipeline (validate → rate-limit → risky-gate → forward)                | `packages/bridge/src/mcp-server.ts`                                                                                       |
+| Bridge↔extension WebSocket protocol                                                 | `packages/shared/src/protocol.ts` + `packages/bridge/src/ws-server.ts` + `packages/extension/src/background/ws-client.ts` |
+| Extension handlers (what actually runs in Chrome)                                   | `packages/extension/src/background/handlers/`                                                                             |
+| Procedure YAML schema + search ranker                                               | `packages/shared/src/procedures.ts` + `packages/bridge/src/procedures/`                                                   |
+| Error codes + WebSocket close codes                                                 | `packages/shared/src/errors.ts`                                                                                           |
+| Rate limiter + risky-action gate                                                    | `packages/bridge/src/rate-limiter.ts` + `packages/bridge/src/safety.ts`                                                   |
+| browserops-teach skill (autonomous procedure authoring, replaces teach + autoteach) | `~/.claude/skills/browserops-teach/SKILL.md` (mirror at `skills/browserops-teach.md`)                                     |
+| User-facing setup (registration for every major MCP client)                         | `README.md`                                                                                                               |
 
 ## browserops orchestration rules
 
@@ -50,26 +50,33 @@ _Agent runtime rules (planning, delegation, checkpoints, stuck-state escalation)
 The procedure family (`procedures_search`, `procedures_get`, `procedures_save`, `procedures_delete`, `procedures_execute`) is gated behind a single **experimental, opt-in feature**: `procedures`. Off by default; users enable it via `browserops feature enable procedures`. If a `procedures_*` tool isn't in the catalogue, the feature is off — fall back to direct `browser_*` orchestration for that conversation, and optionally suggest the user enable the feature for next time. Calling a disabled tool returns `FEATURE_DISABLED` with a hint that includes the enable command.
 
 ### Procedure-first: always search before planning
+
 Before any browser task, call `procedures_search` with tokens from the user's request — but only when `procedures_search` is in your tool catalogue (the procedures feature is opt-in; see above).
 If score >= 0.5, use that procedure. Do not re-plan steps that are already encoded.
 
 ### Cross-agent lore (`lore_*`) is opt-in too
+
 The four `lore_*` tools (`lore_save`, `lore_search`, `lore_get`, `lore_delete`) are gated behind the `lore` feature, off by default. They live in `~/browserops/lore/` and are visible to every MCP client (Claude Code, Cursor, Zed, custom SDK), so a lesson saved from one session is reusable in another. Use them for browserops behavior, browser-flow gotchas, and project context that benefits any agent picking up the same bridge — keep Claude-only preferences (keybindings, response style) in the `~/.claude/projects/.../memory/` auto-lore store. The `browserops` skill section "lore_save / lore_search / lore_get / lore_delete" is the source of truth for tool shapes and decision rules.
 
 ### Skills stay in sync with the installed package
+
 Skills bundled with the CLI (`browserops`, `browserops-teach`) are kept in sync via `browserops upgrade` (which now calls `browserops sync` internally) or directly via `browserops sync skills`. After every package bump the on-disk `~/.claude/skills/<name>/SKILL.md` is refreshed atomically, with a timestamped `.bak` if local edits were detected. If a skill ever feels out of step with the tool catalogue you're seeing, run `browserops sync skills`.
 
 ### Server instructions adapt to enabled features
+
 The text the bridge surfaces via MCP `initialize.result.instructions` is built per-server-instance from the active feature set, so disabled features don't bloat the prompt with documentation for tools the agent can't call. With `procedures` off the Procedures section collapses to a one-line opt-in hint; with `lore` on a short Cross-agent-lore paragraph is appended; the procedure-prompt entry (`browserops_procedure`) is hidden from `prompts/list` whenever `procedures` is off. That's why the procedure-first orchestration rule above is conditional on `procedures_search` actually being in your tool catalogue.
 
 ### Prefer `browser_observe` for general state reads; `browser_quick_read` for element lookup
+
 For general "look at the page" steps, prefer `browser_observe` over both `browser_read` and `browser_quick_read` — its `auto` mode picks the cheapest representation (augmented a11y, action-grade screenshot, box-drawing summary, or diff against a prior observation_token) based on page characteristics. When you specifically need to find an element by its label, `browser_quick_read` is still the cheapest path. Fall back to raw `browser_read` only when you need the full a11y tree as a serialised blob (procedure replay, debugging). `browser_read` and `browser_quick_read` both default to viewport scope now; pass `scope: "document"` for the legacy full-page walk.
 
 ### Sub-agent threshold
+
 - **≤ 8 steps, no retries needed**: run browser tool calls directly from the main agent. No sub-agent.
 - **> 8 steps OR retry/branching logic needed**: delegate to a sub-agent.
 
 ### Sub-agent brief must be minimal
+
 Pass only: procedure name, inputs, tab_id.
 Do NOT copy procedure steps into the prompt — the sub-agent calls `procedures_get` itself.
 
@@ -81,9 +88,11 @@ Report success or failure.
 ```
 
 ### Screenshots only on failure (with one nuance)
+
 Never take a screenshot to "verify" a step that has a `wait_for` condition or an `expected:` predicate — the `effect` envelope already tells you whether anything changed. Screenshot when a step returns an error, unexpected state, OR when `browser_observe`'s auto-mode chose visual representation for you (canvas-dominant pages, ≥30% of the viewport). In auto mode, the bridge picks the screenshot path itself; in those cases the action-grade default (768px longest edge, ~800 tokens) is intentionally cheap, so you don't need to wave it off.
 
 ### Composite procedures = single fetch
+
 When a composite procedure covers the full flow, the sub-agent brief references ONLY the composite name — one `procedures_get`, no re-planning steps.
 
 ```
@@ -98,19 +107,19 @@ Run <composite_procedure>. Report whether it succeeded.
 
 Common chord recipes:
 
-| Intent | `keys:` |
-|---|---|
-| Select all | `["Primary", "KeyA"]` |
-| Copy | `["Primary", "KeyC"]` |
-| Paste | `["Primary", "KeyV"]` |
-| Cut | `["Primary", "KeyX"]` |
-| Undo | `["Primary", "KeyZ"]` |
-| Redo | `["Primary", "Shift", "KeyZ"]` |
-| Submit a form | `["Enter"]` |
-| Dismiss a modal | `["Escape"]` |
-| Move focus forward | `["Tab"]` |
-| Delete one char | `["Backspace"]` |
-| Delete forward | `["Delete"]` |
+| Intent                   | `keys:`                                 |
+| ------------------------ | --------------------------------------- |
+| Select all               | `["Primary", "KeyA"]`                   |
+| Copy                     | `["Primary", "KeyC"]`                   |
+| Paste                    | `["Primary", "KeyV"]`                   |
+| Cut                      | `["Primary", "KeyX"]`                   |
+| Undo                     | `["Primary", "KeyZ"]`                   |
+| Redo                     | `["Primary", "Shift", "KeyZ"]`          |
+| Submit a form            | `["Enter"]`                             |
+| Dismiss a modal          | `["Escape"]`                            |
+| Move focus forward       | `["Tab"]`                               |
+| Delete one char          | `["Backspace"]`                         |
+| Delete forward           | `["Delete"]`                            |
 | Clear a field (keyboard) | `["Primary", "KeyA"]` then `["Delete"]` |
 
 **Clearing fields.** For the common case ("overwrite this bad text with new text"), use `browser_type` with `clear_mode: "auto"` rather than a two-step chord — `auto` picks the fastest safe strategy per element type, verifies emptiness, and falls back to keyboard Delete if execCommand was ignored by a rich editor.
@@ -136,11 +145,14 @@ Rich editors (Quill, ProseMirror, Slate, Draft.js, Lexical) accept trusted `Inpu
 If `browser_type` still returns `WRITE_NOT_REFLECTED` after the in-handler CDP rescue (rare — usually means the field is gated behind a custom event filter), drop to `browser_execute_js`:
 
 ```js
-browser_execute_js(tab_id, `
+browser_execute_js(
+  tab_id,
+  `
   const el = document.querySelector('[contenteditable="true"]');
   el.focus();
   document.execCommand('insertText', false, 'your text here');
-`)
+`,
+);
 ```
 
 **Dialog overlays are the #1 blocker on chat apps.** Before attempting any interaction, check the `browser_read` a11y tree for modal dialogs, upsell banners, or cookie prompts. Dismiss them first (Escape key or click the close button) before interacting with the editor.
@@ -160,6 +172,7 @@ If the user has opted into gating (via `--approval=gate`, `BROWSEROPS_APPROVAL=g
 Each procedure step targets an element via a **semantic Locator descriptor** (re-resolved against the live a11y tree every step), polls a **retrying `expect:` predicate** until match or timeout, and escalates through an **explicit per-step fallback ladder** (`strict | retry | relocate | relocate_then_llm | llm`) when reality doesn't match the spec. The top-level **`forbidden{locators, actions}`** block is enforced on every dispatch including LLM-proposed resume patches.
 
 `procedures_execute({name, tab_id, inputs?, strict?})` returns one of:
+
 - `{completed: true, status: "completed"}` — all steps + top-level `verify:` passed.
 - `{status: "halted", divergence}` — strict failure; no LLM fallback was available.
 - `{status: "needs_assist", execution_id, envelope}` — paused; the envelope carries the failing step, the resolution attempts, the safety constraints, and a preview of remaining steps. Resume via `procedures_resume(execution_id, patch)` where `patch` is one of `{kind:"resume_with", with:{locator?, params?}}`, `{kind:"insert_steps", steps:[...]}`, or `{kind:"give_up", reason?}`.
@@ -180,6 +193,7 @@ A `Locator` is one of `{role, name, aria_label, data_testid, href, attr, has_tex
 ### Drift health + auto-demote
 
 The executor records per-step health (runs, relocates, ambiguous_resolves, target_changed, avg_match_count, last_tier) into `meta.health` after every run. On `procedures_save({bump_success:true})`, the runtime checks the prior health and refuses the trusted flip when:
+
 - relocate-rate > 0.4 across ≥5 runs, OR
 - target_changed > 0 across ≥3 runs, OR
 - last_tier === 3 AND relocate-rate > 0.1.

@@ -64,26 +64,21 @@ cli
   .option("--yes", "Non-interactive: accept all defaults")
   .option("--no-mcp", "Skip MCP-client install")
   .option("--no-skill", "Skip Claude skill install")
-  .option("--client <list>", "Comma-separated client list (claude-code,cursor,zed,continue,windsurf,codex)")
+  .option(
+    "--client <list>",
+    "Comma-separated client list (claude-code,cursor,zed,continue,windsurf,codex)",
+  )
   .option("--features <list>", "Comma-separated experimental features to enable (procedures,lore)")
   .option("--dry-run", "Print what would change without writing")
   .action((opts) => runInit(opts));
 
-cli
-  .command("start", "Start the bridge daemon (no-op if already running)")
-  .action(() => runStart());
+cli.command("start", "Start the bridge daemon (no-op if already running)").action(() => runStart());
 
-cli
-  .command("stop", "Stop the bridge daemon")
-  .action(() => runStop());
+cli.command("stop", "Stop the bridge daemon").action(() => runStop());
 
-cli
-  .command("restart", "Restart the bridge daemon")
-  .action(() => runRestart());
+cli.command("restart", "Restart the bridge daemon").action(() => runRestart());
 
-cli
-  .command("status", "Show bridge daemon status")
-  .action(() => runStatus());
+cli.command("status", "Show bridge daemon status").action(() => runStatus());
 
 cli
   .command("logs", "Tail the bridge log")
@@ -114,7 +109,10 @@ cli
   .action((opts) => runInstallSkill(opts));
 
 cli
-  .command("config [action] [key] [value]", "Read/write persisted CLI config (~/.browserops/config.json)")
+  .command(
+    "config [action] [key] [value]",
+    "Read/write persisted CLI config (~/.browserops/config.json)",
+  )
   .action((action: string | undefined, key: string | undefined, value: string | undefined) =>
     runConfig(action, key, value),
   );
@@ -138,10 +136,7 @@ cli
   );
 
 cli
-  .command(
-    "identify",
-    "Set or clear the email associated with this install for product updates",
-  )
+  .command("identify", "Set or clear the email associated with this install for product updates")
   .option("--email <addr>", "Email to associate with this install")
   .option("--clear", "Remove the previously set email")
   .action((opts: { email?: string; clear?: boolean }) => runIdentify(opts));
@@ -151,7 +146,7 @@ cli
 cli
   .option("--claude <task>", "Ensure bridge running, then exec `claude` with this task")
   .option("--cursor <task>", "Ensure bridge running, then open Cursor with this task")
-  .option("--codex <task>",  "Ensure bridge running, then exec `codex` with this task");
+  .option("--codex <task>", "Ensure bridge running, then exec `codex` with this task");
 
 cli.help();
 cli.version(CLI_VERSION);
@@ -186,13 +181,7 @@ async function main(): Promise<void> {
     "install-rules": "cli.install_rules_ran",
     "install-skill": "cli.install_skill_ran",
   };
-  const HANDLER_EMITTED = new Set([
-    "init",
-    "upgrade",
-    "feature",
-    "config",
-    "identify",
-  ]);
+  const HANDLER_EMITTED = new Set(["init", "upgrade", "feature", "config", "identify"]);
 
   const recordSubcommand = (): void => {
     const t = getCliTelemetry();
@@ -207,7 +196,11 @@ async function main(): Promise<void> {
     }
   };
   const flushTelemetry = async (): Promise<void> => {
-    try { await getCliTelemetry()?.flush(1500); } catch { /* swallow */ }
+    try {
+      await getCliTelemetry()?.flush(1500);
+    } catch {
+      /* swallow */
+    }
   };
   const recordLauncher = (launcherId: string): void => {
     getCliTelemetry()?.capture("cli.launcher_invoked", {
@@ -262,9 +255,7 @@ async function main(): Promise<void> {
       info(dim(`routing to ${id}`));
     } else {
       info(
-        dim(
-          `routing to ${id} (default — set with: browserops config set default_launcher cursor)`,
-        ),
+        dim(`routing to ${id} (default — set with: browserops config set default_launcher cursor)`),
       );
     }
     await dispatchLauncher(id, task);
@@ -282,6 +273,10 @@ async function main(): Promise<void> {
 main().catch(async (e: unknown) => {
   const msg = e instanceof Error ? (e.stack ?? e.message) : String(e);
   err(`browserops: ${msg}`);
-  try { await getCliTelemetry()?.flush(1000); } catch { /* swallow */ }
+  try {
+    await getCliTelemetry()?.flush(1000);
+  } catch {
+    /* swallow */
+  }
   process.exit(1);
 });

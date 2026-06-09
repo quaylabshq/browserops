@@ -16,12 +16,7 @@
  */
 import { promises as fs } from "node:fs";
 import { dirname } from "node:path";
-import {
-  ENV,
-  type FeatureName,
-  parseFeaturesEnv,
-  resolveFeatures,
-} from "@browserops/shared";
+import { ENV, type FeatureName, parseFeaturesEnv, resolveFeatures } from "@browserops/shared";
 import { configPath } from "./paths.js";
 
 interface ConfigFileShape {

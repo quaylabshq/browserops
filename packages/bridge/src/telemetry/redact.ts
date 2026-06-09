@@ -44,11 +44,7 @@ const MCP_COMMON: ReadonlySet<string> = new Set([
  * allowlist for that event = MCP_COMMON ∪ MCP_PER_TOOL_EXTRAS[toolName].
  */
 const MCP_PER_TOOL_EXTRAS: Record<string, ReadonlySet<string>> = {
-  browser_screenshot: new Set([
-    "screenshot_width_px",
-    "screenshot_height_px",
-    "screenshot_format",
-  ]),
+  browser_screenshot: new Set(["screenshot_width_px", "screenshot_height_px", "screenshot_format"]),
   browser_navigate: new Set(["is_external_url"]),
   procedures_execute: new Set(["procedure_name", "procedure_steps_executed"]),
   lore_save: new Set(["lore_name"]),
@@ -59,22 +55,10 @@ const MCP_PER_TOOL_EXTRAS: Record<string, ReadonlySet<string>> = {
 const ALLOWED: Record<string, ReadonlySet<string>> = {
   // ---------------------------------------------------------------- root.*
   "root.first_install": new Set([]),
-  "root.daemon_started": new Set([
-    "approval_mode",
-    "enabled_features",
-    "extension_connected",
-  ]),
-  "root.daemon_shutdown": new Set([
-    "reason",
-    "uptime_ms",
-    "total_sessions",
-    "total_tool_calls",
-  ]),
+  "root.daemon_started": new Set(["approval_mode", "enabled_features", "extension_connected"]),
+  "root.daemon_shutdown": new Set(["reason", "uptime_ms", "total_sessions", "total_tool_calls"]),
   "root.daemon_extension_connected": new Set(["extension_version"]),
-  "root.daemon_extension_disconnected": new Set([
-    "close_code",
-    "was_connected_for_ms",
-  ]),
+  "root.daemon_extension_disconnected": new Set(["close_code", "was_connected_for_ms"]),
   "root.daemon_upgraded": new Set(["from_version", "to_version"]),
   "root.session_started": new Set(["client_name", "client_version"]),
   "root.session_ended": new Set([
@@ -99,30 +83,15 @@ const ALLOWED: Record<string, ReadonlySet<string>> = {
   "cli.stop_invoked": new Set(["exit_code", "duration_ms"]),
   "cli.restart_invoked": new Set(["exit_code", "duration_ms"]),
   "cli.status_checked": new Set(["daemon_running", "exit_code", "duration_ms"]),
-  "cli.doctor_ran": new Set([
-    "checks_passed",
-    "checks_failed",
-    "exit_code",
-    "duration_ms",
-  ]),
+  "cli.doctor_ran": new Set(["checks_passed", "checks_failed", "exit_code", "duration_ms"]),
   "cli.logs_tailed": new Set(["follow", "lines", "exit_code", "duration_ms"]),
   "cli.feature_listed": new Set(["enabled_count", "exit_code", "duration_ms"]),
   "cli.feature_enabled": new Set(["feature_name", "exit_code", "duration_ms"]),
   "cli.feature_disabled": new Set(["feature_name", "exit_code", "duration_ms"]),
   "cli.config_get": new Set(["key", "exit_code", "duration_ms"]),
-  "cli.config_set": new Set([
-    "key",
-    "coerced_value",
-    "exit_code",
-    "duration_ms",
-  ]),
+  "cli.config_set": new Set(["key", "coerced_value", "exit_code", "duration_ms"]),
   "cli.config_unset": new Set(["key", "exit_code", "duration_ms"]),
-  "cli.upgrade_completed": new Set([
-    "from_version",
-    "install_method",
-    "exit_code",
-    "duration_ms",
-  ]),
+  "cli.upgrade_completed": new Set(["from_version", "install_method", "exit_code", "duration_ms"]),
   "cli.upgrade_failed": new Set([
     "from_version",
     "install_method",
@@ -135,11 +104,7 @@ const ALLOWED: Record<string, ReadonlySet<string>> = {
   "cli.install_skill_ran": new Set(["scope", "exit_code", "duration_ms"]),
   "cli.identify_set": new Set(["via", "exit_code", "duration_ms"]),
   "cli.identify_cleared": new Set(["exit_code", "duration_ms"]),
-  "cli.launcher_invoked": new Set([
-    "launcher_id",
-    "exit_code",
-    "duration_ms",
-  ]),
+  "cli.launcher_invoked": new Set(["launcher_id", "exit_code", "duration_ms"]),
   "cli.help_shown": new Set(["exit_code", "duration_ms"]),
   "cli.unknown_command": new Set(["exit_code", "duration_ms"]),
 };
@@ -166,10 +131,7 @@ function allowedKeysFor(event: string): ReadonlySet<string> | undefined {
   return undefined;
 }
 
-export function redact(
-  event: string,
-  props: Record<string, unknown>,
-): Record<string, unknown> {
+export function redact(event: string, props: Record<string, unknown>): Record<string, unknown> {
   const allowed = allowedKeysFor(event);
   if (!allowed) return {};
 

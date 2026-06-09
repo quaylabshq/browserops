@@ -30,12 +30,12 @@ This file is the index. Read it top-to-bottom the first time you're about to cal
 
 ## 1. Mental model (read once)
 
-**The server does not interpret the page.** It dispatches actions (click, type, press, navigate) and, as of Phase 1 of the observation-centric architecture, observes *measurable* page effects (DOM mutations, URL change, focus change, network activity) in a 300 ms window after each action.
+**The server does not interpret the page.** It dispatches actions (click, type, press, navigate) and, as of Phase 1 of the observation-centric architecture, observes _measurable_ page effects (DOM mutations, URL change, focus change, network activity) in a 300 ms window after each action.
 
 - Dispatch fields (`clicked:true`, `typed:N`) are **self-reports**. They say "the event was sent", not "the page did the thing."
 - `page_effect` is the **ground truth**. Treat an action with zero effect (`dom.added=0, removed=0, text_changes=0, network.requests_started=0`) on something that should have changed state as a silent-success bug. Retry, escalate, or fail loud — don't assume.
 
-You cannot know from inside the agent how any given site will react to an event. You *can* read what actually happened. Lead with observation, not assumption.
+You cannot know from inside the agent how any given site will react to an event. You _can_ read what actually happened. Lead with observation, not assumption.
 
 **Dispatch is always CDP-trusted.** Every `http(s)` tab gets `chrome.debugger` attached on navigation, so `browser_click` / `click_at` / `click_by_text` / `type` / `press` / `hover` fire trusted `Input.*` events that traverse iframes, shadow DOM, and `isTrusted`-gated handlers (Slack, Figma, Gmail composer, Docs, Discord, …). The "controlled by automated test software" banner appearing on driven tabs is expected, not a failure signal. Per-tab opt-out: `browser_set_cdp(tab_id, false)`.
 
@@ -48,13 +48,15 @@ You cannot know from inside the agent how any given site will react to an event.
 The whole point of browserops is that the observation runtime (Section 3) catches wrong interpretations within one call: bad reading → zero `page_effect` → retry or surface. That loop is almost always faster than a round-trip clarifying question. An agent that opens with "did you mean A or B or C?" for a short, interpretable ask ("use amazon india to test a mouse click on delivery info") has already failed — the user's main reason to use browserops is autonomy.
 
 **Never ask more than one clarifying question in a single turn, and only ask at all when ONE of these is true:**
+
 - The task literally cannot be attempted without a specific value you don't have (login credentials, a transfer amount, a recipient the user has to name).
-- Two interpretations are both plausible AND have meaningfully different side effects you can't undo (email to person A vs. person B — *not* "open A's page vs. B's page").
+- Two interpretations are both plausible AND have meaningfully different side effects you can't undo (email to person A vs. person B — _not_ "open A's page vs. B's page").
 - The task is irreversible and your best guess might not match user intent (money transfer, destructive delete, public post to the wrong account).
 
 Everything else — "use amazon india", "try a mouse click", "check my inbox", "send delivery info task" — is **interpretable**. Pick the most likely reading, state it in ≤ 1 line so the user can redirect ("Interpreting as: open amazon.in in the current tab, attempt to update delivery address via ref-based click; escalating to coordinate click if needed."), and proceed. If you're wrong, `page_effect` will tell you faster than a clarification round-trip would have.
 
 Three-part clarification dumps like:
+
 > 1. Did you mean to test that mouse click works…?
 > 2. Can you clarify "delivery info task"…?
 > 3. Do you mean amazon.in, amazon.com/in, …?
@@ -69,7 +71,7 @@ Three-part clarification dumps like:
    - For cross-tab work, `browser_list_tabs` and pick explicitly by title/url.
 3. **If the task is complex, plan before decomposing.** This step exists because agents reliably follow the full discipline (list → delegate → verify) on simple tasks, and reliably skip it on complex ones. The mechanism is cognitive load: on a complex task, the task state crowds out the skill rules in working memory. The fix is to externalize planning into its own sub-agent so the main context only ever sees the finished plan, not the deliberation.
 
-   **Classify per piece, not per task.** A single user request often mixes easy and tricky pieces (e.g. "open Slack and also fill out the Figma invoice form" — Slack = easy navigate, Figma form = tricky canvas interaction). Classify each *piece* independently. A piece is *tricky* (needs a planner) if **any** of these apply:
+   **Classify per piece, not per task.** A single user request often mixes easy and tricky pieces (e.g. "open Slack and also fill out the Figma invoice form" — Slack = easy navigate, Figma form = tricky canvas interaction). Classify each _piece_ independently. A piece is _tricky_ (needs a planner) if **any** of these apply:
    - Site is a canvas/SPA with known gotchas (Figma, Docs, Sheets, Instagram, TikTok)
    - Uses a procedure or tool you haven't used yet in this session
    - Has branching or recovery logic (login-or-signup, out-of-stock fallback, 2FA, CAPTCHA)
@@ -77,27 +79,28 @@ Three-part clarification dumps like:
    - The user's intent for that piece is ambiguous ("handle my inbox", "buy this if it's cheaper than $X")
    - You've already hit an unexpected failure on that piece and are recovering
 
-   Otherwise the piece is *easy* (single known site, low-stakes, known procedure) and you go straight to step 4 for it.
+   Otherwise the piece is _easy_ (single known site, low-stakes, known procedure) and you go straight to step 4 for it.
 
    **Parallelize planning + easy execution.** If a request has both easy and tricky pieces, don't serialize: fire them in one turn.
    - List item: `0a. Spawn planner sub-agent (sonnet) — plan the Figma invoice flow [details]. Return plan, ≤15 lines.`
-   - List item: `0b. Spawn sub-agent (haiku) — open Slack in a tab, return current channel name.` *(runs in parallel with 0a)*
+   - List item: `0b. Spawn sub-agent (haiku) — open Slack in a tab, return current channel name.` _(runs in parallel with 0a)_
    - Dispatch both sub-agents in a single turn (your host supports this — multiple Agent calls in one message). While the planner thinks, the easy piece finishes.
    - Parallelism rule of thumb: **sub-agents may run in parallel iff they operate on different tabs**. Two sub-agents hitting the same tab race and corrupt page state. Same-tab subtasks must serialize.
 
    **Planner brief shape:**
+
    > `0. Spawn planner sub-agent (sonnet) — produce a plan covering: (a) goal restated, (b) tab strategy, (c) tools/procedures to use, (d) tools/procedures to AVOID and why, (e) expected page_effect signatures at each major step, (f) failure-mode recovery hooks. Return as a numbered list, ≤15 lines.`
 
    Wait for the plan to return, then write the decomposed subtask list from it. The planner sub-agent does the exploration — `procedures_search`, reading existing procedures, checking the live UI with a single `browser_read`, etc. — and returns only the plan. None of that exploration pollutes the main context.
 
 4. **Decompose → list → delegate (default).** Break the task (or the plan, if you did step 3) into a flat list of concrete subtasks and record it with your task-tracking primitive (e.g. `TaskCreate`). Then run each subtask in its own sub-agent. The main context stays an orchestrator; it does not accumulate page dumps, screenshots, or intermediate tool results, and it cannot lose sight of the overall goal because the list is the source of truth.
 
-   **Write delegation into the list text.** Every non-trivial list item must be phrased as an instruction to *spawn a sub-agent*, not just a task description. This is a forcing function — agents that write "Send DM to Kartik" frequently forget to delegate and do it inline; agents that write "Spawn sub-agent to send DM to Kartik" don't. Good vs. bad:
+   **Write delegation into the list text.** Every non-trivial list item must be phrased as an instruction to _spawn a sub-agent_, not just a task description. This is a forcing function — agents that write "Send DM to Kartik" frequently forget to delegate and do it inline; agents that write "Spawn sub-agent to send DM to Kartik" don't. Good vs. bad:
    - ❌ `2. Search for Kartik in Slack sidebar`
    - ✅ `2. Spawn sub-agent (haiku) — search for Kartik in Slack sidebar, return matching DM tab_id or "not found"`
 
    - **Trivial single primitive** (one `browser_navigate`, one `browser_read`, one quick factual read): run directly, no list needed.
-   - **Anything else** — multi-step flows, anything likely to need retries (`REF_STALE`, occluded clicks, `wait_for` loops), any composite procedure: one sub-agent per subtask. Brief = procedure name + inputs + tab_id (or, for ad-hoc work, the specific primitive sequence for *that subtask only*). **Never inline procedure steps** — the sub-agent calls `procedures_get` itself. **Never batch two subtasks into one brief** — that defeats the isolation and recreates main-context bloat inside the subagent.
+   - **Anything else** — multi-step flows, anything likely to need retries (`REF_STALE`, occluded clicks, `wait_for` loops), any composite procedure: one sub-agent per subtask. Brief = procedure name + inputs + tab_id (or, for ad-hoc work, the specific primitive sequence for _that subtask only_). **Never inline procedure steps** — the sub-agent calls `procedures_get` itself. **Never batch two subtasks into one brief** — that defeats the isolation and recreates main-context bloat inside the subagent.
 
    **Recursive decomposition.** A subtask can itself be complex enough to warrant its own decomposition. When the sub-agent receives a brief it considers compound, it applies this same rule inside its own context: decompose into a child list, spawn child sub-agents, and roll results back up. Only the final ≤ 5-line summary returns to the parent. Depth is not capped; use judgement — most flows bottom out at depth 2 (root → subtask-list → per-subtask sub-agent), some at depth 3 when a subtask is itself a multi-site workflow.
 
@@ -105,10 +108,11 @@ Three-part clarification dumps like:
    - `"Open Gmail and check Slack for new DMs"` → tab A navigate + tab B read, in parallel.
    - `"Summarize the Figma file and send the summary to Kartik on Slack"` → read Figma first (serial), then send-to-Slack (serial; depends on read output).
    - `"Cancel all three pending orders"` (same Amazon tab) → serial; same-tab sub-agents race.
-   Dispatch all parallelizable subtasks together, wait for all to return, then update the list and dispatch the next wave. Serial-only subtasks still go one at a time.
+     Dispatch all parallelizable subtasks together, wait for all to return, then update the list and dispatch the next wave. Serial-only subtasks still go one at a time.
 
    - After each sub-agent returns, update the list (mark the subtask done, adjust the next one based on what was observed), then dispatch the next. The sub-agent should report in ≤ 5 lines: what it did, pass/fail gate (`page_effect`-based where applicable), tool result summary. Nothing else.
    - Pick the model per subtask: haiku for mechanical single-tool-call or fill-and-submit steps; sonnet when the subtask needs multi-step retry logic or non-trivial decisions.
+
 5. **Thread the tab_id** through every subsequent call. Don't re-resolve it per step.
 
 ---
@@ -139,12 +143,12 @@ Every mutating tool (`browser_click`, `browser_type`, `browser_press`, `browser_
 
 ### Silent-success patterns to catch with `page_effect`
 
-| Symptom | Signal |
-|---|---|
+| Symptom                   | Signal                                                                                   |
+| ------------------------- | ---------------------------------------------------------------------------------------- |
 | Clicked, nothing happened | `dom.*` and `network.*` all zero after click on something that should have mutated state |
-| Typed, nothing appeared | `dom.text_changes = 0` and `focus.before_selector == focus.after_selector` |
-| Send button ignored | `network.requests_started = 0` after clicking a submit/send |
-| Modal didn't dismiss | `dom.removed = 0` after clicking "close" / pressing Escape |
+| Typed, nothing appeared   | `dom.text_changes = 0` and `focus.before_selector == focus.after_selector`               |
+| Send button ignored       | `network.requests_started = 0` after clicking a submit/send                              |
+| Modal didn't dismiss      | `dom.removed = 0` after clicking "close" / pressing Escape                               |
 
 ---
 
@@ -183,15 +187,15 @@ Every mutating tool (`browser_click`, `browser_type`, `browser_press`, `browser_
 
 Common chord recipes:
 
-| Intent | `keys:` |
-|---|---|
-| Select all | `["Primary", "KeyA"]` |
-| Copy / paste / cut | `["Primary", "KeyC"]` / `["Primary", "KeyV"]` / `["Primary", "KeyX"]` |
-| Undo / redo | `["Primary", "KeyZ"]` / `["Primary", "Shift", "KeyZ"]` |
-| Submit form | `["Enter"]` |
-| Dismiss modal | `["Escape"]` |
-| Next field | `["Tab"]` |
-| Delete one char / forward | `["Backspace"]` / `["Delete"]` |
+| Intent                      | `keys:`                                                                                     |
+| --------------------------- | ------------------------------------------------------------------------------------------- |
+| Select all                  | `["Primary", "KeyA"]`                                                                       |
+| Copy / paste / cut          | `["Primary", "KeyC"]` / `["Primary", "KeyV"]` / `["Primary", "KeyX"]`                       |
+| Undo / redo                 | `["Primary", "KeyZ"]` / `["Primary", "Shift", "KeyZ"]`                                      |
+| Submit form                 | `["Enter"]`                                                                                 |
+| Dismiss modal               | `["Escape"]`                                                                                |
+| Next field                  | `["Tab"]`                                                                                   |
+| Delete one char / forward   | `["Backspace"]` / `["Delete"]`                                                              |
 | Clear field (keyboard path) | `["Primary","KeyA"]` then `["Delete"]` — but prefer `browser_type` with `clear_mode:"auto"` |
 
 ### `browser_navigate`
@@ -244,7 +248,7 @@ Common chord recipes:
 ### `procedures_save` / `procedures_delete`
 
 - **Never save an untested procedure.** Run it end-to-end in the session, fix what breaks, then save.
-- A procedure is trusted only once it has been saved with `bump_success: true` (which flips status:draft → status:trusted) *and* the live UI still matches what you verified.
+- A procedure is trusted only once it has been saved with `bump_success: true` (which flips status:draft → status:trusted) _and_ the live UI still matches what you verified.
 - **Drift auto-demotes.** On `procedures_save({bump_success:true})`, the runtime checks the prior `meta.health` and refuses the trusted flip when drift exceeds threshold (`relocates/runs > 0.4` across ≥5 runs, `target_changed > 0` across ≥3 runs, or `last_tier=3` + `relocates/runs > 0.1`). The response carries `{demoted:true, demote_reason:"..."}` and the procedure persists as draft until the failing locator is re-authored. Surface the demote_reason to the user — don't claim success.
 
 ### `procedures_execute` / `procedures_resume`
@@ -286,7 +290,7 @@ A small store at `~/browserops/lore/<name>.md` that any MCP client can read or w
 - Useful to a different agent (Cursor, Zed, custom SDK) that might pick up the same browserops bridge.
 - Stable enough to outlive the current conversation.
 
-**When *not* to.** If the lesson is genuinely Claude-private — keybinding preferences, response-style quirks, anything a Cursor session would never use — leave it in the auto-lore store. Don't pollute the shared store.
+**When _not_ to.** If the lesson is genuinely Claude-private — keybinding preferences, response-style quirks, anything a Cursor session would never use — leave it in the auto-lore store. Don't pollute the shared store.
 
 **Per-tool quick reference:**
 
@@ -303,19 +307,19 @@ A small store at `~/browserops/lore/<name>.md` that any MCP client can read or w
 
 Keyed by the symptom you observe, not the root cause. Root causes differ; fixes from the agent side are usually one of a small set.
 
-| Symptom | First retry | If still failing |
-|---|---|---|
-| `clicked:true` but no page change | `browser_read` + retry with fresh ref | Climb the ladder: `overlay:'smart'` → `browser_click_by_text` → `browser_click_at` with coordinates. Verify `page_effect` at each step. |
-| `{clicked:false, occluded:true}` | Retry with `overlay: 'smart'` | `browser_read` to find the occluder, click it first; if the occluder isn't addressable, fall through to `browser_click_at` on the target's coords |
-| `browser_click_at` returned `clicked:true` but `page_effect` is all zeros | Treat as failure — the click landed on a parent/sibling, not the target | Adjust coordinates (try the visible-rect centre, not the edge); or fall back to `browser_click_by_text` |
-| `REF_STALE` | `browser_read`, retry with new ref | Investigate why the container re-rendered — usually a late-arriving skeleton |
-| `WRITE_NOT_REFLECTED` | `browser_wait_for` the editor is focusable, retry | Confirm the field isn't disabled; check for overlay |
-| `WRITE_AMPLIFIED` | Do NOT retry | Report the bug with host + framework. Registry needs fixing. |
-| Typing produced "DDoouubblleedd" text | Do NOT retry with same params | A stacked `beforeinput` handler is double-inserting. Switch to `browser_execute_js` with `execCommand('insertText', …)` or report the bug. |
-| `Enter` on chat composer does nothing | Retry once after `browser_quick_read` to confirm focus | Verify focus is actually on the composer with `page_effect.focus.after_selector`; re-focus if not |
-| `browser_navigate` "succeeds" but page shows old content | Follow with `browser_wait_for` on a new-route element | SPA may have dropped your navigation; try a hard reload once |
-| `USER_DECLINED` on risky action | Do not silently retry | Surface the decline to the user; they chose for a reason |
-| Procedure fails at step N | Read the procedure YAML; diagnose the specific leaf | Do not "fix" by skipping the step or inlining a workaround — file the procedure bug |
+| Symptom                                                                   | First retry                                                             | If still failing                                                                                                                                  |
+| ------------------------------------------------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `clicked:true` but no page change                                         | `browser_read` + retry with fresh ref                                   | Climb the ladder: `overlay:'smart'` → `browser_click_by_text` → `browser_click_at` with coordinates. Verify `page_effect` at each step.           |
+| `{clicked:false, occluded:true}`                                          | Retry with `overlay: 'smart'`                                           | `browser_read` to find the occluder, click it first; if the occluder isn't addressable, fall through to `browser_click_at` on the target's coords |
+| `browser_click_at` returned `clicked:true` but `page_effect` is all zeros | Treat as failure — the click landed on a parent/sibling, not the target | Adjust coordinates (try the visible-rect centre, not the edge); or fall back to `browser_click_by_text`                                           |
+| `REF_STALE`                                                               | `browser_read`, retry with new ref                                      | Investigate why the container re-rendered — usually a late-arriving skeleton                                                                      |
+| `WRITE_NOT_REFLECTED`                                                     | `browser_wait_for` the editor is focusable, retry                       | Confirm the field isn't disabled; check for overlay                                                                                               |
+| `WRITE_AMPLIFIED`                                                         | Do NOT retry                                                            | Report the bug with host + framework. Registry needs fixing.                                                                                      |
+| Typing produced "DDoouubblleedd" text                                     | Do NOT retry with same params                                           | A stacked `beforeinput` handler is double-inserting. Switch to `browser_execute_js` with `execCommand('insertText', …)` or report the bug.        |
+| `Enter` on chat composer does nothing                                     | Retry once after `browser_quick_read` to confirm focus                  | Verify focus is actually on the composer with `page_effect.focus.after_selector`; re-focus if not                                                 |
+| `browser_navigate` "succeeds" but page shows old content                  | Follow with `browser_wait_for` on a new-route element                   | SPA may have dropped your navigation; try a hard reload once                                                                                      |
+| `USER_DECLINED` on risky action                                           | Do not silently retry                                                   | Surface the decline to the user; they chose for a reason                                                                                          |
+| Procedure fails at step N                                                 | Read the procedure YAML; diagnose the specific leaf                     | Do not "fix" by skipping the step or inlining a workaround — file the procedure bug                                                               |
 
 ---
 
@@ -324,14 +328,17 @@ Keyed by the symptom you observe, not the root cause. Root causes differ; fixes 
 Delegation is the default, not the exception (§2 step 3). The main agent decomposes the task, tracks the list, and hands each subtask to a fresh sub-agent. The brief must be minimal. Bad and good examples:
 
 **Bad** (inlining steps the sub-agent can fetch itself):
+
 > Run gmail.send_email: open https://mail.google.com, click Compose, type the recipient, type the subject, type the body, click Send, wait for the sent confirmation…
 
 **Good**:
+
 > Run the `gmail.send_email` procedure on tab `t_3` with:
+>
 > - to: foo@example.com
 > - subject: Hello
 > - body: Hi there.
-> Report success or the exact error.
+>   Report success or the exact error.
 
 The sub-agent calls `procedures_get` once and executes from YAML. It doesn't need — and shouldn't carry — the expanded step list.
 
@@ -344,7 +351,7 @@ Composite procedures: brief references the composite name only. One `procedures_
 If you're writing a YAML procedure (as opposed to just calling primitives ad-hoc), additional discipline applies.
 
 - **Test before save.** Write → run end-to-end → fix breaks → only then `procedures_save`.
-- **Schema compliance.** Use only fields in `packages/shared/src/procedures.ts` and tools in `packages/shared/src/tools.ts`. Do not invent outputs like `magic_url` or `api_key` — bind the field names the step *actually returns*.
+- **Schema compliance.** Use only fields in `packages/shared/src/procedures.ts` and tools in `packages/shared/src/tools.ts`. Do not invent outputs like `magic_url` or `api_key` — bind the field names the step _actually returns_.
 - **One stable UI transition per leaf.** Each leaf has explicit inputs, concrete waits (with `timeout_ms`), and either a `success_criteria` or an `expected_effect`.
 - **`expected_effect` on ambiguous steps.** Anything whose success isn't visually self-evident (e.g. a silent form submit) should declare:
   ```yaml
@@ -390,19 +397,19 @@ When a flow intermittently fails:
 
 If you're editing browserops itself (not just using it):
 
-| Want to understand… | File |
-|---|---|
-| Tool catalogue (names, schemas, descriptions) | `packages/shared/src/tools.ts` |
-| MCP dispatch (validate → rate-limit → risky-gate → forward) | `packages/bridge/src/mcp-server.ts` |
-| Bridge ↔ extension WebSocket protocol | `packages/shared/src/protocol.ts`, `packages/bridge/src/ws-server.ts`, `packages/extension/src/background/ws-client.ts` |
-| Extension handlers (what runs in Chrome) | `packages/extension/src/background/handlers/` |
-| Effect observation helper | `packages/extension/src/background/handlers/effects.ts` |
-| Site / editor registry | `packages/shared/src/editors.ts` |
-| Procedure YAML schema + search ranker | `packages/shared/src/procedures.ts`, `packages/bridge/src/procedures/` |
-| Trace writer / observed facts | `packages/bridge/src/trace-writer.ts`, `packages/bridge/src/observed-facts.ts` |
-| Rate limiter + risky-action gate | `packages/bridge/src/rate-limiter.ts`, `packages/bridge/src/safety.ts` |
-| Seed procedures to copy and learn from | `examples/procedures/` |
-| Error codes + WS close codes | `packages/shared/src/errors.ts` |
+| Want to understand…                                         | File                                                                                                                    |
+| ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| Tool catalogue (names, schemas, descriptions)               | `packages/shared/src/tools.ts`                                                                                          |
+| MCP dispatch (validate → rate-limit → risky-gate → forward) | `packages/bridge/src/mcp-server.ts`                                                                                     |
+| Bridge ↔ extension WebSocket protocol                       | `packages/shared/src/protocol.ts`, `packages/bridge/src/ws-server.ts`, `packages/extension/src/background/ws-client.ts` |
+| Extension handlers (what runs in Chrome)                    | `packages/extension/src/background/handlers/`                                                                           |
+| Effect observation helper                                   | `packages/extension/src/background/handlers/effects.ts`                                                                 |
+| Site / editor registry                                      | `packages/shared/src/editors.ts`                                                                                        |
+| Procedure YAML schema + search ranker                       | `packages/shared/src/procedures.ts`, `packages/bridge/src/procedures/`                                                  |
+| Trace writer / observed facts                               | `packages/bridge/src/trace-writer.ts`, `packages/bridge/src/observed-facts.ts`                                          |
+| Rate limiter + risky-action gate                            | `packages/bridge/src/rate-limiter.ts`, `packages/bridge/src/safety.ts`                                                  |
+| Seed procedures to copy and learn from                      | `examples/procedures/`                                                                                                  |
+| Error codes + WS close codes                                | `packages/shared/src/errors.ts`                                                                                         |
 
 ---
 
@@ -414,13 +421,13 @@ If you're editing browserops itself (not just using it):
 4. Never inline procedure steps into a sub-agent brief. Never batch two subtasks into one brief.
 5. Never use `browser_reload` as a polling primitive.
 6. Never screenshot to verify a step that has a `wait_for` condition.
-8. Never bypass `USER_DECLINED` by retrying silently.
-9. Never use `Meta`/`Control` in chords — use `Primary`.
-10. Never route around a refused destructive chord. Ask instead.
-11. Never "fix" `WRITE_AMPLIFIED` by retrying with the same params. It's a registry bug; report it.
-12. Never treat `browser_click_at` `clicked:true` as success on its own. Always verify with `page_effect` — coordinate clicks silently land on wrong elements (parent container, sibling overlay, flex gap) far more often than ref-based clicks do. Zero effect = failure, regardless of what the return field says.
-13. Never dive into a complex task (multi-site, branching, high-stakes, unfamiliar tools, ambiguous goal) without first spawning a planner sub-agent (§2 step 3) to produce the plan. The discipline that keeps simple tasks on-rails is the same discipline that collapses on complex ones when it all has to live in the main context at once — externalize the planning.
-14. Never ask the user more than one clarifying question in a single turn, and never for a task that can be interpreted and attempted. "Use amazon india to check delivery info" is interpretable. "Transfer $X to Y" where X or Y is missing is not. Default to interpret + attempt + verify via `page_effect`; escalate to the user only when the task literally cannot be tried or is irreversible with ambiguous target.
+7. Never bypass `USER_DECLINED` by retrying silently.
+8. Never use `Meta`/`Control` in chords — use `Primary`.
+9. Never route around a refused destructive chord. Ask instead.
+10. Never "fix" `WRITE_AMPLIFIED` by retrying with the same params. It's a registry bug; report it.
+11. Never treat `browser_click_at` `clicked:true` as success on its own. Always verify with `page_effect` — coordinate clicks silently land on wrong elements (parent container, sibling overlay, flex gap) far more often than ref-based clicks do. Zero effect = failure, regardless of what the return field says.
+12. Never dive into a complex task (multi-site, branching, high-stakes, unfamiliar tools, ambiguous goal) without first spawning a planner sub-agent (§2 step 3) to produce the plan. The discipline that keeps simple tasks on-rails is the same discipline that collapses on complex ones when it all has to live in the main context at once — externalize the planning.
+13. Never ask the user more than one clarifying question in a single turn, and never for a task that can be interpreted and attempted. "Use amazon india to check delivery info" is interpretable. "Transfer $X to Y" where X or Y is missing is not. Default to interpret + attempt + verify via `page_effect`; escalate to the user only when the task literally cannot be tried or is irreversible with ambiguous target.
 
 ---
 
@@ -447,13 +454,13 @@ Use it as the primary "did anything happen" signal. Read `page_effect` (legacy) 
 
 Prefer `browser_observe` over raw `browser_read` for "look at the page" steps. Modes:
 
-| mode | what it returns |
-|---|---|
+| mode             | what it returns                                                                                                                                                |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `auto` (default) | Heuristic pick. Canvas-dominant viewport → screenshot; ≤2k a11y tokens → augmented a11y; 2k–6k → viewport-scoped a11y; >6k → box-drawing + low-res screenshot. |
-| `text` | Forced augmented a11y. Default viewport scope. |
-| `visual` | Forced action-grade screenshot (768px longest edge, ~800 tok). |
-| `structure` | Box-drawing layout summary, landmarks + leaf refs + ARIA tables. |
-| `diff` | `since: <observation_token>` required. Returns added/removed/changed ref deltas. |
+| `text`           | Forced augmented a11y. Default viewport scope.                                                                                                                 |
+| `visual`         | Forced action-grade screenshot (768px longest edge, ~800 tok).                                                                                                 |
+| `structure`      | Box-drawing layout summary, landmarks + leaf refs + ARIA tables.                                                                                               |
+| `diff`           | `since: <observation_token>` required. Returns added/removed/changed ref deltas.                                                                               |
 
 Every response includes `observation_token` (12-char id, 30s TTL, max 32 cached). Use it as the second arg to `browser_click_at`/`browser_hover` via `coord_space: "screenshot:<token>"`.
 
@@ -463,24 +470,25 @@ Every state-changing action takes an optional `expected: ActionExpectation`. The
 
 ```ts
 browser_click({
-  tab_id, ref: 42,
+  tab_id,
+  ref: 42,
   expected: {
-    new_dialog: true,           // any modal appeared
+    new_dialog: true, // any modal appeared
     timeout_ms: 5000,
   },
-})
+});
 // → { clicked: true, effect: {...}, expectation_met: true }
 ```
 
 Common predicates:
 
-| Want to assert… | Use |
-|---|---|
-| Modal opened | `new_dialog: true` or regex against name |
-| URL changed | `url_matches: "/checkout/?$"` |
-| Field filled | `value_contains: { ref: "...", substring: "hello" }` |
-| Backend was hit | `network_endpoint: "/api/cart"` |
-| Page actually changed | `visual_delta_at_least: 0.05` |
+| Want to assert…       | Use                                                  |
+| --------------------- | ---------------------------------------------------- |
+| Modal opened          | `new_dialog: true` or regex against name             |
+| URL changed           | `url_matches: "/checkout/?$"`                        |
+| Field filled          | `value_contains: { ref: "...", substring: "hello" }` |
+| Backend was hit       | `network_endpoint: "/api/cart"`                      |
+| Page actually changed | `visual_delta_at_least: 0.05`                        |
 
 This replaces the blind retry loop pattern. If a click "should" open a modal, attach `expected: { new_dialog: true }` and read `expectation_met` instead of issuing a screenshot+verify roundtrip.
 

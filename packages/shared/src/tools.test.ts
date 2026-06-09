@@ -8,11 +8,9 @@ describe("TOOL_DEFS catalogue", () => {
     const names = TOOL_DEFS.map((t) => t.name);
     expect(new Set(names).size).toBe(names.length);
     for (const n of names)
-      expect(
-        n.startsWith("browser_") ||
-          n.startsWith("procedures_") ||
-          n.startsWith("lore_"),
-      ).toBe(true);
+      expect(n.startsWith("browser_") || n.startsWith("procedures_") || n.startsWith("lore_")).toBe(
+        true,
+      );
   });
 
   it("every tool name matches the MCP-recommended pattern ^[a-zA-Z0-9_-]+$", () => {
@@ -98,9 +96,7 @@ describe("TOOL_DEFS catalogue", () => {
 
 describe("browser_read schema", () => {
   const read = TOOL_DEF_MAP["browser_read"];
-  const props = read?.inputSchema.properties as
-    | Record<string, Record<string, unknown>>
-    | undefined;
+  const props = read?.inputSchema.properties as Record<string, Record<string, unknown>> | undefined;
   const outProps = read?.outputSchema.properties as
     | Record<string, Record<string, unknown>>
     | undefined;
@@ -219,9 +215,7 @@ describe("browser_query_selector schema", () => {
 
 describe("browser_find_and_replace schema", () => {
   const tool = TOOL_DEF_MAP["browser_find_and_replace"];
-  const props = tool?.inputSchema.properties as
-    | Record<string, Record<string, unknown>>
-    | undefined;
+  const props = tool?.inputSchema.properties as Record<string, Record<string, unknown>> | undefined;
 
   it("is registered", () => {
     expect(tool).toBeDefined();
@@ -250,9 +244,7 @@ describe("browser_find_and_replace schema", () => {
 
 describe("browser_screenshot schema", () => {
   const shot = TOOL_DEF_MAP["browser_screenshot"];
-  const props = shot?.inputSchema.properties as
-    | Record<string, Record<string, unknown>>
-    | undefined;
+  const props = shot?.inputSchema.properties as Record<string, Record<string, unknown>> | undefined;
 
   it("format defaults to jpeg", () => {
     expect(props?.format?.default).toBe("jpeg");
@@ -268,20 +260,13 @@ describe("browser_screenshot schema", () => {
   });
 
   it("intent enum covers the four presets", () => {
-    expect(props?.intent?.enum).toEqual([
-      "glance",
-      "verify",
-      "read_text",
-      "user_requested",
-    ]);
+    expect(props?.intent?.enum).toEqual(["glance", "verify", "read_text", "user_requested"]);
   });
 });
 
 describe("procedures_search", () => {
   const tool = TOOL_DEF_MAP["procedures_search"];
-  const props = tool?.inputSchema.properties as
-    | Record<string, Record<string, unknown>>
-    | undefined;
+  const props = tool?.inputSchema.properties as Record<string, Record<string, unknown>> | undefined;
 
   it("is registered", () => {
     expect(tool).toBeDefined();
@@ -336,9 +321,7 @@ describe("procedures_get", () => {
 
 describe("procedures_save", () => {
   const tool = TOOL_DEF_MAP["procedures_save"];
-  const props = tool?.inputSchema.properties as
-    | Record<string, Record<string, unknown>>
-    | undefined;
+  const props = tool?.inputSchema.properties as Record<string, Record<string, unknown>> | undefined;
 
   it("is registered", () => {
     expect(tool).toBeDefined();
@@ -370,9 +353,7 @@ describe("procedures_save", () => {
 
 describe("procedures_delete", () => {
   const tool = TOOL_DEF_MAP["procedures_delete"];
-  const props = tool?.inputSchema.properties as
-    | Record<string, Record<string, unknown>>
-    | undefined;
+  const props = tool?.inputSchema.properties as Record<string, Record<string, unknown>> | undefined;
 
   it("is registered", () => {
     expect(tool).toBeDefined();

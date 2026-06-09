@@ -250,7 +250,7 @@ Re-running `install-rules` is idempotent — it replaces the existing block in p
 
 **Locator helpers (procedures feature):** `browser_locate`, `browser_propose_locator`
 
-**Procedure runtime (procedures feature):** `procedures_search`, `procedures_get`, `procedures_save`, `procedures_delete`, `procedures_execute`, `procedures_resume`
+**Procedures (procedures feature):** `procedures_search`, `procedures_get`, `procedures_save`, `procedures_delete`, `procedures_execute`, `procedures_resume`
 
 **Cross-agent lore (lore feature):** `lore_save`, `lore_search`, `lore_get`, `lore_delete`
 
@@ -314,8 +314,8 @@ Save a lore entry when the lesson is useful to _any_ MCP client that might pick 
 
 ### MCP tools
 
-| Tool            | Inputs                                                                                              | Output                        |
-| --------------- | --------------------------------------------------------------------------------------------------- | ----------------------------- |
+| Tool          | Inputs                                                                                              | Output                        |
+| ------------- | --------------------------------------------------------------------------------------------------- | ----------------------------- |
 | `lore_save`   | `name`, `description`, `type` (`user`\|`feedback`\|`project`\|`reference`), `body`, `replace?:bool` | `{saved, path, created}`      |
 | `lore_search` | `query`, `type?`, `limit?` (1..25, default 10), `min_score?` (0..1, default 0.2)                    | `{matches, total, truncated}` |
 | `lore_get`    | `name`                                                                                              | `{meta, body, path}`          |
@@ -395,19 +395,19 @@ Currently ~220 unit tests total across shared (envelope guards, tool catalogue i
 
 ## Environment variables
 
-| Var                       | Default     | Purpose                                                                                                                                                                                                                                                           |
-| ------------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `BROWSEROPS_HOST`         | `127.0.0.1` | WebSocket bind host (never `0.0.0.0` — enforced at startup)                                                                                                                                                                                                       |
-| `BROWSEROPS_PORT`         | `57321`     | WebSocket port                                                                                                                                                                                                                                                    |
-| `BROWSEROPS_EXTENSION_ID` | empty = any | Origin allowlist; pin this to your extension id in production                                                                                                                                                                                                     |
-| `BROWSEROPS_GLOBAL_CAP`   | `60`        | Global rate-limit cap per minute                                                                                                                                                                                                                                  |
-| `BROWSEROPS_LOG_LEVEL`    | `normal`    | `normal` truncates strings > 200 chars; `audit` logs full payloads                                                                                                                                                                                                |
-| `BROWSEROPS_APPROVAL`     | `auto`      | `auto` (default) or `gate`; controls approval mode for risky actions                                                                                                                                                                                              |
-| `BROWSEROPS_TRACE`        | unset       | `=1` writes trace events including auto-approvals to `~/.browserops/trace.jsonl`                                                                                                                                                                                  |
+| Var                       | Default     | Purpose                                                                                                                                                                                                                                                         |
+| ------------------------- | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `BROWSEROPS_HOST`         | `127.0.0.1` | WebSocket bind host (never `0.0.0.0` — enforced at startup)                                                                                                                                                                                                     |
+| `BROWSEROPS_PORT`         | `57321`     | WebSocket port                                                                                                                                                                                                                                                  |
+| `BROWSEROPS_EXTENSION_ID` | empty = any | Origin allowlist; pin this to your extension id in production                                                                                                                                                                                                   |
+| `BROWSEROPS_GLOBAL_CAP`   | `60`        | Global rate-limit cap per minute                                                                                                                                                                                                                                |
+| `BROWSEROPS_LOG_LEVEL`    | `normal`    | `normal` truncates strings > 200 chars; `audit` logs full payloads                                                                                                                                                                                              |
+| `BROWSEROPS_APPROVAL`     | `auto`      | `auto` (default) or `gate`; controls approval mode for risky actions                                                                                                                                                                                            |
+| `BROWSEROPS_TRACE`        | unset       | `=1` writes trace events including auto-approvals to `~/.browserops/trace.jsonl`                                                                                                                                                                                |
 | `BROWSEROPS_FEATURES`     | unset       | Comma-separated experimental feature names to force-enable (e.g. `procedures,lore`). Overrides `~/.browserops/config.json` when explicitly set; an empty string disables everything. Persistent toggles use `browserops feature enable/disable <name>` instead. |
-| `DO_NOT_TRACK`            | unset       | Standard signal. `=1` disables telemetry entirely (no PostHog events, no install-id alias).                                                                                                                                                                       |
-| `BROWSEROPS_TELEMETRY`    | unset       | browserops-specific telemetry toggle. `=0` disables telemetry. Either this or `DO_NOT_TRACK` disables.                                                                                                                                                            |
-| `BROWSEROPS_ALIAS_EMAIL`  | unset       | Explicit consent to ship the user's email to PostHog as a distinct-id alias (needed for cross-machine merging). Default off — email is **never** sent without this flag set to `1`.                                                                               |
+| `DO_NOT_TRACK`            | unset       | Standard signal. `=1` disables telemetry entirely (no PostHog events, no install-id alias).                                                                                                                                                                     |
+| `BROWSEROPS_TELEMETRY`    | unset       | browserops-specific telemetry toggle. `=0` disables telemetry. Either this or `DO_NOT_TRACK` disables.                                                                                                                                                          |
+| `BROWSEROPS_ALIAS_EMAIL`  | unset       | Explicit consent to ship the user's email to PostHog as a distinct-id alias (needed for cross-machine merging). Default off — email is **never** sent without this flag set to `1`.                                                                             |
 
 ## Telemetry
 

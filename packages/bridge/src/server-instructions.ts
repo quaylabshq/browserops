@@ -42,9 +42,9 @@ const autonomousByDefault: Lines = [
   "a short ask. Interpret it charitably, state the interpretation in ≤1",
   "line, and attempt. The observation runtime (page_effect) catches wrong",
   "interpretations within one call — that loop is faster than a clarifying",
-  "round-trip. A three-part clarifying-question dump like \"did you mean",
+  'round-trip. A three-part clarifying-question dump like "did you mean',
   "amazon.in or amazon.com/in? what is 'delivery info task'? did you mean",
-  "mouse click or keyboard?\" is the specific failure mode this rule bans.",
+  'mouse click or keyboard?" is the specific failure mode this rule bans.',
   "Ask at most ONE short question, and only when the task literally cannot",
   "be attempted without a specific value (credentials, amount, recipient),",
   "OR is irreversible and the target is genuinely ambiguous. Everything",
@@ -140,8 +140,8 @@ const dispatch: Lines = [
   "- Every http(s) tab gets persistent chrome.debugger attached on navigation.",
   "  browser_click / click_at / click_by_text / type / press / hover all",
   "  dispatch through CDP Input.* — trusted compositor events that traverse",
-  "  iframes, shadow DOM, and isTrusted-gated handlers. The \"Chrome is being",
-  "  controlled by automated test software\" banner appears as a result — that",
+  '  iframes, shadow DOM, and isTrusted-gated handlers. The "Chrome is being',
+  '  controlled by automated test software" banner appears as a result — that',
   "  is expected and not a sign of failure.",
 ];
 
@@ -220,12 +220,12 @@ function loreSection(enabledFeatures: ReadonlySet<FeatureName>): Lines {
   if (!enabledFeatures.has("lore")) return [];
   return [
     "Cross-agent lore:",
-    "- `lore_save` / `lore_search` / `lore_get` / `lore_delete` persist",
-    "  named markdown notes at `~/browserops/lore/`, visible to every MCP",
-    "  client (Claude Code, Cursor, Zed, custom SDK). Use them when a lesson",
-    "  about a flow, selector, or project would help any agent picking up the",
-    "  same browserops bridge later — not for host-private prefs (response",
-    "  style, keybindings) which belong in the host's own lore store.",
+    "- `lore_save` / `lore_search` / `lore_get` / `lore_delete` persist named",
+    "  markdown entries at `~/browserops/lore/`, visible to every MCP client",
+    "  (Claude Code, Cursor, Zed, custom SDK). Use them when a lesson about a",
+    "  flow, selector, or project would help any agent picking up the same",
+    "  browserops bridge later — not for host-private prefs (response style,",
+    "  keybindings) which belong in the host's own lore store.",
     "- Search before saving: a near-duplicate name should be `replace:true`",
     "  rather than a new entry. Names match `^[a-z][a-z0-9._-]{0,79}$`.",
   ];
@@ -237,9 +237,7 @@ function loreSection(enabledFeatures: ReadonlySet<FeatureName>): Lines {
  * The blocks above each return `readonly string[]`; this function joins them
  * with blank lines between sections and a final newline-joined string.
  */
-export function buildServerInstructions(
-  enabledFeatures: ReadonlySet<FeatureName>,
-): string {
+export function buildServerInstructions(enabledFeatures: ReadonlySet<FeatureName>): string {
   const blocks: Lines[] = [
     header(enabledFeatures),
     autonomousByDefault,

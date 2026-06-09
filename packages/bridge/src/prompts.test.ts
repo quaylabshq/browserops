@@ -3,13 +3,15 @@ import { McpError } from "@modelcontextprotocol/sdk/types.js";
 import type { FeatureName } from "@browserops/shared";
 import { createPromptRegistry } from "./prompts.js";
 
-const set = (...names: FeatureName[]) =>
-  new Set<FeatureName>(names) as ReadonlySet<FeatureName>;
+const set = (...names: FeatureName[]) => new Set<FeatureName>(names) as ReadonlySet<FeatureName>;
 
 describe("createPromptRegistry — listPrompts", () => {
   it("lists both browserops and browserops_procedure when procedures is enabled", () => {
     const reg = createPromptRegistry(set("procedures"));
-    const names = reg.listPrompts().prompts.map((p) => p.name).sort();
+    const names = reg
+      .listPrompts()
+      .prompts.map((p) => p.name)
+      .sort();
     expect(names).toEqual(["browserops", "browserops_procedure"]);
   });
 
@@ -42,16 +44,14 @@ describe("createPromptRegistry — getPrompt feature gating", () => {
   it("rejects unknown prompt names regardless of feature state", async () => {
     const reg = createPromptRegistry(set("procedures", "lore"));
     await expect(reg.getPrompt("nope", {})).rejects.toSatisfy(
-      (err: unknown) =>
-        err instanceof McpError && /unknown prompt: nope/.test(err.message),
+      (err: unknown) => err instanceof McpError && /unknown prompt: nope/.test(err.message),
     );
   });
 
   it("requires task argument for the browserops prompt", async () => {
     const reg = createPromptRegistry(set());
     await expect(reg.getPrompt("browserops", {})).rejects.toSatisfy(
-      (err: unknown) =>
-        err instanceof McpError && /task argument required/.test(err.message),
+      (err: unknown) => err instanceof McpError && /task argument required/.test(err.message),
     );
   });
 });

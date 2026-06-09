@@ -10,8 +10,8 @@
  * outranks one where the same tokens only appear deep in the body.
  *
  * Kept deliberately smaller than procedures/search.ts: no scope/domain
- * filters, no draft/trusted split, no deep-mode YAML loading. Memories
- * are flat markdown files; their "deep" content is already loaded in
+ * filters, no draft/trusted split, no deep-mode YAML loading. Lore
+ * entries are flat markdown files; their "deep" content is already in
  * memory by the time the ranker runs.
  */
 import { tokenize, type LoreEntry, type LoreSearchMatch, type LoreType } from "@browserops/shared";
