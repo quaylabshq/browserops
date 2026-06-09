@@ -81,7 +81,8 @@ async function attemptPair(host: string, port: number): Promise<void> {
   }
 
   if (
-    typeof body !== "object" || body === null ||
+    typeof body !== "object" ||
+    body === null ||
     typeof (body as { code?: unknown }).code !== "string" ||
     typeof (body as { token?: unknown }).token !== "string"
   ) {
@@ -106,7 +107,11 @@ confirmBtn.addEventListener("click", () => {
       port: pendingPort,
     });
     // Kick the background service worker to reconnect with the new token.
-    try { await chrome.runtime.sendMessage({ type: "reconnect" }); } catch { /* ignore */ }
+    try {
+      await chrome.runtime.sendMessage({ type: "reconnect" });
+    } catch {
+      /* ignore */
+    }
     show("paired");
   })();
 });
@@ -123,7 +128,7 @@ retryBtn.addEventListener("click", () => {
 });
 
 function openOptions(): void {
-  chrome.runtime.openOptionsPage();
+  void chrome.runtime.openOptionsPage();
 }
 openOptionsBtn.addEventListener("click", openOptions);
 openOptionsBtn2.addEventListener("click", openOptions);

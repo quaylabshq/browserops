@@ -1,5 +1,5 @@
 import { type PageEffect } from "@browserops/shared";
-import { NetworkTracker } from "../network-tracker.js";
+import type { NetworkTracker } from "../network-tracker.js";
 import { execInTab } from "./input.js";
 
 // ---------------------------------------------------------------------------
@@ -43,7 +43,8 @@ export function checkEffectExpectation(
     if (dom.attr_changes > 0) parts.push(`dom.attr_changes=${dom.attr_changes}`);
     if (dom.text_changes > 0) parts.push(`dom.text_changes=${dom.text_changes}`);
     if (url.changed) parts.push(`url.changed=true`);
-    if (network.requests_started > 0) parts.push(`network.requests_started=${network.requests_started}`);
+    if (network.requests_started > 0)
+      parts.push(`network.requests_started=${network.requests_started}`);
     if (parts.length > 0) {
       return `expect_effect=none but observed ${parts.join(", ")}`;
     }
@@ -84,9 +85,7 @@ export interface EffectObservationConfig {
  * Creates a MutationObserver and stores it under a per-call token global.
  * Returns the baseline URL and focused element selector.
  */
-function injectedInstallObserver(
-  token: string,
-): { url: string; focus_selector: string | null } {
+function injectedInstallObserver(token: string): { url: string; focus_selector: string | null } {
   const key = `__browserops_effect_${token}__` as keyof Window;
   const state = {
     added: 0,
@@ -106,11 +105,17 @@ function injectedInstallObserver(
       if (rec.type === "childList") {
         if (state.added < CAP) {
           state.added += rec.addedNodes.length;
-          if (state.added >= CAP) { state.added = CAP; state.truncated = true; }
+          if (state.added >= CAP) {
+            state.added = CAP;
+            state.truncated = true;
+          }
         }
         if (state.removed < CAP) {
           state.removed += rec.removedNodes.length;
-          if (state.removed >= CAP) { state.removed = CAP; state.truncated = true; }
+          if (state.removed >= CAP) {
+            state.removed = CAP;
+            state.truncated = true;
+          }
         }
       } else if (rec.type === "attributes") {
         if (state.attr_changes < CAP) {
@@ -134,15 +139,18 @@ function injectedInstallObserver(
   });
 
   state.obs = observer;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (window as any)[key] = state;
 
   // Patch console.error to count errors during the observation window.
   const origError = window.console.error;
   state.origConsoleError = origError;
-  window.console.error = function(...args: unknown[]) {
+  window.console.error = function (...args: unknown[]) {
     state.console_errors = Math.min(state.console_errors + 1, 10000);
-    try { return origError.apply(this, args); } catch (e) { /* swallow */ }
+    try {
+      return origError.apply(this, args);
+    } catch {
+      /* swallow */
+    }
   };
 
   // Defined inline here so it runs in MAIN world (cannot reference outer module scope)
@@ -193,17 +201,18 @@ function injectedReadObserver(token: string): {
   console_errors: number;
 } {
   const key = `__browserops_effect_${token}__` as keyof Window;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const state = (window as any)[key] as {
-    added: number;
-    removed: number;
-    attr_changes: number;
-    text_changes: number;
-    truncated: boolean;
-    obs: MutationObserver | null;
-    console_errors: number;
-    origConsoleError: ((...args: unknown[]) => unknown) | null;
-  } | undefined;
+  const state = (window as any)[key] as
+    | {
+        added: number;
+        removed: number;
+        attr_changes: number;
+        text_changes: number;
+        truncated: boolean;
+        obs: MutationObserver | null;
+        console_errors: number;
+        origConsoleError: ((...args: unknown[]) => unknown) | null;
+      }
+    | undefined;
 
   if (!state) {
     // Fail-soft: observer was never installed or was already cleaned up
@@ -227,7 +236,6 @@ function injectedReadObserver(token: string): {
     /* best-effort disconnect */
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   delete (window as any)[key];
 
   const active = document.activeElement;
@@ -367,10 +375,7 @@ export async function withEffectObservation<T>(
       focus: { changed: false },
       network: {
         requests_started: Math.max(0, netAfterPartial.totalStarted - netBefore.totalStarted),
-        requests_completed: Math.max(
-          0,
-          netAfterPartial.totalCompleted - netBefore.totalCompleted,
-        ),
+        requests_completed: Math.max(0, netAfterPartial.totalCompleted - netBefore.totalCompleted),
         in_flight_at_end: netAfterPartial.inFlight,
       },
       console_errors: 0,
@@ -388,9 +393,7 @@ export async function withEffectObservation<T>(
     dom: readResult.dom,
     url: {
       changed: baseline.url !== readResult.url,
-      ...(baseline.url !== readResult.url
-        ? { before: baseline.url, after: readResult.url }
-        : {}),
+      ...(baseline.url !== readResult.url ? { before: baseline.url, after: readResult.url } : {}),
     },
     focus: {
       changed: baseline.focus_selector !== readResult.focus_selector,

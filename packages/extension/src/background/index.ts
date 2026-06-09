@@ -352,7 +352,7 @@ chrome.runtime.onInstalled.addListener((details) => {
 
 // --- keep-alive alarm -----------------
 
-chrome.alarms.create("ws-keepalive", { periodInMinutes: 0.5 });
+void chrome.alarms.create("ws-keepalive", { periodInMinutes: 0.5 });
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name !== "ws-keepalive") return;
   if (wsClient !== null && wsClient.isConnected()) return;
@@ -379,7 +379,9 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
     return true;
   }
   if (tag === "reconnect") {
-    void setDisabled(false).then(() => startClient()).then(() => sendResponse({ ok: true }));
+    void setDisabled(false)
+      .then(() => startClient())
+      .then(() => sendResponse({ ok: true }));
     return true;
   }
   if (tag === "safety_decision") {

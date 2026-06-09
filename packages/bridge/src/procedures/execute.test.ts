@@ -10,9 +10,7 @@ let tmpDir: string;
 const ORIGINAL_ENV = process.env["BROWSEROPS_PROCEDURES_DIR"];
 
 beforeEach(async () => {
-  tmpDir = await fs.mkdtemp(
-    path.join(import.meta.dirname ?? __dirname, ".pbexec-test-"),
-  );
+  tmpDir = await fs.mkdtemp(path.join(import.meta.dirname ?? __dirname, ".pbexec-test-"));
   process.env["BROWSEROPS_PROCEDURES_DIR"] = tmpDir;
   _resetForTests();
 });
@@ -43,10 +41,7 @@ function stubWsBridge(script: Script[]): WSBridgeLike & {
   return {
     calls,
     isConnected: () => true,
-    callExtension: async <T>(
-      method: string,
-      params: Record<string, unknown>,
-    ): Promise<T> => {
+    callExtension: async <T>(method: string, params: Record<string, unknown>): Promise<T> => {
       calls.push({ method, params });
       // Auto-prime browser_read calls are best-effort — when the script
       // does not explicitly script one, return a benign empty success.
@@ -60,9 +55,7 @@ function stubWsBridge(script: Script[]): WSBridgeLike & {
         throw new Error(`stub ran out of scripted calls (next was ${method})`);
       }
       if (item.method !== method) {
-        throw new Error(
-          `stub expected method ${item.method} but got ${method}`,
-        );
+        throw new Error(`stub expected method ${item.method} but got ${method}`);
       }
       if (item.error) {
         const err = new Error(item.error.message) as Error & { code: string };
@@ -273,7 +266,7 @@ describe("procedure execute — strict mode", () => {
     expect(result.divergence?.reason).toMatch(/LOCATOR_NOT_FOUND/);
   });
 
-  it("halts on expect miss with retry strategy not yet implemented (Phase 5 behaviour)", async () => {
+  it("halts on expect miss when the step declares the default (strict) strategy", async () => {
     await writeYaml("shared/exp_miss/procedure.yaml", {
       schema_version: 1,
       name: "exp.miss",
@@ -393,17 +386,17 @@ describe("procedure execute — strict mode", () => {
   it("PROCEDURE_NOT_FOUND when name is missing", async () => {
     const ws = stubWsBridge([]);
     const exec = makeProcedureExecutor(ws);
-    await expect(
-      exec({ name: "nope", tab_id: "t_1", inputs: {} }),
-    ).rejects.toThrow(/PROCEDURE_NOT_FOUND|procedure not found/);
+    await expect(exec({ name: "nope", tab_id: "t_1", inputs: {} })).rejects.toThrow(
+      /PROCEDURE_NOT_FOUND|procedure not found/,
+    );
   });
 
   it("INVALID_PARAMS when name pattern violated", async () => {
     const ws = stubWsBridge([]);
     const exec = makeProcedureExecutor(ws);
-    await expect(
-      exec({ name: "BAD_NAME", tab_id: "t_1", inputs: {} }),
-    ).rejects.toThrow(/must match/);
+    await expect(exec({ name: "BAD_NAME", tab_id: "t_1", inputs: {} })).rejects.toThrow(
+      /must match/,
+    );
   });
 });
 

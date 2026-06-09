@@ -22,12 +22,7 @@
  */
 
 import YAML from "yaml";
-import type {
-  ProcedureDef,
-  StepDef,
-  FallbackStrategy,
-  PageEffect,
-} from "@browserops/shared";
+import type { ProcedureDef, StepDef, FallbackStrategy, PageEffect } from "@browserops/shared";
 import { TOOL_DEF_MAP } from "@browserops/shared";
 import { DEFAULT_TOOL_TIMEOUT_MS, NAVIGATE_TIMEOUT_MS } from "@browserops/shared";
 import { isLocatorEmpty } from "@browserops/shared";
@@ -43,10 +38,7 @@ import { proceduresRoot } from "./paths.js";
 import { validateProcedure } from "./validator.js";
 import { substituteVars } from "./substitute.js";
 import { checkForbidden } from "./forbidden.js";
-import {
-  pollExpect,
-  type Observation,
-} from "./expectation.js";
+import { pollExpect, type Observation } from "./expectation.js";
 import type { StepResult, DivergenceInfo } from "./execute-types.js";
 import { createState, type ExecutionState } from "./state.js";
 import { applyRetry, applyRelocate } from "./fallback.js";
@@ -123,9 +115,7 @@ export function makeProcedureExecutor(
   wsBridge: WSBridgeLike,
   inProcessDispatch?: InProcessDispatch,
 ) {
-  return async function executeProcedure(
-    raw: Record<string, unknown>,
-  ): Promise<ExecuteOutcome> {
+  return async function executeProcedure(raw: Record<string, unknown>): Promise<ExecuteOutcome> {
     const params = parseParams(raw);
 
     const procedure = await loadProcedure(params.name);
@@ -201,10 +191,7 @@ function parseParams(raw: Record<string, unknown>): ParsedExecuteParams {
   if (raw["max_tool_calls"] !== undefined) {
     const m = raw["max_tool_calls"];
     if (typeof m !== "number" || !Number.isInteger(m) || m < 0) {
-      throw new CodedError(
-        "INVALID_PARAMS",
-        "max_tool_calls must be a non-negative integer",
-      );
+      throw new CodedError("INVALID_PARAMS", "max_tool_calls must be a non-negative integer");
     }
     result.max_tool_calls = m;
   }
@@ -217,10 +204,7 @@ function parseParams(raw: Record<string, unknown>): ParsedExecuteParams {
  * YAML's meta.health. Swallows errors — health is auxiliary; a failed
  * disk write must not fail the run.
  */
-async function flushHealth(
-  procedureName: string,
-  health: HealthDef,
-): Promise<void> {
+async function flushHealth(procedureName: string, health: HealthDef): Promise<void> {
   if (Object.keys(health.steps).length === 0) return;
   try {
     const root = proceduresRoot();
@@ -253,11 +237,9 @@ async function loadProcedure(name: string): Promise<ProcedureDef> {
   try {
     parsed = YAML.parse(text);
   } catch (e) {
-    throw new CodedError(
-      "PROCEDURE_SCHEMA_INVALID",
-      `YAML parse error: ${(e as Error).message}`,
-      { name },
-    );
+    throw new CodedError("PROCEDURE_SCHEMA_INVALID", `YAML parse error: ${(e as Error).message}`, {
+      name,
+    });
   }
 
   const validation = validateProcedure(parsed);
@@ -291,16 +273,11 @@ export interface RunProcedureContext {
   used_llm_fallback: boolean;
 }
 
-export async function runProcedure(
-  ctx: RunProcedureContext,
-): Promise<ExecuteOutcome> {
+export async function runProcedure(ctx: RunProcedureContext): Promise<ExecuteOutcome> {
   const { procedure, tab_id, inputs, strict, wsBridge } = ctx;
 
   if (!wsBridge.isConnected()) {
-    throw new CodedError(
-      "EXTENSION_DISCONNECTED",
-      "no active extension connection",
-    );
+    throw new CodedError("EXTENSION_DISCONNECTED", "no active extension connection");
   }
 
   const stepResults = ctx.step_results;
@@ -337,11 +314,15 @@ export async function runProcedure(
       return haltedOutcome(stepResults, div, ctx.used_llm_fallback);
     }
 
-    const { ok, divergence, observation, attempts, resolvedBy, resolution } =
-      await tryStepOnce(ctx, step, i);
+    const { ok, divergence, observation, attempts, resolvedBy, resolution } = await tryStepOnce(
+      ctx,
+      step,
+      i,
+    );
 
     if (!ok) {
-      // Fallback ladder lands here in Phase 6/7. For Phase 5 we just halt.
+      // First attempt failed — route through the explicit fallback ladder
+      // declared on the step (or default to "strict" when none is set).
       const strategy = resolveStrategy(step, strict);
       const fallbackResult = await tryFallback(ctx, step, i, divergence, strategy);
       if (fallbackResult.ok) {
@@ -365,8 +346,9 @@ export async function runProcedure(
         continue;
       }
       if (fallbackResult.needsAssist) {
-        // Phase 7 lands the actual envelope handoff. Surface here so the
-        // executor doesn't pretend the run completed.
+        // Hand the failing step off to the caller as a needs_assist envelope —
+        // the executor pauses here, persists the resume state, and lets the
+        // agent supply a patch via procedures_resume.
         stepResults.push(fallbackResult.stepResult);
         const envelope = buildEnvelope(procedure, step, i, fallbackResult.divergence, ctx);
         const state = createState({
@@ -427,9 +409,7 @@ export async function runProcedure(
   // Top-level verify
   let verifyPassed: boolean | undefined;
   if (procedure.verify !== undefined) {
-    const verify = await pollExpect(procedure.verify, () =>
-      captureObservation(ctx, undefined),
-    );
+    const verify = await pollExpect(procedure.verify, () => captureObservation(ctx, undefined));
     verifyPassed = verify.matched;
     if (!verify.matched) {
       await flushHealth(procedure.name, healthAccum);
@@ -519,11 +499,7 @@ async function tryStepOnce(
     try {
       const locateResult = await wsBridge.callExtension<{
         matches: Array<{ ref: number; role: string; name: string; selector: string }>;
-      }>(
-        "browser_locate",
-        { tab_id, locator: substituted },
-        autoTimeout,
-      );
+      }>("browser_locate", { tab_id, locator: substituted }, autoTimeout);
       const first = locateResult.matches[0];
       if (!first) {
         return {
@@ -561,10 +537,7 @@ async function tryStepOnce(
 
   // Build with: params — substitute, then merge resolved ref/tab_id.
   const baseWith = step.with ?? {};
-  const substitutedWith = substituteVars(baseWith, inputs, binds) as Record<
-    string,
-    unknown
-  >;
+  const substitutedWith = substituteVars(baseWith, inputs, binds) as Record<string, unknown>;
   const finalWith: Record<string, unknown> = { ...substitutedWith };
   if (finalWith["tab_id"] === undefined) finalWith["tab_id"] = tab_id;
   if (resolvedRef !== undefined && finalWith["ref"] === undefined) {
@@ -590,13 +563,13 @@ async function tryStepOnce(
   // is wired (handlers builder sets it up). Falls through to the wsBridge
   // for browser_* primitives.
   let toolResult: unknown;
-  const isInProcessCall =
-    step.do === "procedure_call" && ctx.inProcessDispatch !== undefined;
+  const isInProcessCall = step.do === "procedure_call" && ctx.inProcessDispatch !== undefined;
   try {
     if (isInProcessCall) {
       toolResult = await ctx.inProcessDispatch!(toolName, finalWith);
     } else {
-      const timeoutMs = toolName === "browser_navigate" ? NAVIGATE_TIMEOUT_MS : DEFAULT_TOOL_TIMEOUT_MS;
+      const timeoutMs =
+        toolName === "browser_navigate" ? NAVIGATE_TIMEOUT_MS : DEFAULT_TOOL_TIMEOUT_MS;
       toolResult = await wsBridge.callExtension(toolName, finalWith, timeoutMs);
     }
   } catch (err) {
@@ -655,7 +628,7 @@ async function tryStepOnce(
 }
 
 // ---------------------------------------------------------------------------
-// Fallback ladder (Phase 6+7 expand this; Phase 5 lands the strict path)
+// Fallback ladder — strategy ∈ {strict, retry, relocate, relocate_then_llm, llm}
 // ---------------------------------------------------------------------------
 
 interface FallbackResult {
@@ -668,10 +641,7 @@ interface FallbackResult {
   usedRelocate?: boolean;
 }
 
-function resolveStrategy(
-  step: StepDef,
-  strict: boolean,
-): FallbackStrategy {
+function resolveStrategy(step: StepDef, strict: boolean): FallbackStrategy {
   if (strict) return "strict";
   return step.fallback?.strategy ?? "strict";
 }
@@ -683,12 +653,11 @@ async function tryFallback(
   firstDivergence: DivergenceInfo | undefined,
   strategy: FallbackStrategy,
 ): Promise<FallbackResult> {
-  let lastDivergence: DivergenceInfo =
-    firstDivergence ?? {
-      step_id: step.id,
-      step_index: index,
-      reason: "unknown divergence",
-    };
+  let lastDivergence: DivergenceInfo = firstDivergence ?? {
+    step_id: step.id,
+    step_index: index,
+    reason: "unknown divergence",
+  };
 
   if (strategy === "strict") {
     return {
@@ -807,7 +776,7 @@ async function tryFallback(
     // fall through to llm escalation
   }
 
-  // -------- llm strategy (Phase 7 — halt + needs_assist) --------
+  // -------- llm strategy — halt and emit a needs_assist envelope --------
   if (strategy === "llm" || strategy === "relocate_then_llm") {
     if (ctx.strict) {
       return {
@@ -853,10 +822,7 @@ async function tryFallback(
  * Charge one tool_call from the per-step + per-run budgets.
  * Returns true if there was room, false when the budget is exhausted.
  */
-function chargeBudget(
-  ctx: RunProcedureContext,
-  step: StepDef,
-): boolean {
+function chargeBudget(ctx: RunProcedureContext, step: StepDef): boolean {
   const stepBudget = step.fallback?.budget?.tool_calls;
   if (typeof stepBudget === "number" && stepBudget <= 0) return false;
 
@@ -910,8 +876,10 @@ function mapStepDoToToolName(stepDo: StepDef["do"]): string {
       return "browser_execute_js";
     case "procedure_call":
       return "procedures_execute";
-    case "procedure_call":
-      return "procedures_execute";
+    default: {
+      const _exhaustive: never = stepDo;
+      throw new Error(`unknown step.do: ${String(_exhaustive)}`);
+    }
   }
 }
 
@@ -960,8 +928,7 @@ function buildObservation(toolResult: unknown): Observation | undefined {
 /** True when an expect/verify predicate inspects rendered page text. */
 function expectNeedsText(expect: StepDef["expect"]): boolean {
   return (
-    expect != null &&
-    (expect.text_visible !== undefined || expect.text_invisible !== undefined)
+    expect != null && (expect.text_visible !== undefined || expect.text_invisible !== undefined)
   );
 }
 
@@ -970,10 +937,7 @@ function expectNeedsText(expect: StepDef["expect"]): boolean {
  * Best-effort — returns undefined on any failure so a text predicate just
  * reports "not found" rather than throwing.
  */
-async function readLiveText(
-  ctx: RunProcedureContext,
-  tab_id: string,
-): Promise<string | undefined> {
+async function readLiveText(ctx: RunProcedureContext, tab_id: string): Promise<string | undefined> {
   try {
     const r = await ctx.wsBridge.callExtension<{ content?: string }>(
       "browser_read",
@@ -1015,8 +979,8 @@ async function captureObservation(
 }
 
 // ---------------------------------------------------------------------------
-// Resume envelope builder (Phase 7 fills in observation_token; this stub
-// returns the structural envelope used by needs_assist).
+// Resume envelope builder — packages the failing step + safety constraints +
+// remaining-steps preview into the shape procedures_resume consumes.
 // ---------------------------------------------------------------------------
 
 export function buildEnvelope(
