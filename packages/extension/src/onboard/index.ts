@@ -13,8 +13,6 @@ const viewError = $<HTMLDivElement>("view-error");
 const viewPaired = $<HTMLDivElement>("view-paired");
 const viewConsumed = $<HTMLDivElement>("view-consumed");
 const pairCodeEl = $<HTMLDivElement>("pair-code");
-const confirmBtn = $<HTMLButtonElement>("confirm");
-const cancelBtn = $<HTMLButtonElement>("cancel");
 const retryBtn = $<HTMLButtonElement>("retry");
 const errorMsg = $<HTMLParagraphElement>("error-msg");
 const advHost = $<HTMLInputElement>("adv-host");
@@ -94,31 +92,27 @@ async function attemptPair(host: string, port: number): Promise<void> {
   pendingPair = body as PairResponse;
   pairCodeEl.textContent = pendingPair.code;
   show("ready");
+  // Auto-confirm: no human click. The bridge's first-pair-wins
+  // extension-ID pin protects against a rogue extension racing this
+  // call — once we successfully /pair, the bridge persists *this*
+  // extension's chrome-extension://<id> origin and refuses all others.
+  void completePair(pendingPair);
 }
 
-confirmBtn.addEventListener("click", () => {
-  if (pendingPair === null) return;
-  confirmBtn.disabled = true;
-  cancelBtn.disabled = true;
-  void (async () => {
-    await chrome.storage.local.set({
-      token: pendingPair!.token,
-      host: pendingHost,
-      port: pendingPort,
-    });
-    // Kick the background service worker to reconnect with the new token.
-    try {
-      await chrome.runtime.sendMessage({ type: "reconnect" });
-    } catch {
-      /* ignore */
-    }
-    show("paired");
-  })();
-});
-
-cancelBtn.addEventListener("click", () => {
-  window.close();
-});
+async function completePair(pair: PairResponse): Promise<void> {
+  await chrome.storage.local.set({
+    token: pair.token,
+    host: pendingHost,
+    port: pendingPort,
+  });
+  // Kick the background service worker to reconnect with the new token.
+  try {
+    await chrome.runtime.sendMessage({ type: "reconnect" });
+  } catch {
+    /* ignore */
+  }
+  show("paired");
+}
 
 retryBtn.addEventListener("click", () => {
   const hostVal = advHost.value.trim() || "127.0.0.1";

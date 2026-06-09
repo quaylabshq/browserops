@@ -1,4 +1,9 @@
-import { createServer, type Server as HttpServer, type IncomingMessage, type ServerResponse } from "node:http";
+import {
+  createServer,
+  type Server as HttpServer,
+  type IncomingMessage,
+  type ServerResponse,
+} from "node:http";
 import { randomInt } from "node:crypto";
 import type { Duplex } from "node:stream";
 import { WebSocketServer, WebSocket, type RawData } from "ws";
@@ -36,6 +41,21 @@ export interface WSBridgeOptions {
    * + daemon-reload, not the snapshot at WSBridge construction time.
    */
   getFeatures?: () => readonly string[];
+  /**
+   * Extension ID this bridge has previously paired with, loaded from
+   * `~/.browserops/extension_id` at boot. When non-null:
+   *   - `/pair` is refused for any Origin whose extension ID differs
+   *   - the WS upgrade is refused for any Origin whose extension ID differs
+   * `browserops init --repair` deletes the on-disk file to allow re-pair.
+   */
+  pinnedExtensionId?: string | null;
+  /**
+   * Called once when an unpinned bridge sees its first successful hello.
+   * The caller (daemon-runtime) persists the ID to disk so subsequent
+   * runs can reload it via `pinnedExtensionId`. Errors are logged but
+   * not fatal — the live socket is already authenticated by token.
+   */
+  onExtensionPin?: (extensionId: string) => Promise<void>;
 }
 
 interface Pending {
@@ -65,6 +85,7 @@ export class WSBridge {
   private readonly onEvent: (name: string, payload: Record<string, unknown>) => void;
   private readonly onConnectionChange?: (connected: boolean) => void;
   private readonly getFeatures?: () => readonly string[];
+  private readonly onExtensionPin?: (extensionId: string) => Promise<void>;
 
   private http?: HttpServer;
   private wss?: WebSocketServer;
@@ -74,6 +95,7 @@ export class WSBridge {
 
   private readonly pairCodeValue: string;
   private pairConsumed = false;
+  private pinnedExtensionId: string | null;
 
   readonly confirmation: ConfirmationChannel;
 
@@ -89,6 +111,8 @@ export class WSBridge {
     this.onEvent = opts.onEvent;
     this.onConnectionChange = opts.onConnectionChange;
     this.getFeatures = opts.getFeatures;
+    this.onExtensionPin = opts.onExtensionPin;
+    this.pinnedExtensionId = opts.pinnedExtensionId ?? null;
 
     // 6-digit pair code, formatted "XXX-XXX" for readability. Regenerated on
     // every bridge startup — if the first /pair response is lost, the user
@@ -128,6 +152,10 @@ export class WSBridge {
     return this.pairConsumed;
   }
 
+  get pinnedExtension(): string | null {
+    return this.pinnedExtensionId;
+  }
+
   async start(): Promise<void> {
     if (this.host !== "127.0.0.1" && this.host !== "localhost" && this.host !== "::1") {
       throw new Error(`refusing to bind non-loopback host: ${this.host}`);
@@ -141,8 +169,9 @@ export class WSBridge {
     this.http.on("request", (req, res) => this.handleHttpRequest(req, res));
     this.http.on("upgrade", (req, socket, head) => this.handleUpgrade(req, socket, head));
     this.wss.on("connection", (ws, req) => this.handleConnection(ws, req));
-    this.wss.on("error", (err) =>
-      void this.logger.write({ dir: "system", event: "wss_error", error: String(err) }),
+    this.wss.on(
+      "error",
+      (err) => void this.logger.write({ dir: "system", event: "wss_error", error: String(err) }),
     );
 
     await new Promise<void>((resolve, reject) => {
@@ -169,7 +198,11 @@ export class WSBridge {
     }
     this.pending.clear();
     if (this.activeSocket) {
-      try { this.activeSocket.close(1000, "bridge_stop"); } catch { /* ignore */ }
+      try {
+        this.activeSocket.close(1000, "bridge_stop");
+      } catch {
+        /* ignore */
+      }
       this.activeSocket = undefined;
       this.notifyConnChange();
     }
@@ -265,6 +298,26 @@ export class WSBridge {
     const urlPath = (req.url ?? "/").split("?", 1)[0] ?? "/";
     const origin = req.headers.origin ?? "";
 
+    if (urlPath === "/status") {
+      // Loopback-only status snapshot, used by `browserops init` to
+      // detect when the user has installed the extension and paired.
+      // Intentionally permissive on Origin (browser dev tools, the
+      // welcome page, the CLI all curl this) — the body carries no
+      // secret, only state flags + the pinned extension ID.
+      res.statusCode = 200;
+      res.setHeader("content-type", "application/json");
+      if (origin) this.writeCorsHeaders(res, origin);
+      res.end(
+        JSON.stringify({
+          pair_consumed: this.pairConsumed,
+          extension_connected: this.isConnected(),
+          extension_id: this.pinnedExtensionId,
+          bridge_version: this.bridgeVersion,
+        }),
+      );
+      return;
+    }
+
     if (urlPath !== "/pair") {
       res.statusCode = 404;
       res.setHeader("content-type", "text/plain");
@@ -298,6 +351,24 @@ export class WSBridge {
       return;
     }
 
+    // First-pair-wins: once an extension ID has been pinned, only that
+    // origin can pair. Refuse other extension origins even if they share
+    // the same Chrome profile — defeats race attacks where a rogue
+    // extension watches for bridge starts and tries to claim the token.
+    if (!this.originMatchesPin(origin)) {
+      void this.logger.write({
+        dir: "system",
+        event: "pair_pin_rejected",
+        origin,
+        pinned: this.pinnedExtensionId,
+      });
+      if (origin) this.writeCorsHeaders(res, origin);
+      res.statusCode = 403;
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ error: "extension_pinned" }));
+      return;
+    }
+
     if (this.pairConsumed) {
       if (origin) this.writeCorsHeaders(res, origin);
       res.statusCode = 410;
@@ -311,11 +382,13 @@ export class WSBridge {
     if (origin) this.writeCorsHeaders(res, origin);
     res.statusCode = 200;
     res.setHeader("content-type", "application/json");
-    res.end(JSON.stringify({
-      code: this.pairCodeValue,
-      token: this.token,
-      bridge_version: this.bridgeVersion,
-    }));
+    res.end(
+      JSON.stringify({
+        code: this.pairCodeValue,
+        token: this.token,
+        bridge_version: this.bridgeVersion,
+      }),
+    );
   }
 
   private writeCorsHeaders(res: ServerResponse, origin: string): void {
@@ -331,7 +404,26 @@ export class WSBridge {
     // Real auth happens via the token in the Hello frame.
     if (origin !== "" && !this.isOriginAllowed(origin)) {
       void this.logger.write({ dir: "system", event: "origin_rejected", origin });
-      try { socket.write("HTTP/1.1 403 Forbidden\r\n\r\n"); } catch { /* ignore */ }
+      try {
+        socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+      } catch {
+        /* ignore */
+      }
+      socket.destroy();
+      return;
+    }
+    if (!this.originMatchesPin(origin)) {
+      void this.logger.write({
+        dir: "system",
+        event: "upgrade_pin_rejected",
+        origin,
+        pinned: this.pinnedExtensionId,
+      });
+      try {
+        socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+      } catch {
+        /* ignore */
+      }
       socket.destroy();
       return;
     }
@@ -344,11 +436,46 @@ export class WSBridge {
     return origin === `chrome-extension://${this.allowedExtensionId}`;
   }
 
+  /**
+   * Extract the extension ID from a chrome-extension://<id> Origin.
+   * Returns null for non-extension origins (or empty Origin headers).
+   * Used to enforce the "first-pair wins" pin: once an ID is pinned to
+   * `~/.browserops/extension_id`, /pair and WS upgrades from any other
+   * extension origin are refused.
+   */
+  private extensionIdFromOrigin(origin: string): string | null {
+    if (!origin.startsWith("chrome-extension://")) return null;
+    const id = origin.slice("chrome-extension://".length);
+    // chrome extension IDs are 32 lowercase letters a-p; tolerate hex for tests.
+    if (id.length === 0) return null;
+    return id;
+  }
+
+  /**
+   * Returns true when an incoming chrome-extension Origin is allowed to
+   * pair / upgrade given the current pinned-ID state. Non-extension
+   * origins are handled by isOriginAllowed and are not the concern here.
+   */
+  private originMatchesPin(origin: string): boolean {
+    if (this.pinnedExtensionId === null) return true;
+    if (origin === "") {
+      // Empty Origin is allowed for WS upgrades (host_permissions case)
+      // but we can't verify the extension ID. The token in the Hello
+      // frame still gates the connection.
+      return true;
+    }
+    return origin === `chrome-extension://${this.pinnedExtensionId}`;
+  }
+
   private handleConnection(ws: WebSocket, req: IncomingMessage): void {
     let state: "awaiting_hello" | "ready" | "closed" = "awaiting_hello";
     const helloTimer = setTimeout(() => {
       if (state === "awaiting_hello") {
-        try { ws.close(CloseCode.HELLO_TIMEOUT, "hello_timeout"); } catch { /* ignore */ }
+        try {
+          ws.close(CloseCode.HELLO_TIMEOUT, "hello_timeout");
+        } catch {
+          /* ignore */
+        }
       }
     }, HELLO_TIMEOUT_MS);
     if (typeof helloTimer === "object" && "unref" in helloTimer) helloTimer.unref();
@@ -378,7 +505,11 @@ export class WSBridge {
         }
         clearTimeout(helloTimer);
         if (this.activeSocket && this.activeSocket !== ws) {
-          try { this.activeSocket.close(CloseCode.SUPERSEDED, "superseded"); } catch { /* ignore */ }
+          try {
+            this.activeSocket.close(CloseCode.SUPERSEDED, "superseded");
+          } catch {
+            /* ignore */
+          }
         }
         this.activeSocket = ws;
         state = "ready";
@@ -390,7 +521,9 @@ export class WSBridge {
         };
         const features = this.getFeatures?.();
         if (features !== undefined) ack.features = [...features];
-        try { ws.send(JSON.stringify(ack)); } catch (err) {
+        try {
+          ws.send(JSON.stringify(ack));
+        } catch (err) {
           void this.logger.write({ dir: "system", event: "ack_send_error", error: String(err) });
         }
         void this.logger.write({
@@ -399,6 +532,33 @@ export class WSBridge {
           extension_version: msg.extension_version,
           protocol_version: msg.protocol_version,
         });
+
+        // Pin the extension ID on first successful hello. Subsequent
+        // bridges (same install) reload this from disk and refuse
+        // /pair + WS upgrade from any other chrome-extension origin.
+        // Fail-soft on persistence errors — the live socket is already
+        // token-authed; we just lose race-protection on the next boot.
+        if (this.pinnedExtensionId === null) {
+          const origin = req.headers.origin ?? "";
+          const extId = this.extensionIdFromOrigin(origin);
+          if (extId !== null) {
+            this.pinnedExtensionId = extId;
+            void this.logger.write({
+              dir: "system",
+              event: "extension_pinned",
+              extension_id: extId,
+            });
+            if (this.onExtensionPin) {
+              void this.onExtensionPin(extId).catch((err: unknown) =>
+                this.logger.write({
+                  dir: "system",
+                  event: "extension_pin_persist_error",
+                  error: err instanceof Error ? err.message : String(err),
+                }),
+              );
+            }
+          }
+        }
         return;
       }
 
@@ -449,8 +609,9 @@ export class WSBridge {
       }
     });
 
-    ws.on("error", (err) =>
-      void this.logger.write({ dir: "system", event: "ws_error", error: String(err) }),
+    ws.on(
+      "error",
+      (err) => void this.logger.write({ dir: "system", event: "ws_error", error: String(err) }),
     );
   }
 
@@ -494,7 +655,11 @@ export class WSBridge {
   }
 
   private closeWith(ws: WebSocket, code: number, reason: string): void {
-    try { ws.close(code, reason); } catch { /* ignore */ }
+    try {
+      ws.close(code, reason);
+    } catch {
+      /* ignore */
+    }
     void this.logger.write({ dir: "system", event: "close", code, reason });
   }
 
@@ -503,7 +668,11 @@ export class WSBridge {
     const current = this.isConnected();
     if (current === this.lastNotifiedConnected) return;
     this.lastNotifiedConnected = current;
-    try { this.onConnectionChange(current); } catch { /* ignore */ }
+    try {
+      this.onConnectionChange(current);
+    } catch {
+      /* ignore */
+    }
   }
 }
 

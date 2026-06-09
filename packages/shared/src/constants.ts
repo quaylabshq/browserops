@@ -40,6 +40,14 @@ export const STATE_DIR_NAME = ".browserops";
 export const TOKEN_FILENAME = "token";
 export const LOG_FILENAME = "log.jsonl";
 export const RISKY_DOMAINS_FILENAME = "risky-domains.json";
+/**
+ * Pinned extension ID — the chrome-extension://<id> Origin of the first
+ * extension that successfully paired with this bridge install. Written
+ * 0600 after the first hello frame is acked; subsequent `/pair` calls
+ * are refused unless their Origin matches. `browserops init --repair`
+ * deletes this file to allow re-pairing after an uninstall.
+ */
+export const EXTENSION_ID_FILENAME = "extension_id";
 
 /**
  * Multi-session daemon paths. The shim binary connects to this socket;
