@@ -5,12 +5,7 @@ import { DEFAULT_WS_PORT, ENV } from "@browserops/shared";
 import { ensureDaemonRunning, isDaemonAlive, resolveShimBin } from "../lib/daemon.js";
 import { STATE_DIR, daemonLogPath } from "../lib/paths.js";
 import { ok, info, warn, err, header, c, dim } from "../lib/ui.js";
-import {
-  detectClients,
-  INSTALLERS,
-  type ClientId,
-  type ClientInfo,
-} from "../installers/index.js";
+import { detectClients, INSTALLERS, type ClientId, type ClientInfo } from "../installers/index.js";
 import {
   readConfig,
   setConfigValue,
@@ -21,12 +16,7 @@ import {
 } from "../lib/config.js";
 import { getCliTelemetry } from "../lib/telemetry.js";
 import { installAllClaudeSkills } from "../installers/skill.js";
-import {
-  FEATURES,
-  FEATURE_METADATA,
-  isFeatureName,
-  type FeatureName,
-} from "@browserops/shared";
+import { FEATURES, isFeatureName, type FeatureName } from "@browserops/shared";
 
 export interface InitOpts {
   yes?: boolean;
@@ -55,10 +45,7 @@ export async function runInit(opts: InitOpts = {}): Promise<void> {
   await fs.mkdir(STATE_DIR, { recursive: true });
   ok(`state directory: ${STATE_DIR}`);
 
-  const port = Number.parseInt(
-    process.env[ENV.PORT] ?? String(DEFAULT_WS_PORT),
-    10,
-  );
+  const port = Number.parseInt(process.env[ENV.PORT] ?? String(DEFAULT_WS_PORT), 10);
 
   if (!opts.dryRun) {
     if (await isDaemonAlive()) {
@@ -69,9 +56,7 @@ export async function runInit(opts: InitOpts = {}): Promise<void> {
         await ensureDaemonRunning({});
         ok(`bridge running on port ${port}`);
       } catch (e) {
-        err(
-          `bridge failed to start: ${e instanceof Error ? e.message : String(e)}`,
-        );
+        err(`bridge failed to start: ${e instanceof Error ? e.message : String(e)}`);
         process.exit(1);
       }
     }
@@ -127,12 +112,10 @@ async function askForEmail(opts: InitOpts): Promise<boolean> {
   if (raw.length === 0) return false;
 
   await setIdentityEmail(raw);
-  ok(`saved email: ${raw}  ${dim('(change with: browserops identify --email <new>)')}`);
+  ok(`saved email: ${raw}  ${dim("(change with: browserops identify --email <new>)")}`);
   const t = getCliTelemetry();
   if (t) {
-    t.identify(
-      { email: raw, identified_via: "init", identified_at: new Date().toISOString() },
-    );
+    t.identify({ email: raw, identified_via: "init", identified_at: new Date().toISOString() });
     t.alias(raw);
     t.capture("cli.identify_set", { via: "init" });
   }
@@ -190,18 +173,20 @@ async function seedDefaultLauncher(dryRun: boolean): Promise<void> {
     return;
   }
   await setConfigValue("default_launcher", "claude");
-  ok(`default_launcher: claude  ${dim('(change with: browserops config set default_launcher codex)')}`);
+  ok(
+    `default_launcher: claude  ${dim("(change with: browserops config set default_launcher codex)")}`,
+  );
 }
 
 function printSafeModePolicy(): void {
   process.stdout.write(
     `\n${c.bold("Safe mode")} ${dim("(off by default)")}\n` +
-    `  browserops invokes ${c.cyan("claude --dangerously-skip-permissions")} and ${c.cyan("codex exec --full-auto")}\n` +
-    `  so the agent runs without per-action approval prompts. Browser-side risky\n` +
-    `  actions (executing JS, sensitive domains, procedures marked ${c.cyan("risky")}) are\n` +
-    `  still gated by browserops' own approval system, regardless of safe mode.\n\n` +
-    `  Turn it on:  ${c.cyan("browserops config set safe_mode true")}\n` +
-    `  ${dim("Cursor has no CLI flag for this — set Settings → Agent → Auto-Run to \"Allow\".")}\n\n`,
+      `  browserops invokes ${c.cyan("claude --dangerously-skip-permissions")} and ${c.cyan("codex exec --full-auto")}\n` +
+      `  so the agent runs without per-action approval prompts. Browser-side risky\n` +
+      `  actions (executing JS, sensitive domains, procedures marked ${c.cyan("risky")}) are\n` +
+      `  still gated by browserops' own approval system, regardless of safe mode.\n\n` +
+      `  Turn it on:  ${c.cyan("browserops config set safe_mode true")}\n` +
+      `  ${dim('Cursor has no CLI flag for this — set Settings → Agent → Auto-Run to "Allow".')}\n\n`,
   );
 }
 
@@ -214,9 +199,7 @@ async function runMcpInstaller(opts: InitOpts): Promise<void> {
   if (opts.client) {
     chosen = parseClientList(opts.client, all);
   } else if (opts.yes) {
-    chosen = all
-      .filter((c) => c.detected && !c.alreadyInstalled)
-      .map((c) => c.id);
+    chosen = all.filter((c) => c.detected && !c.alreadyInstalled).map((c) => c.id);
     if (chosen.length === 0) {
       info("no detected clients need install");
       return;
@@ -239,7 +222,7 @@ async function runMcpInstaller(opts: InitOpts): Promise<void> {
   if (invocation.command === "browserops-shim") {
     warn(
       "could not resolve @browserops/bridge — writing bare `browserops-shim`. " +
-      "If your MCP client cannot find it, install browserops globally or pass --client.",
+        "If your MCP client cannot find it, install browserops globally or pass --client.",
     );
   }
   const spec = { command: invocation.command, args: invocation.args };
@@ -264,7 +247,10 @@ async function runMcpInstaller(opts: InitOpts): Promise<void> {
 function parseClientList(raw: string, all: ClientInfo[]): ClientId[] {
   const known = new Set(ALL_CLIENT_IDS);
   const ids: ClientId[] = [];
-  for (const tok of raw.split(",").map((s) => s.trim()).filter(Boolean)) {
+  for (const tok of raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)) {
     if (!known.has(tok as ClientId)) {
       warn(`unknown client "${tok}" (valid: ${ALL_CLIENT_IDS.join(", ")})`);
       continue;
@@ -375,7 +361,7 @@ async function configureFeatures(opts: InitOpts): Promise<void> {
   );
 
   const chosen = new Set<FeatureName>(
-    (result["ids"] as string[] | undefined ?? []).filter(isFeatureName),
+    ((result["ids"] as string[] | undefined) ?? []).filter(isFeatureName),
   );
   const partial: Partial<Record<FeatureName, boolean>> = {};
   for (const name of FEATURES) partial[name] = chosen.has(name);
@@ -389,7 +375,10 @@ async function configureFeatures(opts: InitOpts): Promise<void> {
 
 function parseFeatureList(raw: string): Set<FeatureName> {
   const out = new Set<FeatureName>();
-  for (const tok of raw.split(",").map((s) => s.trim()).filter(Boolean)) {
+  for (const tok of raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)) {
     if (isFeatureName(tok)) out.add(tok);
     else warn(`unknown feature "${tok}" (valid: ${FEATURES.join(", ")})`);
   }
@@ -452,4 +441,3 @@ function readPairCodeFromLog(): string | undefined {
     return undefined;
   }
 }
-

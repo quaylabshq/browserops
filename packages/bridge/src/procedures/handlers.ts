@@ -11,10 +11,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import YAML from "yaml";
 
-import {
-  proceduresRoot,
-  procedureYamlPath,
-} from "./paths.js";
+import { proceduresRoot, procedureYamlPath } from "./paths.js";
 import {
   CodedError,
   readProcedureYaml,
@@ -33,15 +30,13 @@ import { shouldDemoteFromHealth } from "./health.js";
 import { makeProcedureExecutor, type InProcessDispatch } from "./execute.js";
 import { makeResumeHandler } from "./resume.js";
 import type { WSBridgeLike } from "../mcp-server.js";
+import type { HealthDef } from "@browserops/shared";
 
 const NAME_PATTERN = /^[a-z][a-z0-9_.-]{0,79}$/;
 
 function assertName(value: unknown, field = "name"): string {
   if (typeof value !== "string" || value.length === 0) {
-    throw new CodedError(
-      "INVALID_PARAMS",
-      `${field} must be a non-empty string`,
-    );
+    throw new CodedError("INVALID_PARAMS", `${field} must be a non-empty string`);
   }
   if (!NAME_PATTERN.test(value)) {
     throw new CodedError(
@@ -82,9 +77,7 @@ void toEntry;
 
 // ---- handleSearch ----
 
-export async function handleSearch(
-  raw: Record<string, unknown>,
-): Promise<unknown> {
+export async function handleSearch(raw: Record<string, unknown>): Promise<unknown> {
   const query = raw["query"];
   if (typeof query !== "string") {
     throw new CodedError("INVALID_PARAMS", "query must be a string");
@@ -126,10 +119,7 @@ export async function handleSearch(
   }
   if (raw["include_drafts"] !== undefined) {
     if (typeof raw["include_drafts"] !== "boolean") {
-      throw new CodedError(
-        "INVALID_PARAMS",
-        "include_drafts must be a boolean",
-      );
+      throw new CodedError("INVALID_PARAMS", "include_drafts must be a boolean");
     }
     options.include_drafts = raw["include_drafts"] as boolean;
   }
@@ -146,7 +136,7 @@ interface ProcedureMeta {
   created: string;
   last_verified: string;
   status: "draft" | "trusted";
-  health?: import("@browserops/shared").HealthDef;
+  health?: HealthDef;
 }
 
 export interface GetResult {
@@ -171,33 +161,25 @@ function extractMeta(parsed: unknown, defaultTs: string): ProcedureMeta {
     };
   }
   const m = (parsed as Record<string, unknown>)["meta"] as Record<string, unknown>;
-  const status: "draft" | "trusted" =
-    m["status"] === "trusted" ? "trusted" : "draft";
+  const status: "draft" | "trusted" = m["status"] === "trusted" ? "trusted" : "draft";
   const out: ProcedureMeta = {
     version: typeof m["version"] === "number" ? m["version"] : 1,
     created: typeof m["created"] === "string" ? m["created"] : defaultTs,
-    last_verified:
-      typeof m["last_verified"] === "string" ? m["last_verified"] : defaultTs,
+    last_verified: typeof m["last_verified"] === "string" ? m["last_verified"] : defaultTs,
     status,
   };
   if (typeof m["health"] === "object" && m["health"] !== null) {
-    out.health = m["health"] as import("@browserops/shared").HealthDef;
+    out.health = m["health"] as HealthDef;
   }
   return out;
 }
 
-export async function handleGet(
-  raw: Record<string, unknown>,
-): Promise<GetResult> {
+export async function handleGet(raw: Record<string, unknown>): Promise<GetResult> {
   const name = assertName(raw["name"]);
   const manifest = await ensureIndex(proceduresRoot());
   const entry = manifest.procedures[name];
   if (!entry) {
-    throw new CodedError(
-      "PROCEDURE_NOT_FOUND",
-      `procedure not found: ${name}`,
-      { name },
-    );
+    throw new CodedError("PROCEDURE_NOT_FOUND", `procedure not found: ${name}`, { name });
   }
 
   const absPath = path.join(proceduresRoot(), entry.path);
@@ -215,11 +197,9 @@ export async function handleGet(
   try {
     parsed = YAML.parse(yamlText);
   } catch (e) {
-    throw new CodedError(
-      "PROCEDURE_SCHEMA_INVALID",
-      `YAML parse error: ${(e as Error).message}`,
-      { name },
-    );
+    throw new CodedError("PROCEDURE_SCHEMA_INVALID", `YAML parse error: ${(e as Error).message}`, {
+      name,
+    });
   }
 
   return { yaml: yamlText, path: entry.path, meta: extractMeta(parsed, defaultTs) };
@@ -238,19 +218,14 @@ export interface SaveResult {
   demote_reason?: string;
 }
 
-export async function handleSave(
-  raw: Record<string, unknown>,
-): Promise<SaveResult> {
+export async function handleSave(raw: Record<string, unknown>): Promise<SaveResult> {
   const name = assertName(raw["name"]);
   const yamlInput = raw["yaml"];
   if (typeof yamlInput !== "string") {
     throw new CodedError("INVALID_PARAMS", "yaml must be a string");
   }
   if (yamlInput.length > 65536) {
-    throw new CodedError(
-      "INVALID_PARAMS",
-      "yaml exceeds maximum length of 65536 characters",
-    );
+    throw new CodedError("INVALID_PARAMS", "yaml exceeds maximum length of 65536 characters");
   }
 
   const owner =
@@ -268,10 +243,7 @@ export async function handleSave(
     raw["overwrite"] !== undefined
       ? (() => {
           if (typeof raw["overwrite"] !== "boolean") {
-            throw new CodedError(
-              "INVALID_PARAMS",
-              "overwrite must be a boolean",
-            );
+            throw new CodedError("INVALID_PARAMS", "overwrite must be a boolean");
           }
           return raw["overwrite"];
         })()
@@ -281,10 +253,7 @@ export async function handleSave(
     raw["bump_success"] !== undefined
       ? (() => {
           if (typeof raw["bump_success"] !== "boolean") {
-            throw new CodedError(
-              "INVALID_PARAMS",
-              "bump_success must be a boolean",
-            );
+            throw new CodedError("INVALID_PARAMS", "bump_success must be a boolean");
           }
           return raw["bump_success"];
         })()
@@ -294,16 +263,10 @@ export async function handleSave(
   try {
     parsed = YAML.parse(yamlInput);
   } catch (e) {
-    throw new CodedError(
-      "PROCEDURE_SCHEMA_INVALID",
-      `YAML parse error: ${(e as Error).message}`,
-    );
+    throw new CodedError("PROCEDURE_SCHEMA_INVALID", `YAML parse error: ${(e as Error).message}`);
   }
   if (typeof parsed !== "object" || parsed === null) {
-    throw new CodedError(
-      "PROCEDURE_SCHEMA_INVALID",
-      "parsed YAML must be an object",
-    );
+    throw new CodedError("PROCEDURE_SCHEMA_INVALID", "parsed YAML must be an object");
   }
 
   const parsedName = (parsed as Record<string, unknown>)["name"];
@@ -360,11 +323,9 @@ export async function handleSave(
     for (const ref of parsedObj["uses"] as unknown[]) {
       if (typeof ref !== "string") continue;
       if (!manifest.procedures[ref]) {
-        throw new CodedError(
-          "PROCEDURE_NOT_FOUND",
-          `uses: references unknown procedure "${ref}"`,
-          { ref },
-        );
+        throw new CodedError("PROCEDURE_NOT_FOUND", `uses: references unknown procedure "${ref}"`, {
+          ref,
+        });
       }
     }
   }
@@ -407,11 +368,7 @@ export async function handleSave(
       version: priorMeta.version + 1,
       created: priorMeta.created,
       last_verified: now,
-      status: shouldDemote
-        ? "draft"
-        : wantsBump
-          ? "trusted"
-          : priorMeta.status,
+      status: shouldDemote ? "draft" : wantsBump ? "trusted" : priorMeta.status,
     };
     // Preserve health across overwrites — it's executor-managed.
     if (priorMeta.health !== undefined) newMeta.health = priorMeta.health;
@@ -447,9 +404,7 @@ export interface DeleteResult {
   path: string;
 }
 
-export async function handleDelete(
-  raw: Record<string, unknown>,
-): Promise<DeleteResult> {
+export async function handleDelete(raw: Record<string, unknown>): Promise<DeleteResult> {
   const name = assertName(raw["name"]);
 
   const force =
@@ -466,11 +421,7 @@ export async function handleDelete(
   const entry = manifest.procedures[name];
 
   if (!entry) {
-    throw new CodedError(
-      "PROCEDURE_NOT_FOUND",
-      `procedure not found: ${name}`,
-      { name },
-    );
+    throw new CodedError("PROCEDURE_NOT_FOUND", `procedure not found: ${name}`, { name });
   }
 
   if (!force && entry.usedBy && entry.usedBy.length > 0) {
@@ -499,9 +450,7 @@ export async function handleDelete(
 
 type HandlerFn = (raw: Record<string, unknown>) => Promise<unknown>;
 
-export function buildProcedureHandlers(
-  wsBridge: WSBridgeLike,
-): Record<string, HandlerFn> {
+export function buildProcedureHandlers(wsBridge: WSBridgeLike): Record<string, HandlerFn> {
   // Self-referential dispatcher so `do: procedure_call` steps recurse
   // into the same executor without round-tripping through the WebSocket
   // bridge. The executor closure binds late so the inProcess function can
@@ -512,10 +461,7 @@ export function buildProcedureHandlers(
 
   const inProcess: InProcessDispatch = async (toolName, params) => {
     if (toolName === "procedures_execute") return executor(params);
-    throw new CodedError(
-      "INVALID_PARAMS",
-      `inProcessDispatch refused unknown tool: ${toolName}`,
-    );
+    throw new CodedError("INVALID_PARAMS", `inProcessDispatch refused unknown tool: ${toolName}`);
   };
 
   executor = makeProcedureExecutor(wsBridge, inProcess) as HandlerFn;

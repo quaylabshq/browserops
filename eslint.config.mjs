@@ -3,7 +3,16 @@ import tsParser from "@typescript-eslint/parser";
 
 export default [
   {
-    ignores: ["**/dist/**", "**/node_modules/**", "**/*.tsbuildinfo"],
+    ignores: [
+      "**/dist/**",
+      "**/node_modules/**",
+      "**/*.tsbuildinfo",
+      "**/coverage/**",
+      "**/tsup.config.ts",
+      "**/vite.config.ts",
+      "**/vitest.config.ts",
+      "**/vitest.integration.config.ts",
+    ],
   },
   {
     files: ["**/*.ts", "**/*.tsx", "**/*.mts"],
@@ -12,7 +21,8 @@ export default [
       parserOptions: {
         ecmaVersion: 2022,
         sourceType: "module",
-        project: ["./packages/*/tsconfig.json"],
+        projectService: true,
+        tsconfigRootDir: import.meta.dirname,
       },
     },
     plugins: {

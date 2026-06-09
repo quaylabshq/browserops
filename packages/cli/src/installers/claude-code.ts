@@ -1,5 +1,5 @@
 import { exec } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
@@ -66,7 +66,8 @@ export const claudeCodeInstaller: ClientInstaller = {
     }
 
     try {
-      const addArgs = spec.args && spec.args.length > 0 ? ` -- ${spec.command}${argsStr}` : ` -- ${spec.command}`;
+      const addArgs =
+        spec.args && spec.args.length > 0 ? ` -- ${spec.command}${argsStr}` : ` -- ${spec.command}`;
       await execAsync(`claude mcp add browserops --scope user${addArgs}`);
       return { changed: true, configPath: CONFIG_PATH, message: "registered via `claude mcp add`" };
     } catch {
@@ -88,7 +89,12 @@ export const claudeCodeInstaller: ClientInstaller = {
       await mkdir(dirname(CONFIG_PATH), { recursive: true });
       const backupPath = await backup(CONFIG_PATH);
       await atomicWrite(CONFIG_PATH, after + "\n");
-      return { changed: true, configPath: CONFIG_PATH, backupPath, message: `merged ${CONFIG_PATH}` };
+      return {
+        changed: true,
+        configPath: CONFIG_PATH,
+        backupPath,
+        message: `merged ${CONFIG_PATH}`,
+      };
     }
   },
 
@@ -114,7 +120,12 @@ export const claudeCodeInstaller: ClientInstaller = {
       delete existing.mcpServers["browserops"];
       const backupPath = await backup(CONFIG_PATH);
       await atomicWrite(CONFIG_PATH, JSON.stringify(existing, null, 2) + "\n");
-      return { changed: true, configPath: CONFIG_PATH, backupPath, message: `removed from ${CONFIG_PATH}` };
+      return {
+        changed: true,
+        configPath: CONFIG_PATH,
+        backupPath,
+        message: `removed from ${CONFIG_PATH}`,
+      };
     }
   },
 };
