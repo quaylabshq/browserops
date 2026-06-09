@@ -1,0 +1,73 @@
+name: Bug report
+description: Something in browserops is broken or behaves unexpectedly.
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Please run `browserops doctor` and paste the output below — it includes the bridge version, port, token presence, and detected MCP clients, which we need to triage.
+
+        If this is a **procedure** that fails on a specific site, please use the "Procedure failure" template instead — it asks for the YAML + the divergence envelope, which usually pinpoints the cause.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug.
+      placeholder: "I ran `browserops 'open hacker news'` and the daemon crashed with..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+      placeholder: "The new tab to open and the agent to read the top story."
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. `browserops init`
+        2. `browserops "..."`
+        3. See error
+    validations:
+      required: true
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: "`browserops doctor` output"
+      render: shell
+      placeholder: "$ browserops doctor\n..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: log
+    attributes:
+      label: Last 20 lines of `~/.browserops/log.jsonl`
+      description: "Run `tail -20 ~/.browserops/log.jsonl`. Redact anything sensitive."
+      render: json
+    validations:
+      required: false
+
+  - type: input
+    id: mcp-client
+    attributes:
+      label: MCP client
+      description: "Claude Code, Cursor, Codex CLI, Continue, Windsurf, Zed, custom SDK agent…"
+      placeholder: "Claude Code 1.0.x"
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: OS + Chrome version
+      placeholder: "macOS 15.1, Chrome 132.0.6834.84"
+    validations:
+      required: true

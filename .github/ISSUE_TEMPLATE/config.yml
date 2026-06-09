@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question or discussion
+    url: https://github.com/quaylabshq/browserops/discussions
+    about: For questions, design discussions, or "how do I do X?" — use Discussions, not Issues.
+  - name: Security disclosure
+    url: https://github.com/quaylabshq/browserops/security/advisories/new
+    about: Found a vulnerability? Report it privately, not in a public issue. See SECURITY.md.

@@ -1,0 +1,59 @@
+name: Procedure failure
+description: A saved procedure is not working as expected.
+labels: ["procedures", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Procedure failures are usually caused by site UI drift (locator selectors stopped resolving), a missing `expect:` predicate, or an over-eager `forbidden:` block.
+
+        The fastest way for us to diagnose is to see the YAML + the `divergence` envelope from the failing run.
+
+  - type: input
+    id: name
+    attributes:
+      label: Procedure name
+      placeholder: "gmail.send_email"
+    validations:
+      required: true
+
+  - type: textarea
+    id: yaml
+    attributes:
+      label: Procedure YAML
+      description: "Output of `procedures_get({name: 'your.procedure'})` — paste the `yaml` field. Redact any secrets baked into inputs."
+      render: yaml
+    validations:
+      required: true
+
+  - type: textarea
+    id: execute-result
+    attributes:
+      label: "`procedures_execute` result"
+      description: "The full JSON result. Include `status`, `divergence`, `step_results`, and any `effect` envelopes."
+      render: json
+    validations:
+      required: true
+
+  - type: textarea
+    id: meta-health
+    attributes:
+      label: "`meta.health` snapshot"
+      description: "From the same `procedures_get` call. Surfaces drift indicators (relocate-rate, target_changed, ambiguous_resolves)."
+      render: json
+    validations:
+      required: false
+
+  - type: input
+    id: site
+    attributes:
+      label: Target site
+      placeholder: "https://mail.google.com"
+    validations:
+      required: true
+
+  - type: textarea
+    id: site-observations
+    attributes:
+      label: Anything notable about the site UI?
+      placeholder: "Recent rename of the Send button to 'Send & schedule'; a new cookie banner appears…"
