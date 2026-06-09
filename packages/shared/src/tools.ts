@@ -234,7 +234,7 @@ const pageEffectSchema: JSONSchemaObject = {
     truncated: { type: "boolean" },
   },
   required: ["dom", "url", "focus", "network", "console_errors", "window_ms"] as const,
-  additionalProperties: true, // forward-compat for Phase 2+
+  additionalProperties: true, // forward-compat: tolerate future effect fields
 } as const;
 
 const actionExpectationSchema: JSONSchemaObject = {
@@ -259,7 +259,10 @@ const actionExpectationSchema: JSONSchemaObject = {
       },
     },
     mutations_at_least: { type: "integer", minimum: 0 },
-    network_endpoint: { type: "string", description: "Regex matched against any captured endpoint." },
+    network_endpoint: {
+      type: "string",
+      description: "Regex matched against any captured endpoint.",
+    },
     focus_to: { type: "string", description: "CSS selector / ref expected to hold focus." },
     visual_delta_at_least: { type: "number", minimum: 0, maximum: 1 },
     title_matches: { type: "string" },
@@ -304,7 +307,11 @@ const warningsOutputSchema: JSONSchemaObject = {
 // Error-code bundles
 // ---------------------------------------------------------------------------
 
-const BASE_CODES = ["TIMEOUT", "INTERNAL", "INVALID_PARAMS"] as const satisfies readonly ErrorCode[];
+const BASE_CODES = [
+  "TIMEOUT",
+  "INTERNAL",
+  "INVALID_PARAMS",
+] as const satisfies readonly ErrorCode[];
 const TAB_CODES = ["TAB_NOT_FOUND"] as const satisfies readonly ErrorCode[];
 const REF_CODES = [
   "REF_STALE",
@@ -459,7 +466,8 @@ const switchTab: ToolDef = {
 
 const navigate: ToolDef = {
   name: "browser_navigate",
-  description: "Point the tab at a URL and optionally wait for page load. Returns `page_effect` when observe_effects is on, `warnings?` when expect_effect mismatches, and an `effect` page_effect envelope (mutations, network, visual hash diff, focus, new dialogs, a11y diff, console errors) for the action window.",
+  description:
+    "Point the tab at a URL and optionally wait for page load. Returns `page_effect` when observe_effects is on, `warnings?` when expect_effect mismatches, and an `effect` page_effect envelope (mutations, network, visual hash diff, focus, new dialogs, a11y diff, console errors) for the action window.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -519,12 +527,7 @@ const back: ToolDef = {
   },
   action_weight: 1,
   risky: "never",
-  errorCodes: [
-    ...BASE_CODES,
-    ...TAB_CODES,
-    ...MUTATING_CODES,
-    "NAVIGATION_IN_PROGRESS",
-  ] as const,
+  errorCodes: [...BASE_CODES, ...TAB_CODES, ...MUTATING_CODES, "NAVIGATION_IN_PROGRESS"] as const,
 } as const;
 
 const forward: ToolDef = {
@@ -550,12 +553,7 @@ const forward: ToolDef = {
   },
   action_weight: 1,
   risky: "never",
-  errorCodes: [
-    ...BASE_CODES,
-    ...TAB_CODES,
-    ...MUTATING_CODES,
-    "NAVIGATION_IN_PROGRESS",
-  ] as const,
+  errorCodes: [...BASE_CODES, ...TAB_CODES, ...MUTATING_CODES, "NAVIGATION_IN_PROGRESS"] as const,
 } as const;
 
 const reload: ToolDef = {
@@ -582,12 +580,7 @@ const reload: ToolDef = {
   },
   action_weight: 1,
   risky: "never",
-  errorCodes: [
-    ...BASE_CODES,
-    ...TAB_CODES,
-    ...MUTATING_CODES,
-    "NAVIGATION_IN_PROGRESS",
-  ] as const,
+  errorCodes: [...BASE_CODES, ...TAB_CODES, ...MUTATING_CODES, "NAVIGATION_IN_PROGRESS"] as const,
 } as const;
 
 const screenshot: ToolDef = {
@@ -694,11 +687,7 @@ const screenshot: ToolDef = {
   },
   action_weight: 0.5,
   risky: "never",
-  errorCodes: [
-    ...BASE_CODES,
-    ...TAB_CODES,
-    "CDP_ATTACH_FAILED",
-  ] as const,
+  errorCodes: [...BASE_CODES, ...TAB_CODES, "CDP_ATTACH_FAILED"] as const,
 } as const;
 
 const read: ToolDef = {
@@ -826,7 +815,8 @@ const quickRead: ToolDef = {
       role: {
         type: "string",
         maxLength: 32,
-        description: "Filter results to elements with this ARIA role (e.g. 'button', 'textbox', 'link').",
+        description:
+          "Filter results to elements with this ARIA role (e.g. 'button', 'textbox', 'link').",
       },
       viewport_only: { type: "boolean", default: false },
       scope: {
@@ -845,12 +835,14 @@ const quickRead: ToolDef = {
       only_enabled: {
         type: "boolean",
         default: false,
-        description: "Filter to matches that are not `disabled_visual` (greyed out, pointer-events:none, etc.).",
+        description:
+          "Filter to matches that are not `disabled_visual` (greyed out, pointer-events:none, etc.).",
       },
       only_visible: {
         type: "boolean",
         default: false,
-        description: "Filter to matches whose computed visibility is true (display !== none, visibility !== hidden, opacity > 0.01).",
+        description:
+          "Filter to matches whose computed visibility is true (display !== none, visibility !== hidden, opacity > 0.01).",
       },
       only_in_viewport: {
         type: "boolean",
@@ -861,7 +853,8 @@ const quickRead: ToolDef = {
         type: "object",
         additionalProperties: false,
         required: ["x", "y", "w", "h"] as const,
-        description: "Filter to matches whose bounding box intersects this CSS-pixel region (relative to the viewport).",
+        description:
+          "Filter to matches whose bounding box intersects this CSS-pixel region (relative to the viewport).",
         properties: {
           x: { type: "number" },
           y: { type: "number" },
@@ -921,7 +914,8 @@ const quickRead: ToolDef = {
         },
       },
       match: {
-        description: "Set when best_match: true. The single highest-confidence match (or null when no matches found).",
+        description:
+          "Set when best_match: true. The single highest-confidence match (or null when no matches found).",
         type: ["object", "null"],
         additionalProperties: true,
       },
@@ -1078,14 +1072,12 @@ const clickByText: ToolDef = {
       tab_id: tabIdSchema,
       text: { type: "string", minLength: 1, maxLength: 256 },
       match: {
-        description:
-          "How to compare `text` against each candidate's accessible name.",
+        description: "How to compare `text` against each candidate's accessible name.",
         enum: ["exact", "prefix", "substring"] as const,
         default: "substring",
       },
       role: {
-        description:
-          "If set, only match elements with this semantic role (button, link, etc.).",
+        description: "If set, only match elements with this semantic role (button, link, etc.).",
         type: "string",
         maxLength: 32,
       },
@@ -1240,7 +1232,7 @@ const findAndReplace: ToolDef = {
 const press: ToolDef = {
   name: "browser_press",
   description:
-    "Send a keyboard-only chord to the tab (CDP key names). Does not target a specific ref. Leading entries are treated as modifiers and the final entry as the key — e.g. [\"Primary\",\"KeyA\"] sends select-all. Use `Primary` instead of Meta/Control for portable chords; the extension resolves it to Meta on macOS and Control elsewhere at dispatch time. Returns `{pressed, page_effect?, effect, warnings?}` — `effect` is the page_effect envelope (mutations, network, visual hash diff, focus, new dialogs, a11y diff, console errors).",
+    'Send a keyboard-only chord to the tab (CDP key names). Does not target a specific ref. Leading entries are treated as modifiers and the final entry as the key — e.g. ["Primary","KeyA"] sends select-all. Use `Primary` instead of Meta/Control for portable chords; the extension resolves it to Meta on macOS and Control elsewhere at dispatch time. Returns `{pressed, page_effect?, effect, warnings?}` — `effect` is the page_effect envelope (mutations, network, visual hash diff, focus, new dialogs, a11y diff, console errors).',
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -1279,11 +1271,7 @@ const press: ToolDef = {
   },
   action_weight: 1,
   risky: "never",
-  errorCodes: [
-    ...BASE_CODES,
-    ...TAB_CODES,
-    ...MUTATING_CODES,
-  ] as const,
+  errorCodes: [...BASE_CODES, ...TAB_CODES, ...MUTATING_CODES] as const,
 } as const;
 
 const scroll: ToolDef = {
@@ -1298,19 +1286,12 @@ const scroll: ToolDef = {
       tab_id: tabIdSchema,
       direction: { enum: ["up", "down", "left", "right", "top", "bottom"] as const },
       amount: {
-        description:
-          "Pixels, or 'page' for one viewport height/width. Ignored for 'top'/'bottom'.",
-        oneOf: [
-          { type: "integer", minimum: 1, maximum: 100000 },
-          { const: "page" },
-        ],
+        description: "Pixels, or 'page' for one viewport height/width. Ignored for 'top'/'bottom'.",
+        oneOf: [{ type: "integer", minimum: 1, maximum: 100000 }, { const: "page" }],
       },
       ref: refSchema,
     },
-    oneOf: [
-      { required: ["direction"] as const },
-      { required: ["ref"] as const },
-    ],
+    oneOf: [{ required: ["direction"] as const }, { required: ["ref"] as const }],
   },
   outputSchema: {
     type: "object",
@@ -1323,12 +1304,7 @@ const scroll: ToolDef = {
   },
   action_weight: 0.5,
   risky: "never",
-  errorCodes: [
-    ...BASE_CODES,
-    ...TAB_CODES,
-    ...REF_CODES,
-    ...MUTATING_CODES,
-  ] as const,
+  errorCodes: [...BASE_CODES, ...TAB_CODES, ...REF_CODES, ...MUTATING_CODES] as const,
 } as const;
 
 const hover: ToolDef = {
@@ -1364,18 +1340,13 @@ const hover: ToolDef = {
   },
   action_weight: 0.5,
   risky: "never",
-  errorCodes: [
-    ...BASE_CODES,
-    ...TAB_CODES,
-    ...REF_CODES,
-    ...MUTATING_CODES,
-  ] as const,
+  errorCodes: [...BASE_CODES, ...TAB_CODES, ...REF_CODES, ...MUTATING_CODES] as const,
 } as const;
 
 const describeRef: ToolDef = {
   name: "browser_describe_ref",
   description:
-    "Return the live state of an element referenced by a prior browser_read(a11y_tree). Cheaper than re-reading the whole tree when you just need to check \"is the button enabled yet?\", \"did my input land?\", or \"is the focus where I expect?\". Does not mutate the page.",
+    'Return the live state of an element referenced by a prior browser_read(a11y_tree). Cheaper than re-reading the whole tree when you just need to check "is the button enabled yet?", "did my input land?", or "is the focus where I expect?". Does not mutate the page.',
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -1507,7 +1478,8 @@ const waitFor: ToolDef = {
         additionalProperties: false,
         required: ["ref"] as const,
         properties: { ref: refSchema },
-        description: "After the wait condition is met, click this ref. Eliminates a round-trip. Mutually exclusive with then_type.",
+        description:
+          "After the wait condition is met, click this ref. Eliminates a round-trip. Mutually exclusive with then_type.",
       },
       then_type: {
         type: "object",
@@ -1517,7 +1489,8 @@ const waitFor: ToolDef = {
           ref: refSchema,
           text: { type: "string", maxLength: 32768 },
         },
-        description: "After the wait condition is met, type into this ref. Eliminates a round-trip. Mutually exclusive with then_click.",
+        description:
+          "After the wait condition is met, type into this ref. Eliminates a round-trip. Mutually exclusive with then_click.",
       },
     },
     anyOf: [
@@ -1708,7 +1681,15 @@ const proceduresSearch: ToolDef = {
         items: {
           type: "object",
           additionalProperties: false,
-          required: ["name", "kind", "description", "inputs", "triggers", "side_effects", "score"] as const,
+          required: [
+            "name",
+            "kind",
+            "description",
+            "inputs",
+            "triggers",
+            "side_effects",
+            "score",
+          ] as const,
           properties: {
             name: { type: "string" },
             kind: { enum: ["leaf", "composite"] as const },
@@ -1894,7 +1875,13 @@ const proceduresExecute: ToolDef = {
   outputSchema: {
     type: "object",
     additionalProperties: true,
-    required: ["completed", "status", "steps_executed", "step_results", "used_llm_fallback"] as const,
+    required: [
+      "completed",
+      "status",
+      "steps_executed",
+      "step_results",
+      "used_llm_fallback",
+    ] as const,
     properties: {
       completed: { type: "boolean" },
       status: {
@@ -2018,7 +2005,7 @@ const loreSave: ToolDef = {
         type: "string",
         pattern: loreNamePattern,
         description:
-          "Stable identifier, e.g. \"feedback_terse_responses\" or \"project_q2_migration\". Lowercase, dot/underscore/hyphen separators.",
+          'Stable identifier, e.g. "feedback_terse_responses" or "project_q2_migration". Lowercase, dot/underscore/hyphen separators.',
       },
       description: {
         type: "string",
@@ -2055,7 +2042,8 @@ const loreSave: ToolDef = {
       path: { type: "string" },
       created: {
         type: "boolean",
-        description: "True when a new lore entry was created, false when an existing one was overwritten.",
+        description:
+          "True when a new lore entry was created, false when an existing one was overwritten.",
       },
     },
   },
@@ -2174,8 +2162,8 @@ const setSessionName: ToolDef = {
   description:
     "Rename this MCP session. The new name updates the Chrome tab-group label so the user " +
     "can tell at a glance which agent is responsible for which tabs. Default names come from " +
-    "the MCP client (\"Claude Code\", \"Cursor\", …); use this when multiple sessions are alive " +
-    "and you want a task-specific label like \"scrape-amazon\". Keep names short — Chrome " +
+    'the MCP client ("Claude Code", "Cursor", …); use this when multiple sessions are alive ' +
+    'and you want a task-specific label like "scrape-amazon". Keep names short — Chrome ' +
     "truncates long tab-group titles aggressively.",
   inputSchema: {
     type: "object",

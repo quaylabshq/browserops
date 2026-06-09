@@ -19,7 +19,7 @@ export type ClaimResult =
   | { ok: false; status: "owned_by_other"; owner_session_id: string }
   | { ok: false; status: "unknown" };
 
-export type TabClaimListener = (record: TabRecord, session_id: string) => void;
+export type TabClaimListener = (record: TabRecord, sessionId: string) => void;
 export type TabReleaseListener = (record: TabRecord) => void;
 
 /**
@@ -58,7 +58,10 @@ export class TabRegistry {
     this.releaseListeners.push(listener);
   }
 
-  mint(chromeTabId: number, partial: Omit<TabRecord, "tab_id" | "chrome_tab_id" | "owner_session_id">): TabRecord {
+  mint(
+    chromeTabId: number,
+    partial: Omit<TabRecord, "tab_id" | "chrome_tab_id" | "owner_session_id">,
+  ): TabRecord {
     const existing = this.byChromeId.get(chromeTabId);
     if (existing) {
       const rec = this.byTabId.get(existing);
@@ -99,28 +102,28 @@ export class TabRegistry {
     return rec;
   }
 
-  update(tab_id: string, patch: Partial<TabRecord>): TabRecord | undefined {
-    const rec = this.byTabId.get(tab_id);
+  update(tabId: string, patch: Partial<TabRecord>): TabRecord | undefined {
+    const rec = this.byTabId.get(tabId);
     if (!rec) return undefined;
     Object.assign(rec, patch);
     return rec;
   }
 
-  remove(tab_id: string): void {
-    const rec = this.byTabId.get(tab_id);
+  remove(tabId: string): void {
+    const rec = this.byTabId.get(tabId);
     if (rec) this.byChromeId.delete(rec.chrome_tab_id);
-    this.byTabId.delete(tab_id);
+    this.byTabId.delete(tabId);
   }
 
   /** Raw lookup ignoring ownership. Use sparingly — daemon internals only. */
-  get(tab_id: string): TabRecord | undefined {
-    return this.byTabId.get(tab_id);
+  get(tabId: string): TabRecord | undefined {
+    return this.byTabId.get(tabId);
   }
 
   /** Raw lookup by chrome_tab_id ignoring ownership. Daemon internals only. */
   getByChromeId(chromeTabId: number): TabRecord | undefined {
-    const tab_id = this.byChromeId.get(chromeTabId);
-    return tab_id ? this.byTabId.get(tab_id) : undefined;
+    const tabId = this.byChromeId.get(chromeTabId);
+    return tabId ? this.byTabId.get(tabId) : undefined;
   }
 
   /**
@@ -128,21 +131,21 @@ export class TabRegistry {
    * by another session — same observable behaviour as a missing tab,
    * which is what we want: callers can map to TAB_NOT_FOUND uniformly.
    */
-  getVisibleTo(tab_id: string, session_id: string): TabRecord | undefined {
-    const rec = this.byTabId.get(tab_id);
+  getVisibleTo(tabId: string, sessionId: string): TabRecord | undefined {
+    const rec = this.byTabId.get(tabId);
     if (!rec) return undefined;
     if (rec.owner_session_id === null) return rec;
-    return rec.owner_session_id === session_id ? rec : undefined;
+    return rec.owner_session_id === sessionId ? rec : undefined;
   }
 
   /**
    * All tabs visible to a session: own claimed tabs plus every
    * user-owned (unclaimed) tab. Other sessions' tabs are filtered out.
    */
-  listVisibleTo(session_id: string): TabRecord[] {
+  listVisibleTo(sessionId: string): TabRecord[] {
     const out: TabRecord[] = [];
     for (const rec of this.byTabId.values()) {
-      if (rec.owner_session_id === null || rec.owner_session_id === session_id) {
+      if (rec.owner_session_id === null || rec.owner_session_id === sessionId) {
         out.push(rec);
       }
     }
@@ -150,10 +153,10 @@ export class TabRegistry {
   }
 
   /** All tabs currently owned by a given session. */
-  listOwnedBy(session_id: string): TabRecord[] {
+  listOwnedBy(sessionId: string): TabRecord[] {
     const out: TabRecord[] = [];
     for (const rec of this.byTabId.values()) {
-      if (rec.owner_session_id === session_id) out.push(rec);
+      if (rec.owner_session_id === sessionId) out.push(rec);
     }
     return out;
   }
@@ -171,18 +174,22 @@ export class TabRegistry {
    *                   trying to claim a known-shared tab.
    *  - unknown:       tab_id doesn't exist.
    */
-  claim(tab_id: string, session_id: string): ClaimResult {
-    const rec = this.byTabId.get(tab_id);
+  claim(tabId: string, sessionId: string): ClaimResult {
+    const rec = this.byTabId.get(tabId);
     if (!rec) return { ok: false, status: "unknown" };
-    if (rec.owner_session_id === session_id) {
+    if (rec.owner_session_id === sessionId) {
       return { ok: true, status: "already_yours", record: rec };
     }
     if (rec.owner_session_id !== null) {
       return { ok: false, status: "owned_by_other", owner_session_id: rec.owner_session_id };
     }
-    rec.owner_session_id = session_id;
+    rec.owner_session_id = sessionId;
     for (const l of this.claimListeners) {
-      try { l(rec, session_id); } catch { /* listeners must not break the registry */ }
+      try {
+        l(rec, sessionId);
+      } catch {
+        /* listeners must not break the registry */
+      }
     }
     return { ok: true, status: "claimed", record: rec };
   }
@@ -192,13 +199,17 @@ export class TabRegistry {
    * on tabs the session doesn't own (returns false in those cases so
    * the caller can map to TAB_NOT_FOUND).
    */
-  release(tab_id: string, session_id: string): TabRecord | undefined {
-    const rec = this.byTabId.get(tab_id);
+  release(tabId: string, sessionId: string): TabRecord | undefined {
+    const rec = this.byTabId.get(tabId);
     if (!rec) return undefined;
-    if (rec.owner_session_id !== session_id) return undefined;
+    if (rec.owner_session_id !== sessionId) return undefined;
     rec.owner_session_id = null;
     for (const l of this.releaseListeners) {
-      try { l(rec); } catch { /* ignore */ }
+      try {
+        l(rec);
+      } catch {
+        /* ignore */
+      }
     }
     return rec;
   }
@@ -209,17 +220,21 @@ export class TabRegistry {
    * staying invisible forever. Returns the released chrome_tab_ids
    * so the caller can broadcast release_tab events.
    */
-  releaseAll(session_id: string): TabRecord[] {
+  releaseAll(sessionId: string): TabRecord[] {
     const released: TabRecord[] = [];
     for (const rec of this.byTabId.values()) {
-      if (rec.owner_session_id === session_id) {
+      if (rec.owner_session_id === sessionId) {
         rec.owner_session_id = null;
         released.push(rec);
       }
     }
     for (const rec of released) {
       for (const l of this.releaseListeners) {
-        try { l(rec); } catch { /* ignore */ }
+        try {
+          l(rec);
+        } catch {
+          /* ignore */
+        }
       }
     }
     return released;
