@@ -27,6 +27,7 @@ browserops init
 This is a one-shot wizard. It mints `~/.browserops/token`, creates an empty `~/browserops/procedures/shared/` directory, starts the bridge daemon on `127.0.0.1:57321`, then detects your installed MCP clients (Claude Code, Cursor, Zed, Continue, Windsurf, Codex) and offers to register `browserops` in each of their configs. Re-running it is safe and idempotent.
 
 Flags:
+
 - `--yes` — non-interactive (accept all detected clients)
 - `--no-mcp` — skip MCP-client install
 - `--client claude-code,cursor` — explicit subset
@@ -96,6 +97,7 @@ There are **two independent gates**: one inside browserops (which browser action
 browserops runs in **auto-approve mode by default**: risky actions (`browser_execute_js`, click/type on sensitive domains, procedures marked `risky: true`) proceed without prompting.
 
 To require manual approval instead, use any of these:
+
 - `BROWSEROPS_APPROVAL=gate browserops start`
 - Check **Require approval for risky actions** in the extension popup.
 
@@ -107,11 +109,11 @@ Audit trail: every auto-approved action is written to the trace file when `BROWS
 
 When you run `browserops "task"`, the CLI spawns your default launcher with permission prompts skipped so the agent can complete the task without you babysitting:
 
-| Launcher | What we pass |
-|---|---|
-| Claude Code | `claude --dangerously-skip-permissions` |
-| Codex CLI | `codex exec --full-auto` (skips approvals, keeps the codex sandbox on) |
-| Cursor | no CLI flag exists — set Cursor → **Settings → Agent → Auto-Run** to "Allow" |
+| Launcher    | What we pass                                                                 |
+| ----------- | ---------------------------------------------------------------------------- |
+| Claude Code | `claude --dangerously-skip-permissions`                                      |
+| Codex CLI   | `codex exec --full-auto` (skips approvals, keeps the codex sandbox on)       |
+| Cursor      | no CLI flag exists — set Cursor → **Settings → Agent → Auto-Run** to "Allow" |
 
 Flip on safe mode any time to restore the launcher's own per-action prompts:
 
@@ -213,10 +215,10 @@ Then mirror the same port in the extension's options page.
 
 Two clients auto-discover it with no setup:
 
-| Client | How |
-|---|---|
-| **Claude Code** | Reads `CLAUDE.md` (symlink → `AGENTS.md`) from the repo root automatically |
-| **OpenAI Codex CLI** | Reads `AGENTS.md` from the repo root automatically |
+| Client               | How                                                                        |
+| -------------------- | -------------------------------------------------------------------------- |
+| **Claude Code**      | Reads `CLAUDE.md` (symlink → `AGENTS.md`) from the repo root automatically |
+| **OpenAI Codex CLI** | Reads `AGENTS.md` from the repo root automatically                         |
 
 All other clients need a per-project copy into their rules slot. Run from inside the project:
 
@@ -226,33 +228,41 @@ browserops install-rules
 
 This writes the appropriate file for each detected client:
 
-| Client | Slot |
-|---|---|
-| **Cursor** | `.cursor/rules/browserops.mdc` (frontmatter + AGENTS.md) |
-| **Windsurf / Codeium** | block in `.windsurfrules` |
-| **GitHub Copilot** | block in `.github/copilot-instructions.md` |
-| **Continue** | `customInstructions` in `.continue/config.json` |
-| **Zed** | manual paste into Settings → Assistant → System prompt |
+| Client                 | Slot                                                     |
+| ---------------------- | -------------------------------------------------------- |
+| **Cursor**             | `.cursor/rules/browserops.mdc` (frontmatter + AGENTS.md) |
+| **Windsurf / Codeium** | block in `.windsurfrules`                                |
+| **GitHub Copilot**     | block in `.github/copilot-instructions.md`               |
+| **Continue**           | `customInstructions` in `.continue/config.json`          |
+| **Zed**                | manual paste into Settings → Assistant → System prompt   |
 
 Re-running `install-rules` is idempotent — it replaces the existing block in place via sentinel comments rather than appending duplicates.
 
-## Available tools (v1)
+## Available tools
 
-Observation (no rate cost): `browser_list_tabs`, `browser_current_tab`, `browser_wait_for`
+**Tabs:** `browser_list_tabs`, `browser_current_tab`, `browser_new_tab`, `browser_close_tab`, `browser_switch_tab`, `browser_set_session_name`, `browser_release_tab`
 
-Navigation: `browser_new_tab`, `browser_close_tab`, `browser_switch_tab`, `browser_navigate`, `browser_back`, `browser_forward`, `browser_reload`
+**Navigation:** `browser_navigate`, `browser_back`, `browser_forward`, `browser_reload`
 
-Content: `browser_screenshot` (viewport), `browser_read` (`text` / `markdown` / `sanitized_html` / `a11y_tree`)
+**Observation:** `browser_observe` (auto-picks the cheapest representation per page), `browser_read` (full a11y tree as serialised blob), `browser_quick_read` (find an element by label), `browser_describe_ref`, `browser_query_selector`, `browser_screenshot`, `browser_wait_for`, `browser_wait_for_idle`
 
-Input: `browser_click`, `browser_type`, `browser_press`, `browser_scroll`, `browser_hover`, `browser_execute_js`
+**Input:** `browser_click`, `browser_click_at`, `browser_click_by_text`, `browser_type`, `browser_find_and_replace`, `browser_press`, `browser_hover`, `browser_scroll`, `browser_execute_js`, `browser_set_cdp`
+
+**Locator helpers (procedures feature):** `browser_locate`, `browser_propose_locator`
+
+**Procedure runtime (procedures feature):** `procedures_search`, `procedures_get`, `procedures_save`, `procedures_delete`, `procedures_execute`, `procedures_resume`
+
+**Cross-agent lore (lore feature):** `lore_save`, `lore_search`, `lore_get`, `lore_delete`
 
 Full JSON schemas for each tool are declared in `packages/shared/src/tools.ts`.
 
-**How click/type work.** First call `browser_read` with `mode: "a11y_tree"` on the tab — you get back a numbered tree of interactive elements and their refs. Then call `browser_click({tab_id, ref})` or `browser_type({tab_id, ref, text})` using those refs. Refs invalidate on navigation (same-doc or cross-doc) — re-read the tree after a navigation.
+**How click/type work.** Every http(s) tab the agent drives gets persistent `chrome.debugger` attached automatically. `browser_click` / `browser_click_at` / `browser_click_by_text` / `browser_type` / `browser_press` / `browser_hover` dispatch through CDP `Input.*` — trusted compositor events (`isTrusted: true`) that traverse iframes, shadow DOM, and `isTrusted`-gated handlers (Slack, Discord, Linear, Notion, Gmail rich editors, hover-only menus, canvas apps). Chrome's "controlled by automated test software" banner appears on every driven tab while CDP is attached — this is expected, not a failure signal. Opt out per-tab with `browser_set_cdp(tab_id, false)` if a site genuinely needs synthetic dispatch instead.
 
-**v1 limitations:**
-- Click / type fire synthetic DOM events (`isTrusted: false`). Sites that hard-check trusted events (reCAPTCHA, some banks) will refuse them. A CDP-based trusted-events path is planned for v2.
-- `browser_screenshot` with `full_page: true` returns `INTERNAL` — viewport-only in v1.
+For element addressing, `browser_observe` is the cheapest path for general state reads; `browser_quick_read` finds a specific element by label; `browser_read` returns the full a11y tree. When authoring a procedure, `browser_propose_locator` walks a tier-1-first ladder (`aria_label`, `data_testid`, `href`, `attr`) and returns the smallest stable locator descriptor for an element.
+
+**Limitations:**
+
+- `browser_screenshot` with `full_page: true` returns `INTERNAL` — viewport-only.
 
 ## Procedures
 
@@ -273,15 +283,17 @@ The procedure schema and search ranking live in `packages/shared/src/procedures.
 When the agent decides nothing trusted covers a flow, it invokes the **`browserops-teach`** skill (at `~/.claude/skills/browserops-teach/SKILL.md`, mirrored to `skills/browserops-teach.md`). The skill is autonomous-by-default: one user prompt in, one message out. It pre-flight checks for an existing procedure, reads lore for app priors, probes the live page directly with `browser_*` tools, drafts the YAML in-context, verifies via `procedures_execute` against a goal-grounded predicate, then saves with `bump_success: true` on a clean run.
 
 The agent asks at most one clarifying question, only when a hard safety gate fires:
+
 1. **Cross-user side effects with no safe self-test path** (real recipients, real visibility).
 2. **Money or account-level irreversibility** (payments, transfers, deletions, plan changes).
 3. **Goal genuinely unparseable AND no app context in tabs/lore.**
 
-For typical messaging goals like *"DM Pratham on Slack"* none of these gates fire — the agent goes silent immediately and reports once when done.
+For typical messaging goals like _"DM Pratham on Slack"_ none of these gates fire — the agent goes silent immediately and reports once when done.
 
 This replaces the older two-stage `teach` (manual demo recorder) + `autoteach` (iterative replay-and-optimize loop) machinery, which has been removed. With autonomous-by-default, the agent watches its own `browser_*` calls and authors the YAML in its own context — no separate keystroke recorder, no bridge-side replay loop, no transient session storage.
 
 Authoring checklist (still applies when authoring procedures by hand):
+
 - Search first. If an existing procedure already covers the flow, reuse it instead of writing a parallel version.
 - Write leaves around real UI states. Each leaf should represent one stable transition.
 - Test every leaf on the live site before composing it. Do not save unverified procedures (or save them as drafts and only `bump_success` after verification).
@@ -298,16 +310,16 @@ A small markdown store at `~/browserops/lore/<name>.md` that any MCP client can 
 
 ### When to use it
 
-Save a lore entry when the lesson is useful to *any* MCP client that might pick up the same browserops bridge — browserops behavior, browser-flow gotchas, selectors that survive across sessions, project context. Keep Claude-private things (keybindings, response style) in the auto-lore store.
+Save a lore entry when the lesson is useful to _any_ MCP client that might pick up the same browserops bridge — browserops behavior, browser-flow gotchas, selectors that survive across sessions, project context. Keep Claude-private things (keybindings, response style) in the auto-lore store.
 
 ### MCP tools
 
-| Tool | Inputs | Output |
-|---|---|---|
-| `lore_save` | `name`, `description`, `type` (`user`\|`feedback`\|`project`\|`reference`), `body`, `replace?:bool` | `{saved, path, created}` |
-| `lore_search` | `query`, `type?`, `limit?` (1..25, default 10), `min_score?` (0..1, default 0.2) | `{matches, total, truncated}` |
-| `lore_get` | `name` | `{meta, body, path}` |
-| `lore_delete` | `name` | `{deleted, path}` |
+| Tool            | Inputs                                                                                              | Output                        |
+| --------------- | --------------------------------------------------------------------------------------------------- | ----------------------------- |
+| `lore_save`   | `name`, `description`, `type` (`user`\|`feedback`\|`project`\|`reference`), `body`, `replace?:bool` | `{saved, path, created}`      |
+| `lore_search` | `query`, `type?`, `limit?` (1..25, default 10), `min_score?` (0..1, default 0.2)                    | `{matches, total, truncated}` |
+| `lore_get`    | `name`                                                                                              | `{meta, body, path}`          |
+| `lore_delete` | `name`                                                                                              | `{deleted, path}`             |
 
 `name` matches `^[a-z][a-z0-9._-]{0,79}$`. Duplicate names reject with `LORE_ALREADY_EXISTS` unless `replace:true`. Search returns metadata only — fetch the body with `lore_get`.
 
@@ -351,9 +363,9 @@ pnpm setup
 
 `pnpm setup` = `pnpm install && pnpm build && node packages/cli/dist/index.js init` (same wizard as the published `browserops init`, just driven from your clone). The build produces:
 
-- `packages/cli/dist/index.js`        — the `browserops` CLI binary
-- `packages/bridge/dist/index.js`     — the `browserops-shim` MCP server binary
-- `packages/extension/dist/`          — the unpacked Chrome extension
+- `packages/cli/dist/index.js` — the `browserops` CLI binary
+- `packages/bridge/dist/index.js` — the `browserops-shim` MCP server binary
+- `packages/extension/dist/` — the unpacked Chrome extension
 
 For local development, load the unpacked extension from `packages/extension/dist/` via `chrome://extensions` → **Load unpacked**, instead of installing from the Chrome Web Store. That way you're testing your local changes.
 
@@ -383,16 +395,36 @@ Currently ~220 unit tests total across shared (envelope guards, tool catalogue i
 
 ## Environment variables
 
-| Var | Default | Purpose |
-|---|---|---|
-| `BROWSEROPS_HOST` | `127.0.0.1` | WebSocket bind host (never `0.0.0.0` — enforced at startup) |
-| `BROWSEROPS_PORT` | `57321` | WebSocket port |
-| `BROWSEROPS_EXTENSION_ID` | empty = any | Origin allowlist; pin this to your extension id in production |
-| `BROWSEROPS_GLOBAL_CAP` | `60` | Global rate-limit cap per minute |
-| `BROWSEROPS_LOG_LEVEL` | `normal` | `normal` truncates strings > 200 chars; `audit` logs full payloads |
-| `BROWSEROPS_APPROVAL` | `auto` | `auto` (default) or `gate`; controls approval mode for risky actions |
-| `BROWSEROPS_TRACE` | unset | `=1` writes trace events including auto-approvals to `~/.browserops/trace.jsonl` |
-| `BROWSEROPS_FEATURES` | unset | Comma-separated experimental feature names to force-enable (e.g. `procedures,lore`). Overrides `~/.browserops/config.json` when explicitly set; an empty string disables everything. Persistent toggles use `browserops feature enable/disable <name>` instead. |
+| Var                       | Default     | Purpose                                                                                                                                                                                                                                                           |
+| ------------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `BROWSEROPS_HOST`         | `127.0.0.1` | WebSocket bind host (never `0.0.0.0` — enforced at startup)                                                                                                                                                                                                       |
+| `BROWSEROPS_PORT`         | `57321`     | WebSocket port                                                                                                                                                                                                                                                    |
+| `BROWSEROPS_EXTENSION_ID` | empty = any | Origin allowlist; pin this to your extension id in production                                                                                                                                                                                                     |
+| `BROWSEROPS_GLOBAL_CAP`   | `60`        | Global rate-limit cap per minute                                                                                                                                                                                                                                  |
+| `BROWSEROPS_LOG_LEVEL`    | `normal`    | `normal` truncates strings > 200 chars; `audit` logs full payloads                                                                                                                                                                                                |
+| `BROWSEROPS_APPROVAL`     | `auto`      | `auto` (default) or `gate`; controls approval mode for risky actions                                                                                                                                                                                              |
+| `BROWSEROPS_TRACE`        | unset       | `=1` writes trace events including auto-approvals to `~/.browserops/trace.jsonl`                                                                                                                                                                                  |
+| `BROWSEROPS_FEATURES`     | unset       | Comma-separated experimental feature names to force-enable (e.g. `procedures,lore`). Overrides `~/.browserops/config.json` when explicitly set; an empty string disables everything. Persistent toggles use `browserops feature enable/disable <name>` instead. |
+| `DO_NOT_TRACK`            | unset       | Standard signal. `=1` disables telemetry entirely (no PostHog events, no install-id alias).                                                                                                                                                                       |
+| `BROWSEROPS_TELEMETRY`    | unset       | browserops-specific telemetry toggle. `=0` disables telemetry. Either this or `DO_NOT_TRACK` disables.                                                                                                                                                            |
+| `BROWSEROPS_ALIAS_EMAIL`  | unset       | Explicit consent to ship the user's email to PostHog as a distinct-id alias (needed for cross-machine merging). Default off — email is **never** sent without this flag set to `1`.                                                                               |
+
+## Telemetry
+
+browserops ships **anonymous usage telemetry** to a PostHog instance (`https://us.i.posthog.com`). The intent is to detect regressions and prioritise features. There is **no** product surface other than that — no third-party sharing, no ads, no profiling.
+
+**What is sent.** Tool name, error code, timing, OS platform/arch, Node major, bridge/cli version, install-id (random UUID, generated locally and stored at `~/.browserops/install-id`). The exact event allowlist is in [`packages/bridge/src/telemetry/redact.ts`](packages/bridge/src/telemetry/redact.ts) — every key not on the allowlist is dropped at the source.
+
+**What is never sent.** Page text, URLs, tab titles, screenshots, the contents of typed input, file paths, MCP-tool payloads, search queries, procedure YAML bodies, lore entries, your email (unless you explicitly opt in — see below).
+
+**Disabling telemetry.** Any of the following:
+
+- `DO_NOT_TRACK=1` — industry-standard signal.
+- `BROWSEROPS_TELEMETRY=0` — browserops-specific flag.
+
+Either disables the PostHog client at boot. There is no fallback channel.
+
+**Email alias is opt-in.** If you've set `identity.email` in `~/.browserops/config.json` (via `browserops identify` or `browserops init`), your email is **not** shipped unless you also export `BROWSEROPS_ALIAS_EMAIL=1`. This is deliberate: the email is only useful as an alias for cross-machine identity merging, and consent matters more than aliasing.
 
 ## Troubleshooting
 
@@ -430,7 +462,7 @@ browserops/
 
 ## Published packages
 
-| Package | Purpose |
-|---|---|
-| [`browserops`](https://www.npmjs.com/package/browserops) | CLI orchestrator. Provides `browserops init`, `--claude/--cursor/--codex`, lifecycle commands. Depends on `@browserops/bridge`. |
-| [`@browserops/bridge`](https://www.npmjs.com/package/@browserops/bridge) | The MCP stdio server (`browserops-shim` binary). What MCP clients spawn. |
+| Package                                                                  | Purpose                                                                                                                         |
+| ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| [`browserops`](https://www.npmjs.com/package/browserops)                 | CLI orchestrator. Provides `browserops init`, `--claude/--cursor/--codex`, lifecycle commands. Depends on `@browserops/bridge`. |
+| [`@browserops/bridge`](https://www.npmjs.com/package/@browserops/bridge) | The MCP stdio server (`browserops-shim` binary). What MCP clients spawn.                                                        |
