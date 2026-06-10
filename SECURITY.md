@@ -18,7 +18,7 @@ Pre-1.0, only the **latest minor** is supported. Once 1.0 ships, the supported w
 Use one of the following private channels:
 
 1. **GitHub Security Advisories** — go to <https://github.com/quaylabshq/browserops/security/advisories/new> and submit a private report. This is the preferred path.
-2. **Email** — <security@quaylabs.io> (or, if unreachable, <saket@quaylabs.io>).
+2. **Email** — <security@quaylabs.io> (or, if unreachable, <saket@browserops.ai>).
 
 When reporting, include:
 

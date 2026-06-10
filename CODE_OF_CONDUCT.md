@@ -10,7 +10,7 @@ This Code of Conduct applies within all project spaces — issues, pull requests
 
 ## Enforcement
 
-Reports of unacceptable behavior may be sent to **saket@quaylabs.io**. All reports will be reviewed and investigated promptly and fairly. The project maintainers are obligated to respect the privacy and security of the reporter of any incident.
+Reports of unacceptable behavior may be sent to **saket@browserops.ai**. All reports will be reviewed and investigated promptly and fairly. The project maintainers are obligated to respect the privacy and security of the reporter of any incident.
 
 Maintainers who do not follow or enforce the Code of Conduct in good faith may face temporary or permanent repercussions as determined by other maintainers.
 
