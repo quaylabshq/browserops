@@ -131,7 +131,7 @@ User clicks once: **"Add to Chrome"** in the Web Store tab. Everything else is a
 
 - Static HTML in `browserops-web/public/welcome/`
 - Per-MCP-client tiles (Claude Code, Cursor, Zed) each with: logo + copyable example prompt
-- Footer: docs link, `saket@quaylabs.io` support
+- Footer: docs link, `saket@browserops.ai` support
 
 ### Phase 6 — polish + safety _(1-2 days)_
 
