@@ -26,6 +26,7 @@ import { runStatus } from "./commands/status.js";
 import { runLogs } from "./commands/logs.js";
 import { runDoctor } from "./commands/doctor.js";
 import { runUpgrade } from "./commands/upgrade.js";
+import { runUninstall } from "./commands/uninstall.js";
 import { runInstallRules } from "./commands/install-rules.js";
 import { runInstallSkill } from "./commands/install-skill.js";
 import { runConfig } from "./commands/config.js";
@@ -49,6 +50,7 @@ const KNOWN_SUBCOMMANDS = new Set([
   "logs",
   "doctor",
   "upgrade",
+  "uninstall",
   "install-rules",
   "install-skill",
   "config",
@@ -96,6 +98,12 @@ cli
   .command("upgrade", "Upgrade browserops globally and refresh skills + MCP-client config")
   .option("--no-restart", "Skip restarting the daemon after upgrade")
   .action((opts) => runUpgrade(opts));
+
+cli
+  .command("uninstall", "Stop the daemon and optionally wipe ~/.browserops/")
+  .option("--purge", "Also delete ~/.browserops/ (token, extension pin, procedures, lore, logs)")
+  .option("--yes", "Skip the confirmation prompt for --purge")
+  .action((opts) => runUninstall(opts));
 
 cli
   .command("install-rules", "Write per-project AGENTS.md rules slots (run inside a project)")
@@ -183,7 +191,14 @@ async function main(): Promise<void> {
     "install-rules": "cli.install_rules_ran",
     "install-skill": "cli.install_skill_ran",
   };
-  const HANDLER_EMITTED = new Set(["init", "upgrade", "feature", "config", "identify"]);
+  const HANDLER_EMITTED = new Set([
+    "init",
+    "upgrade",
+    "uninstall",
+    "feature",
+    "config",
+    "identify",
+  ]);
 
   const recordSubcommand = (): void => {
     const t = getCliTelemetry();

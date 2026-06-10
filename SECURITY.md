@@ -62,6 +62,7 @@ Out of scope (will not be treated as security issues):
 
 - The bridge binds the WebSocket to `127.0.0.1` only and refuses non-loopback Origin and Host values.
 - The token is 64 hex chars, generated with `crypto.randomBytes`, stored at `~/.browserops/token` with file mode `0600`.
+- First-pair-wins extension ID pin: the first chrome-extension Origin to successfully Hello is persisted to `~/.browserops/extension_id` (`0600`). Subsequent `/pair` calls and WS upgrades from any other extension origin are refused. Surviving bridge restarts, this defeats the race where a rogue locally-installed extension watches for bridge starts to steal the token. The extension's onboard page no longer requires a human "Confirm" click — the server-side pin replaces the role the manual confirm used to play. `browserops init --repair` is the documented escape hatch for a legitimate re-pair after a Chrome reinstall.
 - Destructive keyboard chords (close-tab, quit, new-window, etc.) are refused at the extension's input dispatcher before reaching CDP.
 - Telemetry (PostHog) is field-allowlisted via `packages/bridge/src/telemetry/redact.ts`; no page text, URLs, tab titles, or input contents are ever transmitted.
 - Auto-approve mode is the default; the user can opt into approval gating via `BROWSEROPS_APPROVAL=gate` or the extension popup toggle.
