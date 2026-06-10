@@ -15,7 +15,13 @@ interface BridgeFixture {
   port: number;
 }
 
-async function startBridge(opts: { token?: string } = {}): Promise<BridgeFixture> {
+interface StartOpts {
+  token?: string;
+  pinnedExtensionId?: string | null;
+  onExtensionPin?: (extId: string) => Promise<void>;
+}
+
+async function startBridge(opts: StartOpts = {}): Promise<BridgeFixture> {
   const port = 30000 + Math.floor(Math.random() * 20000);
   const bridge = new WSBridge({
     host: "127.0.0.1",
@@ -24,14 +30,16 @@ async function startBridge(opts: { token?: string } = {}): Promise<BridgeFixture
     bridgeVersion: "test-0.0.0",
     logger: stubLogger(),
     onEvent: () => {},
+    pinnedExtensionId: opts.pinnedExtensionId ?? null,
+    onExtensionPin: opts.onExtensionPin,
   });
   await bridge.start();
   return { bridge, port };
 }
 
-function connect(port: number): WebSocket {
+function connect(port: number, origin = "chrome-extension://test"): WebSocket {
   return new WebSocket(`ws://127.0.0.1:${port}/`, {
-    headers: { Origin: "chrome-extension://test" },
+    headers: { Origin: origin },
   });
 }
 
@@ -195,5 +203,193 @@ describe("WSBridge handshake", () => {
       ws.once("error", () => resolve());
       ws.once("unexpected-response", () => resolve());
     });
+  });
+});
+
+describe("WSBridge extension-id pin", () => {
+  it("calls onExtensionPin with the Origin's extension ID on first successful hello", async () => {
+    const pinned: string[] = [];
+    const fixture = await startBridge({
+      onExtensionPin: async (id) => {
+        pinned.push(id);
+      },
+    });
+    try {
+      const ws = connect(fixture.port, "chrome-extension://aaaabbbb");
+      await new Promise<void>((resolve) => ws.once("open", () => resolve()));
+      ws.send(
+        JSON.stringify({
+          type: "hello",
+          token: VALID_TOKEN,
+          protocol_version: PROTOCOL_VERSION,
+          extension_version: "test",
+        }),
+      );
+      await awaitFirstMessage(ws); // ack
+      // onExtensionPin is fire-and-forget; await a microtask.
+      await new Promise((r) => setTimeout(r, 50));
+      expect(pinned).toEqual(["aaaabbbb"]);
+      expect(fixture.bridge.pinnedExtension).toBe("aaaabbbb");
+      ws.close();
+    } finally {
+      await fixture.bridge.stop();
+    }
+  });
+
+  it("does NOT call onExtensionPin a second time once already pinned", async () => {
+    const pinned: string[] = [];
+    const fixture = await startBridge({
+      pinnedExtensionId: "aaaabbbb",
+      onExtensionPin: async (id) => {
+        pinned.push(id);
+      },
+    });
+    try {
+      const ws = connect(fixture.port, "chrome-extension://aaaabbbb");
+      await new Promise<void>((resolve) => ws.once("open", () => resolve()));
+      ws.send(
+        JSON.stringify({
+          type: "hello",
+          token: VALID_TOKEN,
+          protocol_version: PROTOCOL_VERSION,
+          extension_version: "test",
+        }),
+      );
+      await awaitFirstMessage(ws);
+      await new Promise((r) => setTimeout(r, 50));
+      expect(pinned).toEqual([]);
+      ws.close();
+    } finally {
+      await fixture.bridge.stop();
+    }
+  });
+
+  it("rejects WS upgrade from an extension origin that does not match the pin", async () => {
+    const fixture = await startBridge({ pinnedExtensionId: "aaaabbbb" });
+    try {
+      const ws = new WebSocket(`ws://127.0.0.1:${fixture.port}/`, {
+        headers: { Origin: "chrome-extension://ccccdddd" },
+      });
+      await new Promise<void>((resolve) => {
+        ws.once("error", () => resolve());
+        ws.once("unexpected-response", () => resolve());
+      });
+    } finally {
+      await fixture.bridge.stop();
+    }
+  });
+
+  it("still accepts WS upgrade from the pinned extension origin", async () => {
+    const fixture = await startBridge({ pinnedExtensionId: "aaaabbbb" });
+    try {
+      const ws = connect(fixture.port, "chrome-extension://aaaabbbb");
+      await new Promise<void>((resolve) => ws.once("open", () => resolve()));
+      ws.send(
+        JSON.stringify({
+          type: "hello",
+          token: VALID_TOKEN,
+          protocol_version: PROTOCOL_VERSION,
+          extension_version: "test",
+        }),
+      );
+      const ack = (await awaitFirstMessage(ws)) as Record<string, unknown>;
+      expect(ack["type"]).toBe("hello_ack");
+      ws.close();
+    } finally {
+      await fixture.bridge.stop();
+    }
+  });
+
+  it("rejects /pair from an extension origin that does not match the pin", async () => {
+    const fixture = await startBridge({ pinnedExtensionId: "aaaabbbb" });
+    try {
+      const res = await fetch(`http://127.0.0.1:${fixture.port}/pair`, {
+        headers: { Origin: "chrome-extension://ccccdddd" },
+      });
+      expect(res.status).toBe(403);
+      const body = (await res.json()) as { error?: string };
+      expect(body.error).toBe("extension_pinned");
+    } finally {
+      await fixture.bridge.stop();
+    }
+  });
+
+  it("accepts /pair from the pinned extension origin", async () => {
+    const fixture = await startBridge({ pinnedExtensionId: "aaaabbbb" });
+    try {
+      const res = await fetch(`http://127.0.0.1:${fixture.port}/pair`, {
+        headers: { Origin: "chrome-extension://aaaabbbb" },
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        code?: string;
+        token?: string;
+        bridge_version?: string;
+      };
+      expect(body.token).toBe(VALID_TOKEN);
+    } finally {
+      await fixture.bridge.stop();
+    }
+  });
+});
+
+describe("WSBridge /status endpoint", () => {
+  it("returns pair_consumed=false, extension_connected=false on a fresh bridge", async () => {
+    const fixture = await startBridge();
+    try {
+      const res = await fetch(`http://127.0.0.1:${fixture.port}/status`);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        pair_consumed?: boolean;
+        extension_connected?: boolean;
+        extension_id?: string | null;
+      };
+      expect(body.pair_consumed).toBe(false);
+      expect(body.extension_connected).toBe(false);
+      expect(body.extension_id).toBeNull();
+    } finally {
+      await fixture.bridge.stop();
+    }
+  });
+
+  it("reflects pair_consumed after /pair is hit", async () => {
+    const fixture = await startBridge();
+    try {
+      await fetch(`http://127.0.0.1:${fixture.port}/pair`, {
+        headers: { Origin: "chrome-extension://aaaabbbb" },
+      });
+      const res = await fetch(`http://127.0.0.1:${fixture.port}/status`);
+      const body = (await res.json()) as { pair_consumed?: boolean };
+      expect(body.pair_consumed).toBe(true);
+    } finally {
+      await fixture.bridge.stop();
+    }
+  });
+
+  it("reflects extension_connected=true and the pinned ID after hello", async () => {
+    const fixture = await startBridge();
+    try {
+      const ws = connect(fixture.port, "chrome-extension://aaaabbbb");
+      await new Promise<void>((resolve) => ws.once("open", () => resolve()));
+      ws.send(
+        JSON.stringify({
+          type: "hello",
+          token: VALID_TOKEN,
+          protocol_version: PROTOCOL_VERSION,
+          extension_version: "test",
+        }),
+      );
+      await awaitFirstMessage(ws);
+      const res = await fetch(`http://127.0.0.1:${fixture.port}/status`);
+      const body = (await res.json()) as {
+        extension_connected?: boolean;
+        extension_id?: string | null;
+      };
+      expect(body.extension_connected).toBe(true);
+      expect(body.extension_id).toBe("aaaabbbb");
+      ws.close();
+    } finally {
+      await fixture.bridge.stop();
+    }
   });
 });

@@ -9,18 +9,14 @@
  * tab views, the actual McpBridgeServer instance) lives outside of
  * this module — see daemon.ts.
  */
-import {
-  DEFAULT_WS_HOST,
-  DEFAULT_WS_PORT,
-  ENV,
-  type FeatureName,
-} from "@browserops/shared";
+import { DEFAULT_WS_HOST, DEFAULT_WS_PORT, ENV, type FeatureName } from "@browserops/shared";
 import { createTraceWriter, type TraceWriter } from "./trace-writer.js";
 import { Logger, type LogLevel } from "./logger.js";
 import { loadRiskyDomainMatcher, type RiskyDomainMatcher } from "./risky-domains.js";
 import { Safety } from "./safety.js";
 import { TabRegistry, type TabRecord } from "./tab-registry.js";
 import { loadOrCreateToken } from "./token.js";
+import { loadPinnedExtensionId, persistPinnedExtensionId } from "./extension-pin.js";
 import { WSBridge } from "./ws-server.js";
 import { ensureIndex } from "./procedures/index-builder.js";
 import { proceduresRoot } from "./procedures/paths.js";
@@ -77,7 +73,11 @@ export async function bootDaemonRuntime(opts: BootDaemonRuntimeOptions): Promise
 
   // Mutable hook the daemon overrides post-construction with a fan-out
   // across every active session's per-session RateLimiter.
-  const hooks: { onTabClosed: (tabId: string) => void } = { onTabClosed: () => { /* noop */ } };
+  const hooks: { onTabClosed: (tabId: string) => void } = {
+    onTabClosed: () => {
+      /* noop */
+    },
+  };
   const extensionReadyListeners: Array<() => void> = [];
   let lastExtensionConnected = false;
 
@@ -102,6 +102,7 @@ export async function bootDaemonRuntime(opts: BootDaemonRuntimeOptions): Promise
   }
 
   const token = await loadOrCreateToken();
+  const pinnedExtensionId = await loadPinnedExtensionId();
   const wsBridge = new WSBridge({
     host,
     port,
@@ -109,6 +110,10 @@ export async function bootDaemonRuntime(opts: BootDaemonRuntimeOptions): Promise
     token,
     bridgeVersion: opts.version,
     logger,
+    pinnedExtensionId,
+    onExtensionPin: async (extensionId) => {
+      await persistPinnedExtensionId(extensionId);
+    },
     onEvent: (name, payload) => {
       const minted = handleEvent(name, payload, tabs, hooks.onTabClosed, logger);
       if (minted) {
@@ -118,13 +123,14 @@ export async function bootDaemonRuntime(opts: BootDaemonRuntimeOptions): Promise
             { chrome_tab_id: minted.chrome_tab_id, tab_id: minted.tab_id },
             5_000,
           )
-          .catch((err: unknown) =>
-            void logger.write({
-              dir: "system",
-              event: "assign_tab_id_failed",
-              tab_id: minted.tab_id,
-              error: err instanceof Error ? err.message : String(err),
-            }),
+          .catch(
+            (err: unknown) =>
+              void logger.write({
+                dir: "system",
+                event: "assign_tab_id_failed",
+                tab_id: minted.tab_id,
+                error: err instanceof Error ? err.message : String(err),
+              }),
           );
       }
     },
@@ -133,7 +139,11 @@ export async function bootDaemonRuntime(opts: BootDaemonRuntimeOptions): Promise
       lastExtensionConnected = connected;
       if (connected && !wasConnected) {
         for (const fn of extensionReadyListeners) {
-          try { fn(); } catch { /* ignore */ }
+          try {
+            fn();
+          } catch {
+            /* ignore */
+          }
         }
       }
     },
@@ -190,12 +200,24 @@ export async function bootDaemonRuntime(opts: BootDaemonRuntimeOptions): Promise
       // wires up its listeners (legitimate at boot when the bridge
       // resumes a previously-active extension), fire immediately.
       if (lastExtensionConnected) {
-        try { handler(); } catch { /* ignore */ }
+        try {
+          handler();
+        } catch {
+          /* ignore */
+        }
       }
     },
     shutdown: async () => {
-      try { await wsBridge.stop(); } catch { /* ignore */ }
-      try { await traceWriter.close(); } catch { /* ignore */ }
+      try {
+        await wsBridge.stop();
+      } catch {
+        /* ignore */
+      }
+      try {
+        await traceWriter.close();
+      } catch {
+        /* ignore */
+      }
       await logger.close();
     },
   };
