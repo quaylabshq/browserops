@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import {
   DAEMON_PIDFILE_FILENAME,
   DAEMON_SOCKET_FILENAME,
+  EXTENSION_ID_FILENAME,
   LOG_FILENAME,
   STATE_DIR_NAME,
   TOKEN_FILENAME,
@@ -12,6 +13,7 @@ import {
 export const STATE_DIR = join(homedir(), STATE_DIR_NAME);
 
 export const tokenPath = (): string => join(STATE_DIR, TOKEN_FILENAME);
+export const extensionIdPath = (): string => join(STATE_DIR, EXTENSION_ID_FILENAME);
 export const logPath = (): string => join(STATE_DIR, LOG_FILENAME);
 export const daemonLogPath = (): string => join(STATE_DIR, "daemon.log");
 /**

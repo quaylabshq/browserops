@@ -3,6 +3,7 @@ import { join } from "node:path";
 import {
   DAEMON_PIDFILE_FILENAME,
   DAEMON_SOCKET_FILENAME,
+  EXTENSION_ID_FILENAME,
   LOG_FILENAME,
   RISKY_DOMAINS_FILENAME,
   STATE_DIR_NAME,
@@ -15,6 +16,10 @@ export function stateDir(): string {
 
 export function tokenPath(): string {
   return join(stateDir(), TOKEN_FILENAME);
+}
+
+export function extensionIdPath(): string {
+  return join(stateDir(), EXTENSION_ID_FILENAME);
 }
 
 export function logPath(): string {

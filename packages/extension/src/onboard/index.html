@@ -69,19 +69,24 @@
         </div>
       </div>
 
+      <!--
+        Auto-pair: the onboarding tab now stores the token immediately
+        after /pair returns 200 and kicks a reconnect, with no human
+        Confirm button. The race-protection that the manual confirm
+        used to provide is now enforced server-side by the bridge's
+        first-pair-wins extension-ID pin. The pair code is still
+        rendered (and printed in the bridge terminal) so paranoid users
+        can verify out-of-band — but no click is required.
+      -->
       <div id="view-ready" class="card" hidden>
-        <div class="card__title">Pair code</div>
+        <div class="card__title">Connecting…</div>
         <div class="pair-code-wrap">
           <div class="pair-code" id="pair-code">000-000</div>
           <div class="card__body">
-            This code should match the one printed in your bridge's terminal
-            (look for <code>pair code …</code>). If it matches, click Confirm
-            to finish setup.
+            Auto-confirming pair code with the bridge. The same code is
+            printed in your bridge's terminal (<code>pair code …</code>)
+            in case you want to verify it.
           </div>
-        </div>
-        <div class="card__actions">
-          <button id="confirm" type="button" class="btn">Confirm &amp; connect</button>
-          <button id="cancel" type="button" class="btn btn--ghost">Cancel</button>
         </div>
       </div>
 

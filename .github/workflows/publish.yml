@@ -1,0 +1,79 @@
+name: Publish to npm
+
+# Triggers on annotated tags of the form `vX.Y.Z`. Manual dispatch is
+# kept available for re-publishing a tag that failed CI on the npm side
+# (e.g. registry hiccup) without needing to re-tag.
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to publish (e.g. v0.0.10). Leave blank to use the current commit's tag."
+        required: false
+
+permissions:
+  contents: read
+  # id-token: write enables npm provenance (signed attestation linking
+  # the published tarball back to this workflow run). Lets users verify
+  # the package was built from this exact repo + commit.
+  id-token: write
+
+jobs:
+  publish:
+    name: Build, test, publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Full history so `pnpm changelog` / git-based version
+          # detection has something to look at.
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        # Reads pnpm version from package.json `packageManager`.
+        # Passing `version:` here errors with "Multiple versions of pnpm
+        # specified" against any repo that already pins packageManager.
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "pnpm"
+          registry-url: "https://registry.npmjs.org/"
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
+
+      - name: Publish (workspace, public, with provenance)
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: "true"
+        # `pnpm -r publish` walks every package whose package.json has a
+        # version that does not yet exist on the registry. `--no-git-checks`
+        # skips the "working tree must be clean" guard (post-tag we're
+        # always at a clean commit) and `--access public` is required for
+        # the @browserops/* scoped packages on first publish.
+        run: pnpm -r publish --access public --no-git-checks
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Publish run"
+            echo "- Ref: \`${{ github.ref }}\`"
+            echo "- Commit: \`${{ github.sha }}\`"
+            echo "- npm: https://www.npmjs.com/package/browserops"
+          } >> "$GITHUB_STEP_SUMMARY"
