@@ -63,6 +63,23 @@ const ALL_CLIENT_IDS: ClientId[] = [
 export async function runInit(opts: InitOpts = {}): Promise<void> {
   header("browserops init");
 
+  // If stdin isn't a TTY we can't run interactive prompts. This is the
+  // common `curl -fsSL https://browserops.ai/install | bash` shape: the
+  // install script execs us with the curl *pipe* as stdin (the install.sh
+  // tries to reconnect /dev/tty, but a missing/unreadable tty falls through
+  // to here). Without this guard the feature multiselect auto-cancels and
+  // askForEmail's onCancel calls process.exit(130) — killing init *before*
+  // it opens Chrome to pair the extension. Coercing --yes routes every
+  // prompt through its non-interactive default while still running the
+  // extension-pairing step, so onboarding finishes instead of dying silently.
+  if (!opts.yes && process.stdin.isTTY !== true) {
+    warn(
+      "non-interactive stdin — skipping prompts and using defaults. " +
+        `Re-run ${c.cyan("browserops init")} in a terminal to choose features or set your email.`,
+    );
+    opts = { ...opts, yes: true };
+  }
+
   await fs.mkdir(STATE_DIR, { recursive: true });
   ok(`state directory: ${STATE_DIR}`);
 
