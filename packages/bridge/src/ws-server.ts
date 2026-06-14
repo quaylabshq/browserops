@@ -298,6 +298,14 @@ export class WSBridge {
     const urlPath = (req.url ?? "/").split("?", 1)[0] ?? "/";
     const origin = req.headers.origin ?? "";
 
+    // /pair and /status are one-shot / live-state endpoints — their responses
+    // must NEVER be cached by the browser. 410 "already_paired" is cacheable
+    // by default (RFC 7231 §6.1, like 200/301/404), so without this a stale
+    // 410 is replayed from the HTTP cache and survives a bridge restart,
+    // reinstall, and fresh tabs — making re-pairing impossible until the cache
+    // is manually cleared. Set on every response from this handler.
+    res.setHeader("cache-control", "no-store");
+
     if (urlPath === "/status") {
       // Loopback-only status snapshot, used by `browserops init` to
       // detect when the user has installed the extension and paired.
@@ -369,7 +377,15 @@ export class WSBridge {
       return;
     }
 
-    if (this.pairConsumed) {
+    // One-shot guard, with a deliberate exception for re-pairing. We refuse a
+    // second /pair only when we can't positively identify the caller as the
+    // already-pinned extension. When the pinned extension itself re-pairs —
+    // after a reinstall, cleared storage, or a reopened onboarding tab — it's
+    // the same trusted origin reclaiming the token it already held, so hand it
+    // back without forcing a bridge restart. The token is identical either way
+    // (it lives in ~/.browserops/token), so this grants nothing new.
+    const isRepair = this.isPinnedOrigin(origin);
+    if (this.pairConsumed && !isRepair) {
       if (origin) this.writeCorsHeaders(res, origin);
       res.statusCode = 410;
       res.setHeader("content-type", "application/json");
@@ -378,7 +394,11 @@ export class WSBridge {
     }
 
     this.pairConsumed = true;
-    void this.logger.write({ dir: "system", event: "pair_issued", origin });
+    void this.logger.write({
+      dir: "system",
+      event: isRepair ? "pair_reissued" : "pair_issued",
+      origin,
+    });
     if (origin) this.writeCorsHeaders(res, origin);
     res.statusCode = 200;
     res.setHeader("content-type", "application/json");
@@ -464,6 +484,18 @@ export class WSBridge {
       // frame still gates the connection.
       return true;
     }
+    return origin === `chrome-extension://${this.pinnedExtensionId}`;
+  }
+
+  /**
+   * True only when an Origin is *positively* the currently-pinned extension
+   * (pin set AND origin matches). Unlike originMatchesPin, a null pin or an
+   * empty Origin returns false — we use this to let the already-trusted
+   * extension re-pair, which requires actually knowing who it is. An
+   * unidentifiable caller must not be treated as the pinned one.
+   */
+  private isPinnedOrigin(origin: string): boolean {
+    if (this.pinnedExtensionId === null || origin === "") return false;
     return origin === `chrome-extension://${this.pinnedExtensionId}`;
   }
 

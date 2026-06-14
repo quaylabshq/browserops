@@ -331,6 +331,64 @@ describe("WSBridge extension-id pin", () => {
       await fixture.bridge.stop();
     }
   });
+
+  it("sets Cache-Control: no-store on /pair so the browser never caches a 410", async () => {
+    // 410 "already_paired" is cacheable by default; a cached copy would be
+    // replayed across bridge restarts and wedge re-pairing. The 200 path here
+    // and every other /pair response must carry no-store.
+    const fixture = await startBridge({ pinnedExtensionId: "aaaabbbb" });
+    try {
+      const res = await fetch(`http://127.0.0.1:${fixture.port}/pair`, {
+        headers: { Origin: "chrome-extension://aaaabbbb" },
+      });
+      expect(res.headers.get("cache-control")).toBe("no-store");
+    } finally {
+      await fixture.bridge.stop();
+    }
+  });
+
+  it("re-pairs the pinned extension after the token was already consumed", async () => {
+    // The pinned extension reinstalled / cleared storage and asks again. It is
+    // the already-trusted origin reclaiming its own token, so this must NOT
+    // require a bridge restart (no 410).
+    const fixture = await startBridge({ pinnedExtensionId: "aaaabbbb" });
+    try {
+      const first = await fetch(`http://127.0.0.1:${fixture.port}/pair`, {
+        headers: { Origin: "chrome-extension://aaaabbbb" },
+      });
+      expect(first.status).toBe(200);
+
+      const second = await fetch(`http://127.0.0.1:${fixture.port}/pair`, {
+        headers: { Origin: "chrome-extension://aaaabbbb" },
+      });
+      expect(second.status).toBe(200);
+      const body = (await second.json()) as { token?: string };
+      expect(body.token).toBe(VALID_TOKEN);
+    } finally {
+      await fixture.bridge.stop();
+    }
+  });
+
+  it("still returns 410 for a second /pair from a different origin before any pin is set", async () => {
+    // Race-guard: token handed out but the recipient hasn't connected yet (no
+    // pin). A different, unidentifiable origin must not be able to grab it.
+    const fixture = await startBridge();
+    try {
+      const first = await fetch(`http://127.0.0.1:${fixture.port}/pair`, {
+        headers: { Origin: "chrome-extension://aaaabbbb" },
+      });
+      expect(first.status).toBe(200);
+
+      const second = await fetch(`http://127.0.0.1:${fixture.port}/pair`, {
+        headers: { Origin: "chrome-extension://ccccdddd" },
+      });
+      expect(second.status).toBe(410);
+      const body = (await second.json()) as { error?: string };
+      expect(body.error).toBe("already_paired");
+    } finally {
+      await fixture.bridge.stop();
+    }
+  });
 });
 
 describe("WSBridge /status endpoint", () => {
