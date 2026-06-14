@@ -319,10 +319,65 @@ body {
 .setup-title { font-weight: 500; color: var(--color-ink); }
 .setup-desc  { color: var(--color-ink-45); font-weight: 500; }
 
+/* Bridge-not-installed help — shown whenever disconnected. Carries the
+   one-line install command so a user who never ran the bridge installer has
+   the curl command in front of them instead of an inert "Connect" button. */
+#bridge-help { display: none; border-top: 1px solid var(--color-ink-06); }
+#bridge-help.active { display: flex; }
+.bridge-help__title { font-weight: 500; color: var(--color-ink); }
+.bridge-help__desc  { color: var(--color-ink-45); font-weight: 500; }
+.bridge-help__cmd {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+  padding: 6px 6px 6px 9px;
+  background: var(--color-ink-04);
+  border: 1px solid var(--color-ink-08);
+  border-radius: 4px;
+}
+.bridge-help__cmd code {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--color-ink);
+  white-space: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.bridge-help__cmd code::-webkit-scrollbar { display: none; }
+.bridge-help__copy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--color-ink-60);
+  cursor: pointer;
+  transition: background 80ms ease, color 80ms ease;
+  flex-shrink: 0;
+}
+.bridge-help__copy:hover         { background: var(--color-ink-08); color: var(--color-ink); }
+.bridge-help__copy:focus-visible { outline: 0; box-shadow: 0 0 0 3px var(--color-ink-08); }
+.bridge-help__copy svg           { width: 13px; height: 13px; display: block; }
+.bridge-help__copy .icon-check   { display: none; }
+.bridge-help__copy.copied        { color: var(--color-success-ink); }
+.bridge-help__copy.copied .icon-copy  { display: none; }
+.bridge-help__copy.copied .icon-check { display: block; }
+
 /* Main / safety toggling */
 #main { display: flex; flex-direction: column; }
 #main.hidden { display: none; }
-#main.unconfigured > :not(#setup) { display: none; }
+/* The install hint must survive the "no token yet" takeover — that's exactly
+   the case where the bridge most likely isn't installed — so exempt it from
+   the unconfigured blanket-hide alongside #setup. */
+#main.unconfigured > :not(#setup):not(#bridge-help) { display: none; }
 
 /* Safety prompt — divider-led takeover */
 #safety {
