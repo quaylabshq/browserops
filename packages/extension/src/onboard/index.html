@@ -53,6 +53,28 @@
         padding: 1px 6px;
         border-radius: var(--r-sm);
       }
+
+      /* --- install command block (error view) ------------------------ */
+      .install-hint { color: var(--ink-60); margin: 2px 0 0; }
+      .install-cmd {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 8px 8px 12px;
+        background: var(--surface);
+        border: 1px solid var(--ink-08);
+        border-radius: var(--r-md);
+      }
+      .install-cmd code {
+        flex: 1;
+        min-width: 0;
+        font-size: var(--fs-12);
+        color: var(--ink);
+        white-space: nowrap;
+        overflow-x: auto;
+        scrollbar-width: none;
+      }
+      .install-cmd code::-webkit-scrollbar { display: none; }
     </style>
   </head>
   <body>
@@ -93,6 +115,11 @@
       <div id="view-error" class="card card--danger" hidden>
         <div class="card__title">Bridge not reachable</div>
         <p id="error-msg" class="card__body" style="color: var(--danger-ink);"></p>
+        <p class="install-hint">Haven't installed the bridge yet? Run this in your terminal, then Retry:</p>
+        <div class="install-cmd">
+          <code id="install-cmd">curl -fsSL https://browserops.ai/install | bash</code>
+          <button id="copy-install" type="button" class="btn btn--ghost btn--sm">Copy</button>
+        </div>
         <details class="advanced">
           <summary>Set host/port manually</summary>
           <div class="adv-form">

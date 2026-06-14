@@ -19,6 +19,8 @@ const advHost = $<HTMLInputElement>("adv-host");
 const advPort = $<HTMLInputElement>("adv-port");
 const openOptionsBtn = $<HTMLButtonElement>("open-options");
 const openOptionsBtn2 = $<HTMLButtonElement>("open-options-2");
+const copyInstallBtn = $<HTMLButtonElement>("copy-install");
+const installCmd = $<HTMLElement>("install-cmd");
 
 type View = "loading" | "ready" | "error" | "paired" | "consumed";
 
@@ -126,5 +128,25 @@ function openOptions(): void {
 }
 openOptionsBtn.addEventListener("click", openOptions);
 openOptionsBtn2.addEventListener("click", openOptions);
+
+let copyResetTimer: ReturnType<typeof setTimeout> | null = null;
+copyInstallBtn.addEventListener("click", () => {
+  void navigator.clipboard
+    .writeText(installCmd.textContent ?? "")
+    .then(() => {
+      copyInstallBtn.textContent = "Copied";
+      if (copyResetTimer !== null) clearTimeout(copyResetTimer);
+      copyResetTimer = setTimeout(() => {
+        copyInstallBtn.textContent = "Copy";
+      }, 1500);
+    })
+    .catch(() => {
+      const range = document.createRange();
+      range.selectNodeContents(installCmd);
+      const sel = window.getSelection();
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+    });
+});
 
 void attemptPair("127.0.0.1", DEFAULT_WS_PORT);
