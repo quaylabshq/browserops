@@ -13,6 +13,8 @@ const portInput = $<HTMLInputElement>("port");
 const form = $<HTMLFormElement>("form");
 const statusPill = $<HTMLSpanElement>("status");
 const saved = $<HTMLSpanElement>("saved");
+const tokenCmd = $<HTMLElement>("token-cmd");
+const copyTokenCmd = $<HTMLButtonElement>("copy-token-cmd");
 
 async function loadValues(): Promise<void> {
   const s = await chrome.storage.local.get({ token: "", host: "127.0.0.1", port: DEFAULT_WS_PORT });
@@ -45,6 +47,30 @@ form.addEventListener("submit", (e) => {
     window.setTimeout(() => saved.classList.remove("show"), 1200);
     chrome.runtime.sendMessage({ type: "reconnect" }).catch(() => {});
   });
+});
+
+let copyResetTimer: ReturnType<typeof setTimeout> | null = null;
+copyTokenCmd.addEventListener("click", () => {
+  void navigator.clipboard
+    .writeText(tokenCmd.textContent ?? "")
+    .then(() => {
+      copyTokenCmd.classList.add("copied");
+      copyTokenCmd.title = "Copied";
+      if (copyResetTimer !== null) clearTimeout(copyResetTimer);
+      copyResetTimer = setTimeout(() => {
+        copyTokenCmd.classList.remove("copied");
+        copyTokenCmd.title = "Copy command";
+      }, 1500);
+    })
+    .catch(() => {
+      // Clipboard write can be denied; fall back to selecting the text so the
+      // user can copy manually rather than silently doing nothing.
+      const range = document.createRange();
+      range.selectNodeContents(tokenCmd);
+      const sel = window.getSelection();
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+    });
 });
 
 void loadValues();
