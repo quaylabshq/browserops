@@ -68,6 +68,13 @@
   --color-success-bg:     #f0fdf4;
   --color-success-border: #bbf7d0;
   --color-success-ink:    #166534;
+
+  /* Terminal block — dark surface so the command reads as a real shell */
+  --color-term-bg:     #1a191d;
+  --color-term-bar:    #262429;
+  --color-term-text:   #f3f3f5;
+  --color-term-prompt: #7ee787;
+  --color-term-muted:  rgba(255, 255, 255, 0.45);
 }
 
 /* Page base — full-width canvas with the brand bg */
@@ -200,6 +207,99 @@ main {
 .btn:active        { transform: scale(0.98); }
 .btn:focus-visible { outline: 0; box-shadow: 0 0 0 3px var(--color-brand-08); }
 .btn:disabled      { opacity: 0.5; cursor: not-allowed; }
+
+/* Token-help card — terminal block + framing copy */
+.token-help { display: flex; flex-direction: column; gap: 10px; }
+.token-help__title { font-size: 13px; font-weight: 500; color: var(--color-ink); }
+.token-help__desc  { font-size: 12px; font-weight: 500; color: var(--color-ink-45); line-height: 1.5; }
+.token-help__hint  { font-size: 11px; font-weight: 500; color: var(--color-ink-45); line-height: 1.5; }
+.token-help__hint code {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  background: var(--color-ink-04);
+  padding: 1px 5px;
+  border-radius: 4px;
+  color: var(--color-ink);
+}
+
+/* Terminal — macOS-style window: traffic-light title bar + dark body */
+.terminal {
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--color-term-bg);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12), inset 0 0 0 1px rgba(0, 0, 0, 0.2);
+}
+.terminal__bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+  padding: 0 10px;
+  background: var(--color-term-bar);
+}
+.terminal__dots { display: inline-flex; gap: 6px; }
+.terminal__dot { width: 10px; height: 10px; border-radius: 999px; }
+.terminal__dot--red    { background: #ff5f56; }
+.terminal__dot--yellow { background: #ffbd2e; }
+.terminal__dot--green  { background: #27c93f; }
+.terminal__title {
+  flex: 1;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  color: var(--color-term-muted);
+  /* offset the 42 px dot cluster on the left so the title sits truly centered */
+  margin-right: 42px;
+}
+.terminal__body {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 12px 12px 14px;
+}
+.terminal__prompt {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--color-term-prompt);
+  flex-shrink: 0;
+}
+.terminal__body code {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--color-term-text);
+  white-space: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.terminal__body code::-webkit-scrollbar { display: none; }
+.terminal__copy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--color-term-muted);
+  cursor: pointer;
+  transition: background 80ms ease, color 80ms ease;
+  flex-shrink: 0;
+}
+.terminal__copy:hover         { background: rgba(255, 255, 255, 0.16); color: var(--color-term-text); }
+.terminal__copy:focus-visible { outline: 0; box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.18); }
+.terminal__copy svg           { width: 14px; height: 14px; display: block; }
+.terminal__copy .icon-check   { display: none; }
+.terminal__copy.copied        { color: var(--color-term-prompt); }
+.terminal__copy.copied .icon-copy  { display: none; }
+.terminal__copy.copied .icon-check { display: block; }
 
 /* "saved" confirmation chip */
 .saved {

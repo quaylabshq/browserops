@@ -12,6 +12,9 @@ const statusPill = $<HTMLSpanElement>("status");
 const yoloBox = $<HTMLInputElement>("yolo");
 const setupPane = $<HTMLDivElement>("setup");
 const runSetupBtn = $<HTMLButtonElement>("run-setup");
+const bridgeHelp = $<HTMLDivElement>("bridge-help");
+const copyInstallBtn = $<HTMLButtonElement>("copy-install");
+const installCmd = $<HTMLElement>("install-cmd");
 const mainPane = $<HTMLDivElement>("main");
 const safetyPane = $<HTMLDivElement>("safety");
 const safetyTool = $<HTMLDivElement>("safety-tool");
@@ -49,6 +52,11 @@ function renderStatus(connected: boolean): void {
     killBtn.classList.remove("btn--danger");
   }
   killBtn.disabled = false;
+  // Surface the install command whenever we're not connected. From the
+  // extension's vantage point "bridge not installed" and "bridge installed but
+  // not running" are the same failed localhost socket, so the copy is hedged
+  // ("If it isn't installed yet…") rather than asserting it's missing.
+  bridgeHelp.classList.toggle("active", !connected);
 }
 
 function renderSetup(hasToken: boolean): void {
@@ -144,6 +152,31 @@ killBtn.addEventListener("click", () => {
         void refresh();
       });
   }
+});
+
+let copyResetTimer: ReturnType<typeof setTimeout> | null = null;
+copyInstallBtn.addEventListener("click", () => {
+  const cmd = installCmd.textContent ?? "";
+  void navigator.clipboard
+    .writeText(cmd)
+    .then(() => {
+      copyInstallBtn.classList.add("copied");
+      copyInstallBtn.title = "Copied";
+      if (copyResetTimer !== null) clearTimeout(copyResetTimer);
+      copyResetTimer = setTimeout(() => {
+        copyInstallBtn.classList.remove("copied");
+        copyInstallBtn.title = "Copy command";
+      }, 1500);
+    })
+    .catch(() => {
+      // Clipboard write can be denied; fall back to selecting the text so the
+      // user can copy manually rather than silently doing nothing.
+      const range = document.createRange();
+      range.selectNodeContents(installCmd);
+      const sel = window.getSelection();
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+    });
 });
 
 optionsBtn.addEventListener("click", () => {

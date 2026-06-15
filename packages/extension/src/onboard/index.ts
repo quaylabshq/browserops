@@ -11,6 +11,7 @@ const viewLoading = $<HTMLDivElement>("view-loading");
 const viewReady = $<HTMLDivElement>("view-ready");
 const viewError = $<HTMLDivElement>("view-error");
 const viewPaired = $<HTMLDivElement>("view-paired");
+const viewAlready = $<HTMLDivElement>("view-already");
 const viewConsumed = $<HTMLDivElement>("view-consumed");
 const pairCodeEl = $<HTMLDivElement>("pair-code");
 const retryBtn = $<HTMLButtonElement>("retry");
@@ -19,15 +20,50 @@ const advHost = $<HTMLInputElement>("adv-host");
 const advPort = $<HTMLInputElement>("adv-port");
 const openOptionsBtn = $<HTMLButtonElement>("open-options");
 const openOptionsBtn2 = $<HTMLButtonElement>("open-options-2");
+const copyInstallBtn = $<HTMLButtonElement>("copy-install");
+const installCmd = $<HTMLElement>("install-cmd");
+const alreadyStatus = $<HTMLSpanElement>("already-status");
 
-type View = "loading" | "ready" | "error" | "paired" | "consumed";
+type View = "loading" | "ready" | "error" | "paired" | "already" | "consumed";
 
 function show(view: View): void {
   viewLoading.hidden = view !== "loading";
   viewReady.hidden = view !== "ready";
   viewError.hidden = view !== "error";
   viewPaired.hidden = view !== "paired";
+  viewAlready.hidden = view !== "already";
   viewConsumed.hidden = view !== "consumed";
+}
+
+async function hasStoredToken(): Promise<boolean> {
+  const s = await chrome.storage.local.get("token");
+  return typeof s["token"] === "string" && s["token"].length > 0;
+}
+
+// Live connection pill for the "already set up" view. The background SW writes
+// `connected` to storage.local; poll it so the user sees the real state rather
+// than a static claim.
+let alreadyStatusTimer: ReturnType<typeof setInterval> | null = null;
+function startAlreadyStatusPoll(): void {
+  const tick = (): void => {
+    void chrome.storage.local.get("connected").then((s) => {
+      const connected = s["connected"] === true;
+      alreadyStatus.textContent = connected ? "Connected" : "Connecting…";
+      alreadyStatus.classList.toggle("pill--on", connected);
+      alreadyStatus.classList.toggle("pill--off", !connected);
+    });
+  };
+  tick();
+  if (alreadyStatusTimer === null) alreadyStatusTimer = setInterval(tick, 1000);
+}
+
+// Already-paired path: this extension holds a token, so a one-shot /pair
+// refusal (or a reopened tab) is benign. Nudge a reconnect (a no-op if the
+// socket is already live) and show the live status instead of an error.
+function showAlready(): void {
+  chrome.runtime.sendMessage({ type: "reconnect" }).catch(() => {});
+  show("already");
+  startAlreadyStatusPoll();
 }
 
 interface PairResponse {
@@ -47,7 +83,11 @@ async function attemptPair(host: string, port: number): Promise<void> {
   const url = `http://${host}:${port}/pair`;
   let res: Response;
   try {
-    res = await fetch(url, { method: "GET" });
+    // cache: "no-store" — bypass the browser HTTP cache entirely. A 410
+    // "already_paired" is cacheable by default, and a cached one would be
+    // replayed without ever reaching the (possibly restarted) bridge,
+    // permanently wedging re-pairing. Never read or write the cache here.
+    res = await fetch(url, { method: "GET", cache: "no-store" });
   } catch (err) {
     errorMsg.textContent =
       `Couldn't reach ${url}. Make sure the bridge is running ` +
@@ -58,7 +98,12 @@ async function attemptPair(host: string, port: number): Promise<void> {
   }
 
   if (res.status === 410) {
-    show("consumed");
+    // The pair endpoint is one-shot. If this extension already holds a token,
+    // it's the paired one — surface the friendly "already set up" state. Only
+    // when we have no token is 410 a genuine dead-end (another extension
+    // claimed the token, or a stale bridge process), which needs a restart.
+    if (await hasStoredToken()) showAlready();
+    else show("consumed");
     return;
   }
   if (!res.ok) {
@@ -127,4 +172,35 @@ function openOptions(): void {
 openOptionsBtn.addEventListener("click", openOptions);
 openOptionsBtn2.addEventListener("click", openOptions);
 
-void attemptPair("127.0.0.1", DEFAULT_WS_PORT);
+let copyResetTimer: ReturnType<typeof setTimeout> | null = null;
+copyInstallBtn.addEventListener("click", () => {
+  void navigator.clipboard
+    .writeText(installCmd.textContent ?? "")
+    .then(() => {
+      copyInstallBtn.textContent = "Copied";
+      if (copyResetTimer !== null) clearTimeout(copyResetTimer);
+      copyResetTimer = setTimeout(() => {
+        copyInstallBtn.textContent = "Copy";
+      }, 1500);
+    })
+    .catch(() => {
+      const range = document.createRange();
+      range.selectNodeContents(installCmd);
+      const sel = window.getSelection();
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+    });
+});
+
+// Boot. If this extension is already paired and connected, skip the /pair
+// round-trip (which would just return 410) and go straight to the "already
+// set up" view — the common case when a user reopens this tab.
+void (async () => {
+  const s = await chrome.storage.local.get(["token", "connected"]);
+  const haveToken = typeof s["token"] === "string" && s["token"].length > 0;
+  if (haveToken && s["connected"] === true) {
+    showAlready();
+    return;
+  }
+  await attemptPair("127.0.0.1", DEFAULT_WS_PORT);
+})();
