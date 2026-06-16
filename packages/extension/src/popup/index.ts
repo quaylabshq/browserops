@@ -1,5 +1,13 @@
 export {};
 
+import {
+  LAUNCH_ENDPOINT,
+  buildLaunchBody,
+  grabPageMeta,
+  launchStatusMessage,
+  type PageMeta,
+} from "./launch.js";
+
 const $ = <T extends HTMLElement>(id: string): T => {
   const el = document.getElementById(id);
   if (el === null) throw new Error(`missing element #${id}`);
@@ -7,6 +15,8 @@ const $ = <T extends HTMLElement>(id: string): T => {
 };
 
 const killBtn = $<HTMLButtonElement>("kill");
+const launchBtn = $<HTMLButtonElement>("launch-claude");
+const launchStatus = $<HTMLDivElement>("launch-status");
 const optionsBtn = $<HTMLButtonElement>("options");
 const statusPill = $<HTMLSpanElement>("status");
 const yoloBox = $<HTMLInputElement>("yolo");
@@ -182,6 +192,79 @@ copyInstallBtn.addEventListener("click", () => {
 optionsBtn.addEventListener("click", () => {
   void chrome.runtime.openOptionsPage();
 });
+
+async function capturePageMeta(): Promise<PageMeta> {
+  const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  const tab = tabs[0];
+  const url = tab?.url ?? "";
+  const title = tab?.title ?? "";
+  if (tab?.id === undefined) return { url, title };
+  try {
+    const [injected] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: grabPageMeta,
+    });
+    const r = injected?.result as
+      | { title?: string; description?: string; siteName?: string }
+      | undefined;
+    if (r) {
+      return { url, title: r.title || title, description: r.description, siteName: r.siteName };
+    }
+  } catch {
+    // Restricted page (chrome://, Web Store, PDF viewer) rejects injection —
+    // fall back to the tab's url + title, which we always have.
+  }
+  return { url, title };
+}
+
+// The launch is a direct token'd POST to the bridge's /launch endpoint
+// (independent of the WS connection), so the daemon opens a new terminal
+// running Claude even from a fresh popup. Disable the button while pending
+// to prevent an accidental double-spawn.
+launchBtn.addEventListener("click", () => {
+  void runLaunch();
+});
+
+async function runLaunch(): Promise<void> {
+  launchBtn.disabled = true;
+  launchStatus.textContent = "Launching…";
+  try {
+    const meta = await capturePageMeta();
+    const local = await chrome.storage.local.get("token");
+    const token = local["token"];
+    if (typeof token !== "string" || token.length === 0) {
+      launchStatus.textContent = "Run setup first.";
+      return;
+    }
+
+    let response: Response | null = null;
+    try {
+      response = await fetch(LAUNCH_ENDPOINT, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(buildLaunchBody(token, meta)),
+      });
+    } catch {
+      // Connection refused = bridge not running.
+      response = null;
+    }
+
+    let payloadError: string | undefined;
+    if (response !== null && !response.ok) {
+      try {
+        payloadError = ((await response.json()) as { error?: string }).error;
+      } catch {
+        /* non-JSON error body */
+      }
+    }
+    launchStatus.textContent = launchStatusMessage(
+      response !== null ? { ok: response.ok, status: response.status } : null,
+      payloadError,
+    );
+  } finally {
+    launchBtn.disabled = false;
+  }
+}
 
 runSetupBtn.addEventListener("click", () => {
   const url = chrome.runtime.getURL("src/onboard/index.html");
