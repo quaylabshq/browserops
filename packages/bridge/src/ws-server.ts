@@ -26,6 +26,16 @@ import {
 import type { Logger } from "./logger.js";
 import type { ConfirmationChannel } from "./safety.js";
 
+/** Page metadata forwarded from the popup to the launch handler. */
+export interface LaunchRequestParams {
+  url: string;
+  title?: string;
+  description?: string;
+  siteName?: string;
+}
+
+export type LaunchOutcome = { ok: true } | { ok: false; error: string };
+
 export interface WSBridgeOptions {
   host?: string;
   port?: number;
@@ -34,6 +44,13 @@ export interface WSBridgeOptions {
   bridgeVersion: string;
   logger: Logger;
   onEvent: (name: string, payload: Record<string, unknown>) => void;
+  /**
+   * Handle a POST /launch from the (pinned, token-authed) extension popup:
+   * open a new terminal running an interactive `claude`, optionally seeded
+   * with the active tab's metadata. The returned outcome is serialised back
+   * to the popup. Absent → /launch responds 503 launch_unavailable.
+   */
+  onLaunch?: (params: LaunchRequestParams) => Promise<LaunchOutcome>;
   onConnectionChange?: (connected: boolean) => void;
   /**
    * Returns the bridge's currently-enabled feature names. Called at every
@@ -75,6 +92,12 @@ class CodedError extends Error {
   }
 }
 
+/** Coerce a value to a string and defensively cap its length, else undefined. */
+function capField(v: unknown, max = 2000): string | undefined {
+  if (typeof v !== "string") return undefined;
+  return v.length > max ? v.slice(0, max) : v;
+}
+
 export class WSBridge {
   private readonly host: string;
   private readonly port: number;
@@ -83,6 +106,7 @@ export class WSBridge {
   private readonly bridgeVersion: string;
   private readonly logger: Logger;
   private readonly onEvent: (name: string, payload: Record<string, unknown>) => void;
+  private readonly onLaunch?: (params: LaunchRequestParams) => Promise<LaunchOutcome>;
   private readonly onConnectionChange?: (connected: boolean) => void;
   private readonly getFeatures?: () => readonly string[];
   private readonly onExtensionPin?: (extensionId: string) => Promise<void>;
@@ -109,6 +133,7 @@ export class WSBridge {
     this.bridgeVersion = opts.bridgeVersion;
     this.logger = opts.logger;
     this.onEvent = opts.onEvent;
+    this.onLaunch = opts.onLaunch;
     this.onConnectionChange = opts.onConnectionChange;
     this.getFeatures = opts.getFeatures;
     this.onExtensionPin = opts.onExtensionPin;
@@ -306,6 +331,12 @@ export class WSBridge {
     // is manually cleared. Set on every response from this handler.
     res.setHeader("cache-control", "no-store");
 
+    if (urlPath === "/launch") {
+      // POST /launch needs to await onLaunch, so hand off to an async method.
+      void this.handleLaunch(req, res, origin);
+      return;
+    }
+
     if (urlPath === "/status") {
       // Loopback-only status snapshot, used by `browserops init` to
       // detect when the user has installed the extension and paired.
@@ -416,6 +447,131 @@ export class WSBridge {
     res.setHeader("access-control-allow-methods", "GET, OPTIONS");
     res.setHeader("access-control-allow-headers", "content-type");
     res.setHeader("vary", "origin");
+  }
+
+  private writeLaunchCors(res: ServerResponse, origin: string): void {
+    res.setHeader("access-control-allow-origin", origin);
+    res.setHeader("access-control-allow-methods", "POST, OPTIONS");
+    res.setHeader("access-control-allow-headers", "content-type");
+    res.setHeader("vary", "origin");
+  }
+
+  /**
+   * POST /launch — token-authed, origin-pinned request from the extension
+   * popup to open a new terminal running Claude. Two independent gates: the
+   * Origin must match the pinned extension (a web page's real Origin won't),
+   * AND the body must carry the loopback token (which only the pinned
+   * extension ever receives via /pair). A page can emit the POST but holds
+   * neither, so it is rejected before any terminal opens.
+   */
+  private async handleLaunch(
+    req: IncomingMessage,
+    res: ServerResponse,
+    origin: string,
+  ): Promise<void> {
+    const jsonError = (status: number, error: string): void => {
+      if (origin) this.writeLaunchCors(res, origin);
+      res.statusCode = status;
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ ok: false, error }));
+    };
+
+    if (req.method === "OPTIONS") {
+      this.writeLaunchCors(res, origin);
+      res.statusCode = 204;
+      res.end();
+      return;
+    }
+    if (req.method !== "POST") {
+      res.statusCode = 405;
+      res.setHeader("allow", "POST, OPTIONS");
+      res.end("method not allowed");
+      return;
+    }
+    // Origin gating, mirroring /pair. Empty Origin is tolerated (extensions
+    // with host_permissions may omit it); the token below is the real gate.
+    if (origin !== "" && !this.isOriginAllowed(origin)) {
+      void this.logger.write({ dir: "system", event: "launch_origin_rejected", origin });
+      res.statusCode = 403;
+      res.setHeader("content-type", "text/plain");
+      res.end("origin not allowed");
+      return;
+    }
+    if (!this.originMatchesPin(origin)) {
+      void this.logger.write({ dir: "system", event: "launch_pin_rejected", origin });
+      jsonError(403, "extension_pinned");
+      return;
+    }
+
+    let body: Record<string, unknown>;
+    try {
+      const raw = await this.readBody(req);
+      const parsed = raw.length > 0 ? (JSON.parse(raw) as unknown) : {};
+      body =
+        parsed !== null && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
+    } catch {
+      jsonError(400, "bad_request");
+      return;
+    }
+
+    if (typeof body["token"] !== "string" || body["token"] !== this.token) {
+      void this.logger.write({ dir: "system", event: "launch_unauthorized", origin });
+      jsonError(401, "unauthorized");
+      return;
+    }
+
+    if (!this.onLaunch) {
+      jsonError(503, "launch_unavailable");
+      return;
+    }
+
+    const params: LaunchRequestParams = {
+      url: capField(body["url"]) ?? "",
+      title: capField(body["title"]),
+      description: capField(body["description"]),
+      siteName: capField(body["site_name"]),
+    };
+
+    let outcome: LaunchOutcome;
+    try {
+      outcome = await this.onLaunch(params);
+    } catch (err) {
+      void this.logger.write({
+        dir: "system",
+        event: "launch_handler_error",
+        error: err instanceof Error ? err.message : String(err),
+      });
+      outcome = { ok: false, error: "internal" };
+    }
+    void this.logger.write({
+      dir: "system",
+      event: "launch_requested",
+      ok: outcome.ok,
+      url: params.url,
+    });
+    if (origin) this.writeLaunchCors(res, origin);
+    res.statusCode = outcome.ok ? 200 : 502;
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify(outcome));
+  }
+
+  /** Read a request body as a string, rejecting once it exceeds `maxBytes`. */
+  private readBody(req: IncomingMessage, maxBytes = 64 * 1024): Promise<string> {
+    return new Promise((resolve, reject) => {
+      let size = 0;
+      const chunks: Buffer[] = [];
+      req.on("data", (c: Buffer) => {
+        size += c.length;
+        if (size > maxBytes) {
+          reject(new Error("body_too_large"));
+          req.destroy();
+          return;
+        }
+        chunks.push(c);
+      });
+      req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+      req.on("error", reject);
+    });
   }
 
   private handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
