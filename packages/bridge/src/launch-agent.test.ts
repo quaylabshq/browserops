@@ -3,11 +3,16 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  buildMacResumeScript,
   buildMacScript,
+  buildMacTailScript,
   buildPrompt,
   buildSystemPrompt,
+  buildWindowsResumeScript,
   buildWindowsScript,
+  buildWindowsTailScript,
   launchAgent,
+  openSessionTerminal,
   psSingleQuote,
   shSingleQuote,
   terminalCommand,
@@ -292,5 +297,161 @@ describe("launchAgent", () => {
       ok: false,
       error: "write_failed",
     });
+  });
+});
+
+describe("session terminal scripts", () => {
+  it("macOS mirror tails the log with -F and self-deletes", () => {
+    const s = buildMacTailScript("/c/sess.mirror.log", "/d/x.command");
+    expect(s.startsWith("#!/bin/bash")).toBe(true);
+    expect(s).toContain("tail -n +1 -F '/c/sess.mirror.log'");
+    expect(s).toContain("rm -f '/d/x.command'");
+  });
+
+  it("Windows mirror follows the log (creating it if absent), CRLF", () => {
+    const s = buildWindowsTailScript("C:\\c\\sess.log", "C:\\d\\x.ps1");
+    expect(s).toContain("Get-Content -Wait -Path 'C:\\c\\sess.log'");
+    expect(s).toContain("New-Item -ItemType File -Force -Path 'C:\\c\\sess.log'");
+    expect(s).toContain("\r\n");
+  });
+
+  it("macOS takeover resumes the session id, honoring safe_mode", () => {
+    const danger = buildMacResumeScript({
+      sessionId: "sess-123",
+      cwd: "/work",
+      safeMode: false,
+      binary: "claude",
+      scriptPath: "/d/x.command",
+    });
+    expect(danger).toContain("cd '/work'");
+    expect(danger).toContain("command -v claude");
+    expect(danger).toContain("exec claude --dangerously-skip-permissions --resume 'sess-123'");
+
+    const safe = buildMacResumeScript({
+      sessionId: "sess-123",
+      cwd: "/work",
+      safeMode: true,
+      binary: "claude",
+      scriptPath: "/d/x.command",
+    });
+    expect(safe).toContain("exec claude --resume 'sess-123'");
+    expect(safe).not.toContain("dangerously-skip-permissions");
+  });
+
+  it("Windows takeover resumes the session id with CRLF", () => {
+    const s = buildWindowsResumeScript({
+      sessionId: "sess-123",
+      cwd: "C:\\work",
+      safeMode: false,
+      binary: "claude",
+      scriptPath: "C:\\d\\x.ps1",
+    });
+    expect(s).toContain("claude --dangerously-skip-permissions --resume 'sess-123'");
+    expect(s).toContain("Set-Location -Path 'C:\\work'");
+    expect(s).toContain("\r\n");
+  });
+
+  it("a cwd containing shell metacharacters is single-quoted, never executed", () => {
+    const evil = "/work'; $(touch PWNED) #";
+    const s = buildMacResumeScript({
+      sessionId: "s",
+      cwd: evil,
+      safeMode: true,
+      binary: "claude",
+      scriptPath: "/d/x.command",
+    });
+    // The cwd lands inside a single-quoted cd, with the embedded quote escaped.
+    expect(s).toContain(`cd ${shSingleQuote(evil)}`);
+    expect(s).not.toContain("cd /work'; $(touch PWNED)");
+  });
+});
+
+describe("openSessionTerminal", () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(join(tmpdir(), "browserops-term-"));
+  });
+  afterEach(async () => {
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  function deps(over: Partial<LaunchDeps> = {}): {
+    deps: LaunchDeps;
+    calls: ReturnType<typeof recordingSpawn>["calls"];
+  } {
+    const spawn = recordingSpawn();
+    const d: LaunchDeps = {
+      platform: "darwin",
+      dir,
+      safeMode: async () => false,
+      iTermInstalled: async () => false,
+      windowsTerminalAvailable: async () => false,
+      randomId: () => "term1",
+      spawn: spawn.fn,
+      ...over,
+    };
+    return { deps: d, calls: spawn.calls };
+  }
+
+  it("mirror: writes a tail .command and opens Terminal", async () => {
+    const { deps: d, calls } = deps();
+    const res = await openSessionTerminal(
+      { mode: "mirror", sessionId: "s1", cwd: "/work", mirrorPath: "/c/s1.mirror.log" },
+      stubLogger(),
+      d,
+    );
+    expect(res).toEqual({ ok: true });
+    const script = await fs.readFile(join(dir, "term1.command"), "utf8");
+    expect(script).toContain("tail -n +1 -F '/c/s1.mirror.log'");
+    expect(calls[0]).toEqual({ cmd: "open", args: ["-a", "Terminal", join(dir, "term1.command")] });
+  });
+
+  it("takeover: writes a resume .command that resumes the session id", async () => {
+    const { deps: d } = deps();
+    await openSessionTerminal(
+      { mode: "takeover", sessionId: "s1", cwd: "/work", mirrorPath: "/c/s1.mirror.log" },
+      stubLogger(),
+      d,
+    );
+    const script = await fs.readFile(join(dir, "term1.command"), "utf8");
+    expect(script).toContain("--resume 's1'");
+    expect(script).toContain("--dangerously-skip-permissions");
+  });
+
+  it("writes a .ps1 + opens Windows Terminal on win32", async () => {
+    const { deps: d, calls } = deps({
+      platform: "win32",
+      windowsTerminalAvailable: async () => true,
+    });
+    await openSessionTerminal(
+      { mode: "mirror", sessionId: "s1", cwd: "C:\\work", mirrorPath: "C:\\c\\s1.log" },
+      stubLogger(),
+      d,
+    );
+    await fs.access(join(dir, "term1.ps1"));
+    expect(calls[0]?.cmd).toBe("wt.exe");
+  });
+
+  it("returns unsupported_platform on linux", async () => {
+    const { deps: d } = deps({ platform: "linux" });
+    expect(
+      await openSessionTerminal(
+        { mode: "mirror", sessionId: "s1", cwd: "/w", mirrorPath: "/c/s1.log" },
+        stubLogger(),
+        d,
+      ),
+    ).toEqual({ ok: false, error: "unsupported_platform" });
+  });
+
+  it("returns no_terminal and cleans up when the opener fails", async () => {
+    const failing = recordingSpawn({ exitCode: 1 });
+    const { deps: d } = deps({ spawn: failing.fn });
+    const res = await openSessionTerminal(
+      { mode: "mirror", sessionId: "s1", cwd: "/w", mirrorPath: "/c/s1.log" },
+      stubLogger(),
+      d,
+    );
+    expect(res).toEqual({ ok: false, error: "no_terminal" });
+    await expect(fs.access(join(dir, "term1.command"))).rejects.toThrow();
   });
 });

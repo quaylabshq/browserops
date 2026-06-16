@@ -23,9 +23,11 @@ import { Safety } from "./safety.js";
 import { TabRegistry, type TabRecord } from "./tab-registry.js";
 import { loadOrCreateToken } from "./token.js";
 import { loadPinnedExtensionId, persistPinnedExtensionId } from "./extension-pin.js";
+import { join } from "node:path";
 import { WSBridge, type ChatService } from "./ws-server.js";
-import { launchAgent } from "./launch-agent.js";
+import { launchAgent, openSessionTerminal } from "./launch-agent.js";
 import { ChatEngine } from "./engine/manager.js";
+import { chatDir } from "./paths.js";
 import { ensureIndex } from "./procedures/index-builder.js";
 import { proceduresRoot } from "./procedures/paths.js";
 import { loadConfigFeatures } from "./config.js";
@@ -126,7 +128,19 @@ export async function bootDaemonRuntime(opts: BootDaemonRuntimeOptions): Promise
     subscribe: (sessionId, listener) => chatEngine.subscribe(sessionId, listener),
     history: (sessionId) => chatEngine.history(sessionId),
     listSessions: () => chatEngine.listSessions(),
-    terminal: async () => ({ ok: false, error: "not_implemented" }),
+    terminal: async (sessionId, mode) => {
+      const meta = await chatEngine.getSession(sessionId);
+      if (!meta) return { ok: false, error: "unknown_session" };
+      // Takeover hands the session to an interactive terminal, so the engine
+      // must let go first — one writer at a time. Mirror is read-only and
+      // leaves the engine driving.
+      if (mode === "takeover") await chatEngine.stop(sessionId);
+      const result = await openSessionTerminal(
+        { mode, sessionId, cwd: meta.cwd, mirrorPath: join(chatDir(), `${sessionId}.mirror.log`) },
+        logger,
+      );
+      return result.ok ? { ok: true } : { ok: false, error: result.error };
+    },
   };
 
   const wsBridge = new WSBridge({

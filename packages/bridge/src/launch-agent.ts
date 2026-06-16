@@ -28,7 +28,7 @@ import { promises as fs } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
-import { type AgentId, isLaunchableAgent } from "@browserops/shared";
+import { type AgentId, type TerminalMode, isLaunchableAgent } from "@browserops/shared";
 import { loadSafeMode } from "./config.js";
 import { launchDir } from "./paths.js";
 import type { Logger } from "./logger.js";
@@ -197,6 +197,89 @@ export function buildWindowsScript({
     "  exit 1",
     "}",
     `${binary} ${execArgs} $prompt`,
+    "",
+  ].join("\r\n");
+}
+
+// ---------------------------------------------------------------------------
+// Session terminal scripts (chat engine: read-only mirror + takeover eject)
+// ---------------------------------------------------------------------------
+
+/** macOS read-only mirror: tail the engine's mirror log. `-F` tolerates a not-
+ * yet-created / truncated file. Only repo-controlled paths are interpolated. */
+export function buildMacTailScript(mirrorPath: string, scriptPath: string): string {
+  return [
+    "#!/bin/bash",
+    'echo "BrowserOps -> mirroring session (read-only; chat from the side panel)..."',
+    `rm -f ${shSingleQuote(scriptPath)}`,
+    `exec tail -n +1 -F ${shSingleQuote(mirrorPath)}`,
+    "",
+  ].join("\n");
+}
+
+/** Windows read-only mirror: follow the mirror log, creating it if absent. */
+export function buildWindowsTailScript(mirrorPath: string, scriptPath: string): string {
+  return [
+    'Write-Host "BrowserOps -> mirroring session (read-only; chat from the side panel)..."',
+    `Remove-Item -Force -Path ${psSingleQuote(scriptPath)}`,
+    `if (-not (Test-Path ${psSingleQuote(mirrorPath)})) { New-Item -ItemType File -Force -Path ${psSingleQuote(mirrorPath)} | Out-Null }`,
+    `Get-Content -Wait -Path ${psSingleQuote(mirrorPath)}`,
+    "",
+  ].join("\r\n");
+}
+
+export interface ResumeScriptParams {
+  sessionId: string;
+  cwd: string;
+  safeMode: boolean;
+  binary: string;
+  scriptPath: string;
+}
+
+/** macOS takeover: resume the same session id interactively. The engine has
+ * already let go (stop), so this terminal becomes the session's sole writer. */
+export function buildMacResumeScript({
+  sessionId,
+  cwd,
+  safeMode,
+  binary,
+  scriptPath,
+}: ResumeScriptParams): string {
+  const danger = safeMode ? "" : "--dangerously-skip-permissions ";
+  return [
+    "#!/bin/bash",
+    `echo "BrowserOps -> taking over this session in the terminal..."`,
+    `rm -f ${shSingleQuote(scriptPath)}`,
+    `cd ${shSingleQuote(cwd)} 2>/dev/null || true`,
+    `if ! command -v ${binary} >/dev/null 2>&1; then`,
+    `  echo "${binary} CLI not found on PATH. Install it, then relaunch."`,
+    '  read -r -p "Press Enter to close..."',
+    "  exit 1",
+    "fi",
+    `exec ${binary} ${danger}--resume ${shSingleQuote(sessionId)}`,
+    "",
+  ].join("\n");
+}
+
+/** Windows takeover: resume the same session id interactively. */
+export function buildWindowsResumeScript({
+  sessionId,
+  cwd,
+  safeMode,
+  binary,
+  scriptPath,
+}: ResumeScriptParams): string {
+  const danger = safeMode ? "" : "--dangerously-skip-permissions ";
+  return [
+    `Write-Host "BrowserOps -> taking over this session in the terminal..."`,
+    `Remove-Item -Force -Path ${psSingleQuote(scriptPath)}`,
+    `Set-Location -Path ${psSingleQuote(cwd)} -ErrorAction SilentlyContinue`,
+    `if (-not (Get-Command ${binary} -ErrorAction SilentlyContinue)) {`,
+    `  Write-Host "${binary} CLI not found on PATH. Install it, then relaunch."`,
+    '  Read-Host "Press Enter to close"',
+    "  exit 1",
+    "}",
+    `${binary} ${danger}--resume ${psSingleQuote(sessionId)}`,
     "",
   ].join("\r\n");
 }
@@ -398,6 +481,91 @@ export async function launchAgent(
     dir: "system",
     event: "launch_dispatched",
     agent: req.agent,
+    platform,
+    opener: opener.cmd,
+  });
+  return { ok: true };
+}
+
+export interface TerminalSessionRequest {
+  /** "mirror" tails the engine's mirror log; "takeover" resumes interactively. */
+  mode: TerminalMode;
+  sessionId: string;
+  /** The session's working dir (so a takeover resumes in the right place). */
+  cwd: string;
+  /** Path to the engine's mirror log for this session (used by "mirror"). */
+  mirrorPath: string;
+}
+
+/**
+ * Open a terminal onto a live chat session: a read-only mirror (tail) or a
+ * takeover (interactive `claude --resume <id>`). Reuses the same opener
+ * machinery as `launchAgent`. Only repo/engine-controlled values (our temp
+ * script path, the session id, the workspace cwd, the mirror path) are
+ * interpolated — all single-quoted — so nothing user-supplied reaches the shell.
+ */
+export async function openSessionTerminal(
+  req: TerminalSessionRequest,
+  logger: Logger,
+  deps: LaunchDeps = {},
+): Promise<LaunchResult> {
+  const platform = deps.platform ?? process.platform;
+  if (platform !== "darwin" && platform !== "win32") {
+    return { ok: false, error: "unsupported_platform" };
+  }
+
+  const dir = deps.dir ?? launchDir();
+  const id = (deps.randomId ?? defaultRandomId)();
+  const scriptPath = join(dir, platform === "darwin" ? `${id}.command` : `${id}.ps1`);
+  const binary = "claude";
+
+  let scriptBody: string;
+  if (req.mode === "mirror") {
+    scriptBody =
+      platform === "darwin"
+        ? buildMacTailScript(req.mirrorPath, scriptPath)
+        : buildWindowsTailScript(req.mirrorPath, scriptPath);
+  } else {
+    const safeMode = await (deps.safeMode ?? loadSafeMode)();
+    const params = { sessionId: req.sessionId, cwd: req.cwd, safeMode, binary, scriptPath };
+    scriptBody =
+      platform === "darwin" ? buildMacResumeScript(params) : buildWindowsResumeScript(params);
+  }
+
+  const opener = terminalCommand(platform, scriptPath, {
+    iTerm: platform === "darwin" && (await (deps.iTermInstalled ?? defaultITermInstalled)()),
+    windowsTerminal:
+      platform === "win32" &&
+      (await (deps.windowsTerminalAvailable ?? defaultWindowsTerminalAvailable)()),
+  });
+  if (opener === null) return { ok: false, error: "unsupported_platform" };
+
+  try {
+    await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+    await fs.writeFile(scriptPath, scriptBody, { encoding: "utf8", mode: 0o700 });
+  } catch (err) {
+    await logger.write({ dir: "system", event: "terminal_write_failed", error: errMsg(err) });
+    return { ok: false, error: "write_failed" };
+  }
+
+  const spawnFn = deps.spawn ?? (spawn as unknown as SpawnFn);
+  const result = await runOpener(spawnFn, opener.cmd, opener.args);
+  if (!result.ok) {
+    await logger.write({
+      dir: "system",
+      event: "terminal_opener_failed",
+      mode: req.mode,
+      detail: result.detail ?? "",
+    });
+    await safeUnlink(scriptPath);
+    return { ok: false, error: "no_terminal" };
+  }
+
+  await logger.write({
+    dir: "system",
+    event: "terminal_opened",
+    mode: req.mode,
+    session: req.sessionId,
     platform,
     opener: opener.cmd,
   });
