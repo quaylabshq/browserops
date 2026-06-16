@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
 import { CloseCode, HELLO_TIMEOUT_MS, PROTOCOL_VERSION } from "@browserops/shared";
-import { WSBridge } from "./ws-server.js";
+import { WSBridge, type LaunchOutcome, type LaunchRequestParams } from "./ws-server.js";
 import type { Logger } from "./logger.js";
 
 const VALID_TOKEN = "a".repeat(64);
+const PIN = "aaaabbbb";
+const PIN_ORIGIN = `chrome-extension://${PIN}`;
 
 function stubLogger(): Logger {
   return { async write() {} } as unknown as Logger;
@@ -19,6 +21,7 @@ interface StartOpts {
   token?: string;
   pinnedExtensionId?: string | null;
   onExtensionPin?: (extId: string) => Promise<void>;
+  onLaunch?: (params: LaunchRequestParams) => Promise<LaunchOutcome>;
 }
 
 async function startBridge(opts: StartOpts = {}): Promise<BridgeFixture> {
@@ -30,6 +33,7 @@ async function startBridge(opts: StartOpts = {}): Promise<BridgeFixture> {
     bridgeVersion: "test-0.0.0",
     logger: stubLogger(),
     onEvent: () => {},
+    onLaunch: opts.onLaunch,
     pinnedExtensionId: opts.pinnedExtensionId ?? null,
     onExtensionPin: opts.onExtensionPin,
   });
@@ -446,6 +450,190 @@ describe("WSBridge /status endpoint", () => {
       expect(body.extension_connected).toBe(true);
       expect(body.extension_id).toBe("aaaabbbb");
       ws.close();
+    } finally {
+      await fixture.bridge.stop();
+    }
+  });
+});
+
+describe("WSBridge POST /launch", () => {
+  function recorder(outcome: LaunchOutcome = { ok: true }) {
+    const seen: LaunchRequestParams[] = [];
+    const onLaunch = async (params: LaunchRequestParams): Promise<LaunchOutcome> => {
+      seen.push(params);
+      return outcome;
+    };
+    return { onLaunch, seen };
+  }
+
+  function postLaunch(
+    port: number,
+    body: unknown,
+    origin: string | undefined = PIN_ORIGIN,
+  ): Promise<Response> {
+    return fetch(`http://127.0.0.1:${port}/launch`, {
+      method: "POST",
+      headers: origin
+        ? { "content-type": "application/json", Origin: origin }
+        : { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  it("launches and maps body fields (site_name → siteName) when token + origin are valid", async () => {
+    const rec = recorder();
+    const fixture = await startBridge({ pinnedExtensionId: PIN, onLaunch: rec.onLaunch });
+    try {
+      const res = await postLaunch(fixture.port, {
+        token: VALID_TOKEN,
+        url: "https://x.test/a",
+        title: "T",
+        description: "D",
+        site_name: "S",
+      });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ ok: true });
+      expect(rec.seen).toEqual([
+        { url: "https://x.test/a", title: "T", description: "D", siteName: "S" },
+      ]);
+    } finally {
+      await fixture.bridge.stop();
+    }
+  });
+
+  it("rejects a wrong token with 401 and never calls onLaunch", async () => {
+    const rec = recorder();
+    const fixture = await startBridge({ pinnedExtensionId: PIN, onLaunch: rec.onLaunch });
+    try {
+      const res = await postLaunch(fixture.port, { token: "nope", url: "https://x.test" });
+      expect(res.status).toBe(401);
+      expect(((await res.json()) as { error?: string }).error).toBe("unauthorized");
+      expect(rec.seen).toHaveLength(0);
+    } finally {
+      await fixture.bridge.stop();
+    }
+  });
+
+  it("rejects a missing token with 401", async () => {
+    const rec = recorder();
+    const fixture = await startBridge({ pinnedExtensionId: PIN, onLaunch: rec.onLaunch });
+    try {
+      const res = await postLaunch(fixture.port, { url: "https://x.test" });
+      expect(res.status).toBe(401);
+      expect(rec.seen).toHaveLength(0);
+    } finally {
+      await fixture.bridge.stop();
+    }
+  });
+
+  it("rejects a non-pinned chrome-extension origin with 403 extension_pinned", async () => {
+    const rec = recorder();
+    const fixture = await startBridge({ pinnedExtensionId: PIN, onLaunch: rec.onLaunch });
+    try {
+      const res = await postLaunch(
+        fixture.port,
+        { token: VALID_TOKEN, url: "https://x.test" },
+        "chrome-extension://ccccdddd",
+      );
+      expect(res.status).toBe(403);
+      expect(((await res.json()) as { error?: string }).error).toBe("extension_pinned");
+      expect(rec.seen).toHaveLength(0);
+    } finally {
+      await fixture.bridge.stop();
+    }
+  });
+
+  it("rejects a web-page origin with 403 even if it somehow had the token", async () => {
+    const rec = recorder();
+    const fixture = await startBridge({ pinnedExtensionId: PIN, onLaunch: rec.onLaunch });
+    try {
+      const res = await postLaunch(
+        fixture.port,
+        { token: VALID_TOKEN, url: "https://x.test" },
+        "https://evil.com",
+      );
+      expect(res.status).toBe(403);
+      expect(rec.seen).toHaveLength(0);
+    } finally {
+      await fixture.bridge.stop();
+    }
+  });
+
+  it("allows an empty Origin with a valid token (host_permissions case)", async () => {
+    const rec = recorder();
+    const fixture = await startBridge({ pinnedExtensionId: PIN, onLaunch: rec.onLaunch });
+    try {
+      const res = await postLaunch(
+        fixture.port,
+        { token: VALID_TOKEN, url: "https://x.test" },
+        undefined,
+      );
+      expect(res.status).toBe(200);
+      expect(rec.seen).toHaveLength(1);
+    } finally {
+      await fixture.bridge.stop();
+    }
+  });
+
+  it("returns 502 with the error when the launch handler reports failure", async () => {
+    const rec = recorder({ ok: false, error: "no_terminal" });
+    const fixture = await startBridge({ pinnedExtensionId: PIN, onLaunch: rec.onLaunch });
+    try {
+      const res = await postLaunch(fixture.port, { token: VALID_TOKEN, url: "https://x.test" });
+      expect(res.status).toBe(502);
+      expect(await res.json()).toEqual({ ok: false, error: "no_terminal" });
+    } finally {
+      await fixture.bridge.stop();
+    }
+  });
+
+  it("returns 503 launch_unavailable when no onLaunch is wired", async () => {
+    const fixture = await startBridge({ pinnedExtensionId: PIN });
+    try {
+      const res = await postLaunch(fixture.port, { token: VALID_TOKEN, url: "https://x.test" });
+      expect(res.status).toBe(503);
+      expect(((await res.json()) as { error?: string }).error).toBe("launch_unavailable");
+    } finally {
+      await fixture.bridge.stop();
+    }
+  });
+
+  it("returns 400 on malformed JSON", async () => {
+    const fixture = await startBridge({ pinnedExtensionId: PIN, onLaunch: recorder().onLaunch });
+    try {
+      const res = await fetch(`http://127.0.0.1:${fixture.port}/launch`, {
+        method: "POST",
+        headers: { "content-type": "application/json", Origin: PIN_ORIGIN },
+        body: "{ not json",
+      });
+      expect(res.status).toBe(400);
+    } finally {
+      await fixture.bridge.stop();
+    }
+  });
+
+  it("rejects non-POST methods with 405", async () => {
+    const fixture = await startBridge({ pinnedExtensionId: PIN, onLaunch: recorder().onLaunch });
+    try {
+      const res = await fetch(`http://127.0.0.1:${fixture.port}/launch`, {
+        method: "GET",
+        headers: { Origin: PIN_ORIGIN },
+      });
+      expect(res.status).toBe(405);
+    } finally {
+      await fixture.bridge.stop();
+    }
+  });
+
+  it("answers an OPTIONS preflight with CORS headers", async () => {
+    const fixture = await startBridge({ pinnedExtensionId: PIN, onLaunch: recorder().onLaunch });
+    try {
+      const res = await fetch(`http://127.0.0.1:${fixture.port}/launch`, {
+        method: "OPTIONS",
+        headers: { Origin: PIN_ORIGIN },
+      });
+      expect(res.status).toBe(204);
+      expect(res.headers.get("access-control-allow-methods")).toContain("POST");
     } finally {
       await fixture.bridge.stop();
     }
