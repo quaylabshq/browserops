@@ -26,6 +26,7 @@ import { buildPrompt, buildSystemPrompt } from "../../launch-agent.js";
 import { chatDir as defaultChatDir, workspaceDir } from "../../paths.js";
 import type { Logger } from "../../logger.js";
 import type { AgentDriver, ChatEventListener, StartOpts, Unsubscribe } from "../driver.js";
+import { EngineError } from "../errors.js";
 import { resolveClaudeBin, resolveLoginEnv } from "./bin.js";
 import { appendMirror, mirrorEventLine, mirrorHeader, mirrorUserLine } from "./mirror.js";
 import { runClaudeTurn, type SpawnLike } from "./runtime.js";
@@ -116,7 +117,7 @@ export class ClaudeDriver implements AgentDriver {
 
   async send(ref: SessionRef, text: string): Promise<void> {
     const state = this.ensureState(ref);
-    if (state.ejected) throw new Error("session_ejected");
+    if (state.ejected) throw new EngineError("session_ejected");
     return this.enqueue(state, () => this.runTurn(state, text, false));
   }
 
@@ -208,7 +209,7 @@ export class ClaudeDriver implements AgentDriver {
   }
 
   private async runTurn(state: SessionState, userText: string, first: boolean): Promise<void> {
-    if (state.ejected) throw new Error("session_ejected");
+    if (state.ejected) throw new EngineError("session_ejected");
     if (!this.bin) {
       this.dispatch(state, { type: "status", state: "error", detail: "claude_not_found" });
       return;
