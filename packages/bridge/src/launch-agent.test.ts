@@ -3,8 +3,9 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  buildContext,
   buildMacScript,
+  buildPrompt,
+  buildSystemPrompt,
   buildWindowsScript,
   launchAgent,
   psSingleQuote,
@@ -38,26 +39,40 @@ function recordingSpawn(behavior: { exitCode?: number | null; error?: string } =
   return { fn, calls };
 }
 
-describe("buildContext", () => {
-  it("includes url, title, description, and site when present", () => {
-    const ctx = buildContext({
-      url: "https://example.com/a",
-      title: "Example",
-      description: "An example page",
-      siteName: "Example Inc",
-    });
-    expect(ctx).toContain("- URL: https://example.com/a");
-    expect(ctx).toContain("- Title: Example");
-    expect(ctx).toContain("- Description: An example page");
-    expect(ctx).toContain("- Site: Example Inc");
-    expect(ctx).toContain("background context only");
-    expect(ctx).toContain("browser_list_tabs");
+describe("buildSystemPrompt", () => {
+  it("carries operational guidance and is page-agnostic", () => {
+    const sys = buildSystemPrompt();
+    expect(sys).toContain("browser_*");
+    expect(sys).toContain("/browserops");
+    expect(sys).toContain("browser_list_tabs");
+    expect(sys).not.toContain("- URL:"); // page facts live in the visible prompt
+  });
+});
+
+describe("buildPrompt (visible first message)", () => {
+  it("leads with the page facts, then the instruction", () => {
+    const p = buildPrompt(
+      {
+        url: "https://example.com/a",
+        title: "Example",
+        description: "An example page",
+        siteName: "Example Inc",
+      },
+      "summarize this",
+    );
+    expect(p).toContain("Current page when I launched you:");
+    expect(p).toContain("- URL: https://example.com/a");
+    expect(p).toContain("- Title: Example");
+    expect(p).toContain("- Description: An example page");
+    expect(p).toContain("- Site: Example Inc");
+    expect(p.endsWith("summarize this")).toBe(true);
   });
 
-  it("omits absent optional fields and falls back for an empty url", () => {
-    const ctx = buildContext({ url: "" });
-    expect(ctx).toContain("- URL: (unknown)");
-    expect(ctx).not.toContain("- Title:");
+  it("is just the page facts when there is no instruction", () => {
+    const p = buildPrompt({ url: "" });
+    expect(p).toContain("- URL: (unknown)");
+    expect(p).not.toContain("- Title:");
+    expect(p.trim().endsWith("(unknown)")).toBe(true);
   });
 });
 
@@ -75,47 +90,46 @@ describe("shell quoting", () => {
 
 describe("buildMacScript", () => {
   const base = {
-    ctxPath: "/d/x.ctx",
-    instrPath: "/d/x.instr",
+    sysPath: "/d/x.sys",
+    promptPath: "/d/x.prompt",
     scriptPath: "/d/x.command",
     binary: "claude",
-    execArgs: '--dangerously-skip-permissions --append-system-prompt "$CTX"',
+    execArgs: '--dangerously-skip-permissions --append-system-prompt "$SYS"',
   };
 
-  it("reads ctx + instruction, self-deletes all three, and branches on instruction", () => {
+  it("reads sys + prompt, self-deletes all three, and execs with the visible prompt", () => {
     const s = buildMacScript(base);
-    expect(s).toContain("CTX=\"$(cat '/d/x.ctx' 2>/dev/null)\"");
-    expect(s).toContain("INSTR=\"$(cat '/d/x.instr' 2>/dev/null)\"");
-    expect(s).toContain("rm -f '/d/x.ctx' '/d/x.instr' '/d/x.command'");
+    expect(s).toContain("SYS=\"$(cat '/d/x.sys' 2>/dev/null)\"");
+    expect(s).toContain("PROMPT=\"$(cat '/d/x.prompt' 2>/dev/null)\"");
+    expect(s).toContain("rm -f '/d/x.sys' '/d/x.prompt' '/d/x.command'");
     expect(s).toContain("command -v claude");
-    expect(s).toContain('if [ -n "$INSTR" ]; then');
     expect(s).toContain(
-      'exec claude --dangerously-skip-permissions --append-system-prompt "$CTX" "$INSTR"',
+      'exec claude --dangerously-skip-permissions --append-system-prompt "$SYS" "$PROMPT"',
     );
-    expect(s).toContain('exec claude --dangerously-skip-permissions --append-system-prompt "$CTX"');
     expect(s.startsWith("#!/bin/bash")).toBe(true);
   });
 });
 
 describe("buildWindowsScript", () => {
   const base = {
-    ctxPath: "C:\\d\\x.ctx",
-    instrPath: "C:\\d\\x.instr",
+    sysPath: "C:\\d\\x.sys",
+    promptPath: "C:\\d\\x.prompt",
     scriptPath: "C:\\d\\x.ps1",
     binary: "claude",
-    execArgs: "--dangerously-skip-permissions --append-system-prompt $ctx",
+    execArgs: "--dangerously-skip-permissions --append-system-prompt $sys",
   };
 
-  it("reads ctx + instruction, self-deletes, and runs the agent with CRLF endings", () => {
+  it("reads sys + prompt, self-deletes, and runs the agent with CRLF endings", () => {
     const s = buildWindowsScript(base);
-    expect(s).toContain("$ctx = Get-Content -Raw -Path 'C:\\d\\x.ctx'");
-    expect(s).toContain("$instr = Get-Content -Raw -Path 'C:\\d\\x.instr'");
+    expect(s).toContain("$sys = Get-Content -Raw -Path 'C:\\d\\x.sys'");
+    expect(s).toContain("$prompt = Get-Content -Raw -Path 'C:\\d\\x.prompt'");
     expect(s).toContain(
-      "Remove-Item -Force -Path 'C:\\d\\x.ctx', 'C:\\d\\x.instr', 'C:\\d\\x.ps1'",
+      "Remove-Item -Force -Path 'C:\\d\\x.sys', 'C:\\d\\x.prompt', 'C:\\d\\x.ps1'",
     );
     expect(s).toContain("Get-Command claude");
-    expect(s).toContain("[string]::IsNullOrWhiteSpace($instr)");
-    expect(s).toContain("claude --dangerously-skip-permissions --append-system-prompt $ctx $instr");
+    expect(s).toContain(
+      "claude --dangerously-skip-permissions --append-system-prompt $sys $prompt",
+    );
     expect(s).toContain("\r\n");
   });
 });
@@ -176,15 +190,16 @@ describe("launchAgent", () => {
     ...over,
   });
 
-  it("writes ctx + instr + .command and opens Terminal on macOS", async () => {
+  it("writes sys + a visible prompt (page + instruction) + .command and opens Terminal", async () => {
     const { deps: d, calls } = deps();
     const res = await launchAgent(claudeReq({ instruction: "do the thing" }), stubLogger(), d);
     expect(res).toEqual({ ok: true });
 
-    const ctx = await fs.readFile(join(dir, "fixed123.ctx"), "utf8");
-    expect(ctx).toContain("https://x.test");
-    const instr = await fs.readFile(join(dir, "fixed123.instr"), "utf8");
-    expect(instr).toBe("do the thing");
+    const sys = await fs.readFile(join(dir, "fixed123.sys"), "utf8");
+    expect(sys).toContain("browser_*");
+    const prompt = await fs.readFile(join(dir, "fixed123.prompt"), "utf8");
+    expect(prompt).toContain("https://x.test"); // page facts are visible…
+    expect(prompt.endsWith("do the thing")).toBe(true); // …followed by the instruction
     const script = await fs.readFile(join(dir, "fixed123.command"), "utf8");
     expect(script).toContain("--dangerously-skip-permissions");
 
@@ -194,10 +209,12 @@ describe("launchAgent", () => {
     });
   });
 
-  it("writes an empty instruction file when none is given", async () => {
+  it("writes a prompt of just the page facts when no instruction is given", async () => {
     const { deps: d } = deps();
     await launchAgent(claudeReq(), stubLogger(), d);
-    expect(await fs.readFile(join(dir, "fixed123.instr"), "utf8")).toBe("");
+    const prompt = await fs.readFile(join(dir, "fixed123.prompt"), "utf8");
+    expect(prompt).toContain("https://x.test");
+    expect(prompt).toContain("Current page when I launched you:");
   });
 
   it("refuses a disabled agent (codex/cursor) and an unknown agent", async () => {
@@ -241,11 +258,10 @@ describe("launchAgent", () => {
       d,
     );
 
-    const ctx = await fs.readFile(join(dir, "fixed123.ctx"), "utf8");
-    const instr = await fs.readFile(join(dir, "fixed123.instr"), "utf8");
+    const prompt = await fs.readFile(join(dir, "fixed123.prompt"), "utf8");
     const script = await fs.readFile(join(dir, "fixed123.command"), "utf8");
-    expect(ctx).toContain(evil);
-    expect(instr).toBe(evil);
+    // The evil title + instruction both land in the prompt FILE, not the script.
+    expect(prompt).toContain(evil);
     expect(script).not.toContain(evil);
     expect(script).not.toContain("rm -rf ~");
   });
@@ -255,8 +271,8 @@ describe("launchAgent", () => {
     const { deps: d } = deps({ spawn: failing.fn });
     const res = await launchAgent(claudeReq({ instruction: "x" }), stubLogger(), d);
     expect(res).toEqual({ ok: false, error: "no_terminal" });
-    await expect(fs.access(join(dir, "fixed123.ctx"))).rejects.toThrow();
-    await expect(fs.access(join(dir, "fixed123.instr"))).rejects.toThrow();
+    await expect(fs.access(join(dir, "fixed123.sys"))).rejects.toThrow();
+    await expect(fs.access(join(dir, "fixed123.prompt"))).rejects.toThrow();
     await expect(fs.access(join(dir, "fixed123.command"))).rejects.toThrow();
   });
 
