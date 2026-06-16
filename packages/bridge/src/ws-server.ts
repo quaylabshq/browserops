@@ -19,12 +19,18 @@ import {
   type HelloAck,
   type Request as WireRequest,
   type Response as WireResponse,
+  type ChatEvent,
+  type ChatMessage,
+  type SessionRef,
+  type TerminalMode,
   isHello,
   isResponse,
   isEvent,
+  isTerminalMode,
 } from "@browserops/shared";
 import type { Logger } from "./logger.js";
 import type { ConfirmationChannel } from "./safety.js";
+import { engineErrorCode } from "./engine/errors.js";
 
 /** Launch request forwarded from the side-panel launcher to the handler. */
 export interface LaunchRequestParams {
@@ -39,6 +45,36 @@ export interface LaunchRequestParams {
 }
 
 export type LaunchOutcome = { ok: true } | { ok: false; error: string };
+
+/** A new-session request from the side-panel chat client. */
+export interface ChatStartParams {
+  agent: string;
+  instruction?: string;
+  page: { url: string; title?: string; description?: string; siteName?: string };
+}
+
+export interface ChatSessionSummary extends SessionRef {
+  lastActive: number;
+}
+
+export type ChatTerminalOutcome = { ok: true } | { ok: false; error: string };
+
+/**
+ * The in-panel chat surface the bridge exposes over /chat/*. Implemented by
+ * daemon-runtime over the ChatEngine + the terminal launcher, but kept as an
+ * interface so ws-server stays decoupled from the engine (and is testable with
+ * a fake). Gated by token + origin-pin exactly like /launch.
+ */
+export interface ChatService {
+  start(params: ChatStartParams): Promise<SessionRef>;
+  send(sessionId: string, text: string): Promise<void>;
+  /** Attach a live listener; the implementation replays buffered events first. */
+  subscribe(sessionId: string, listener: (event: ChatEvent) => void): Promise<() => void>;
+  history(sessionId: string): Promise<ChatMessage[]>;
+  listSessions(): Promise<ChatSessionSummary[]>;
+  /** Open a read-only terminal mirror, or eject the session into a terminal. */
+  terminal(sessionId: string, mode: TerminalMode): Promise<ChatTerminalOutcome>;
+}
 
 export interface WSBridgeOptions {
   host?: string;
@@ -55,6 +91,12 @@ export interface WSBridgeOptions {
    * to the popup. Absent → /launch responds 503 launch_unavailable.
    */
   onLaunch?: (params: LaunchRequestParams) => Promise<LaunchOutcome>;
+  /**
+   * The in-panel chat surface (POST /chat/new|send|terminal, GET
+   * /chat/sessions|history, SSE /chat/stream). Token + origin-pinned exactly
+   * like /launch. Absent → /chat/* responds 503 chat_unavailable.
+   */
+  chat?: ChatService;
   onConnectionChange?: (connected: boolean) => void;
   /**
    * Returns the bridge's currently-enabled feature names. Called at every
@@ -111,6 +153,9 @@ export class WSBridge {
   private readonly logger: Logger;
   private readonly onEvent: (name: string, payload: Record<string, unknown>) => void;
   private readonly onLaunch?: (params: LaunchRequestParams) => Promise<LaunchOutcome>;
+  private readonly chat?: ChatService;
+  /** Open SSE responses, ended on stop() so the http server can close. */
+  private readonly openStreams = new Set<ServerResponse>();
   private readonly onConnectionChange?: (connected: boolean) => void;
   private readonly getFeatures?: () => readonly string[];
   private readonly onExtensionPin?: (extensionId: string) => Promise<void>;
@@ -138,6 +183,7 @@ export class WSBridge {
     this.logger = opts.logger;
     this.onEvent = opts.onEvent;
     this.onLaunch = opts.onLaunch;
+    this.chat = opts.chat;
     this.onConnectionChange = opts.onConnectionChange;
     this.getFeatures = opts.getFeatures;
     this.onExtensionPin = opts.onExtensionPin;
@@ -220,6 +266,15 @@ export class WSBridge {
   }
 
   async stop(): Promise<void> {
+    // End any open SSE streams so http.close() can actually complete.
+    for (const res of this.openStreams) {
+      try {
+        res.end();
+      } catch {
+        /* ignore */
+      }
+    }
+    this.openStreams.clear();
     for (const [, p] of this.pending) {
       clearTimeout(p.timer);
       if (p.signal && p.abortListener) p.signal.removeEventListener("abort", p.abortListener);
@@ -358,6 +413,19 @@ export class WSBridge {
           bridge_version: this.bridgeVersion,
         }),
       );
+      return;
+    }
+
+    if (urlPath === "/chat/new" || urlPath === "/chat/send" || urlPath === "/chat/terminal") {
+      void this.handleChatPost(req, res, origin, urlPath);
+      return;
+    }
+    if (urlPath === "/chat/sessions" || urlPath === "/chat/history") {
+      void this.handleChatGet(req, res, origin, urlPath);
+      return;
+    }
+    if (urlPath === "/chat/stream") {
+      void this.handleChatStream(req, res, origin);
       return;
     }
 
@@ -559,6 +627,290 @@ export class WSBridge {
     res.statusCode = outcome.ok ? 200 : 502;
     res.setHeader("content-type", "application/json");
     res.end(JSON.stringify(outcome));
+  }
+
+  // --- /chat/* surface ------------------------------------------------------
+
+  private writeCors(res: ServerResponse, origin: string, methods: string): void {
+    res.setHeader("access-control-allow-origin", origin);
+    res.setHeader("access-control-allow-methods", methods);
+    res.setHeader("access-control-allow-headers", "content-type");
+    res.setHeader("vary", "origin");
+  }
+
+  private endJson(res: ServerResponse, status: number, body: unknown): void {
+    res.statusCode = status;
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify(body));
+  }
+
+  private queryParam(req: IncomingMessage, name: string): string | undefined {
+    try {
+      return new URL(req.url ?? "/", "http://127.0.0.1").searchParams.get(name) ?? undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Map an EngineError code to an HTTP status; default 500. */
+  private chatErrorStatus(err: unknown): number {
+    switch (engineErrorCode(err)) {
+      case "unknown_session":
+        return 404;
+      case "session_ejected":
+        return 409;
+      case "agent_unavailable":
+        return 422;
+      case "claude_not_found":
+        return 502;
+      default:
+        return 500;
+    }
+  }
+
+  /**
+   * Shared origin/pin/method gate for the chat endpoints, mirroring /launch.
+   * Returns true to proceed, or false having already written the response
+   * (OPTIONS preflight, wrong method, or a rejected origin/pin).
+   */
+  private chatGate(
+    req: IncomingMessage,
+    res: ServerResponse,
+    origin: string,
+    methods: string,
+    wantMethod: "GET" | "POST",
+  ): boolean {
+    if (origin) this.writeCors(res, origin, methods);
+    if (req.method === "OPTIONS") {
+      res.statusCode = 204;
+      res.end();
+      return false;
+    }
+    if (req.method !== wantMethod) {
+      res.statusCode = 405;
+      res.setHeader("allow", methods);
+      res.end("method not allowed");
+      return false;
+    }
+    if (origin !== "" && !this.isOriginAllowed(origin)) {
+      void this.logger.write({ dir: "system", event: "chat_origin_rejected", origin });
+      res.statusCode = 403;
+      res.end("origin not allowed");
+      return false;
+    }
+    if (!this.originMatchesPin(origin)) {
+      void this.logger.write({ dir: "system", event: "chat_pin_rejected", origin });
+      this.endJson(res, 403, { ok: false, error: "extension_pinned" });
+      return false;
+    }
+    return true;
+  }
+
+  /** POST /chat/new | /chat/send | /chat/terminal. Token in the JSON body. */
+  private async handleChatPost(
+    req: IncomingMessage,
+    res: ServerResponse,
+    origin: string,
+    path: string,
+  ): Promise<void> {
+    if (!this.chatGate(req, res, origin, "POST, OPTIONS", "POST")) return;
+
+    let body: Record<string, unknown>;
+    try {
+      const raw = await this.readBody(req);
+      const parsed = raw.length > 0 ? (JSON.parse(raw) as unknown) : {};
+      body =
+        parsed !== null && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
+    } catch {
+      this.endJson(res, 400, { ok: false, error: "bad_request" });
+      return;
+    }
+    if (typeof body["token"] !== "string" || body["token"] !== this.token) {
+      void this.logger.write({ dir: "system", event: "chat_unauthorized", origin });
+      this.endJson(res, 401, { ok: false, error: "unauthorized" });
+      return;
+    }
+    if (!this.chat) {
+      this.endJson(res, 503, { ok: false, error: "chat_unavailable" });
+      return;
+    }
+
+    try {
+      if (path === "/chat/new") {
+        const params: ChatStartParams = {
+          agent: capField(body["agent"], 32) ?? "claude",
+          page: {
+            url: capField(body["url"]) ?? "",
+            title: capField(body["title"]),
+            description: capField(body["description"]),
+            siteName: capField(body["site_name"]),
+          },
+          ...(capField(body["instruction"], 8000) !== undefined
+            ? { instruction: capField(body["instruction"], 8000) }
+            : {}),
+        };
+        const ref = await this.chat.start(params);
+        await this.logger.write({
+          dir: "system",
+          event: "chat_new",
+          agent: params.agent,
+          session: ref.sessionId,
+        });
+        this.endJson(res, 200, { ok: true, session: ref });
+        return;
+      }
+
+      if (path === "/chat/send") {
+        const sessionId = capField(body["session_id"], 100);
+        const text = capField(body["text"], 100_000);
+        if (!sessionId || text === undefined || text.length === 0) {
+          this.endJson(res, 400, { ok: false, error: "bad_request" });
+          return;
+        }
+        await this.chat.send(sessionId, text);
+        this.endJson(res, 200, { ok: true });
+        return;
+      }
+
+      // /chat/terminal
+      const sessionId = capField(body["session_id"], 100);
+      const mode = body["mode"];
+      if (!sessionId || !isTerminalMode(mode)) {
+        this.endJson(res, 400, { ok: false, error: "bad_request" });
+        return;
+      }
+      const outcome = await this.chat.terminal(sessionId, mode);
+      this.endJson(res, outcome.ok ? 200 : 502, outcome);
+    } catch (err) {
+      await this.logger.write({
+        dir: "system",
+        event: "chat_post_error",
+        path,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      this.endJson(res, this.chatErrorStatus(err), {
+        ok: false,
+        error: engineErrorCode(err) ?? "internal",
+      });
+    }
+  }
+
+  /** GET /chat/sessions | /chat/history. Token in the query string. */
+  private async handleChatGet(
+    req: IncomingMessage,
+    res: ServerResponse,
+    origin: string,
+    path: string,
+  ): Promise<void> {
+    if (!this.chatGate(req, res, origin, "GET, OPTIONS", "GET")) return;
+    if (this.queryParam(req, "token") !== this.token) {
+      this.endJson(res, 401, { ok: false, error: "unauthorized" });
+      return;
+    }
+    if (!this.chat) {
+      this.endJson(res, 503, { ok: false, error: "chat_unavailable" });
+      return;
+    }
+    try {
+      if (path === "/chat/sessions") {
+        this.endJson(res, 200, { ok: true, sessions: await this.chat.listSessions() });
+        return;
+      }
+      const sessionId = this.queryParam(req, "session_id");
+      if (!sessionId) {
+        this.endJson(res, 400, { ok: false, error: "bad_request" });
+        return;
+      }
+      this.endJson(res, 200, { ok: true, messages: await this.chat.history(sessionId) });
+    } catch (err) {
+      this.endJson(res, this.chatErrorStatus(err), {
+        ok: false,
+        error: engineErrorCode(err) ?? "internal",
+      });
+    }
+  }
+
+  /**
+   * GET /chat/stream — Server-Sent Events. Token in the query string (the
+   * EventSource API can't set headers). Events emitted by the engine (incl. the
+   * replayed buffer) are queued until the SSE headers are written, then
+   * flushed, so the response status can still be a 404 if the session is
+   * unknown. The stream is registered so stop() can end it.
+   */
+  private async handleChatStream(
+    req: IncomingMessage,
+    res: ServerResponse,
+    origin: string,
+  ): Promise<void> {
+    if (!this.chatGate(req, res, origin, "GET, OPTIONS", "GET")) return;
+    if (this.queryParam(req, "token") !== this.token) {
+      this.endJson(res, 401, { ok: false, error: "unauthorized" });
+      return;
+    }
+    if (!this.chat) {
+      this.endJson(res, 503, { ok: false, error: "chat_unavailable" });
+      return;
+    }
+    const sessionId = this.queryParam(req, "session_id");
+    if (!sessionId) {
+      this.endJson(res, 400, { ok: false, error: "bad_request" });
+      return;
+    }
+
+    const queued: ChatEvent[] = [];
+    let live = false;
+    const writeEvent = (event: ChatEvent): void => {
+      try {
+        res.write(`data: ${JSON.stringify(event)}\n\n`);
+      } catch {
+        /* client gone */
+      }
+    };
+
+    let unsub: () => void;
+    try {
+      // subscribe replays the buffer synchronously into our listener; capture
+      // those into `queued` so they don't write before the SSE headers.
+      unsub = await this.chat.subscribe(sessionId, (event) => {
+        if (live) writeEvent(event);
+        else queued.push(event);
+      });
+    } catch (err) {
+      this.endJson(res, this.chatErrorStatus(err), {
+        ok: false,
+        error: engineErrorCode(err) ?? "internal",
+      });
+      return;
+    }
+
+    res.statusCode = 200;
+    res.setHeader("content-type", "text/event-stream");
+    res.setHeader("connection", "keep-alive");
+    res.write(": connected\n\n");
+    for (const event of queued) writeEvent(event);
+    live = true;
+
+    const ping = setInterval(() => {
+      try {
+        res.write(": ping\n\n");
+      } catch {
+        /* ignore */
+      }
+    }, 25_000);
+    if (typeof ping === "object" && "unref" in ping) ping.unref();
+
+    this.openStreams.add(res);
+    const cleanup = (): void => {
+      clearInterval(ping);
+      this.openStreams.delete(res);
+      try {
+        unsub();
+      } catch {
+        /* ignore */
+      }
+    };
+    req.on("close", cleanup);
+    res.on("close", cleanup);
   }
 
   /** Read a request body as a string, rejecting once it exceeds `maxBytes`. */

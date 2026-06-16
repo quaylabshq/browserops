@@ -9,7 +9,13 @@
  * tab views, the actual McpBridgeServer instance) lives outside of
  * this module — see daemon.ts.
  */
-import { DEFAULT_WS_HOST, DEFAULT_WS_PORT, ENV, type FeatureName } from "@browserops/shared";
+import {
+  DEFAULT_WS_HOST,
+  DEFAULT_WS_PORT,
+  ENV,
+  type AgentId,
+  type FeatureName,
+} from "@browserops/shared";
 import { createTraceWriter, type TraceWriter } from "./trace-writer.js";
 import { Logger, type LogLevel } from "./logger.js";
 import { loadRiskyDomainMatcher, type RiskyDomainMatcher } from "./risky-domains.js";
@@ -17,8 +23,9 @@ import { Safety } from "./safety.js";
 import { TabRegistry, type TabRecord } from "./tab-registry.js";
 import { loadOrCreateToken } from "./token.js";
 import { loadPinnedExtensionId, persistPinnedExtensionId } from "./extension-pin.js";
-import { WSBridge } from "./ws-server.js";
+import { WSBridge, type ChatService } from "./ws-server.js";
 import { launchAgent } from "./launch-agent.js";
+import { ChatEngine } from "./engine/manager.js";
 import { ensureIndex } from "./procedures/index-builder.js";
 import { proceduresRoot } from "./procedures/paths.js";
 import { loadConfigFeatures } from "./config.js";
@@ -104,6 +111,24 @@ export async function bootDaemonRuntime(opts: BootDaemonRuntimeOptions): Promise
 
   const token = await loadOrCreateToken();
   const pinnedExtensionId = await loadPinnedExtensionId();
+
+  // The in-panel chat engine (bidirectional, agent-agnostic). The terminal
+  // mirror / takeover-eject is wired in a follow-up step.
+  const chatEngine = new ChatEngine({ logger });
+  const chatService: ChatService = {
+    start: (params) =>
+      chatEngine.start({
+        agent: params.agent as AgentId,
+        page: params.page,
+        ...(params.instruction !== undefined ? { instruction: params.instruction } : {}),
+      }),
+    send: (sessionId, text) => chatEngine.send(sessionId, text),
+    subscribe: (sessionId, listener) => chatEngine.subscribe(sessionId, listener),
+    history: (sessionId) => chatEngine.history(sessionId),
+    listSessions: () => chatEngine.listSessions(),
+    terminal: async () => ({ ok: false, error: "not_implemented" }),
+  };
+
   const wsBridge = new WSBridge({
     host,
     port,
@@ -153,6 +178,7 @@ export async function bootDaemonRuntime(opts: BootDaemonRuntimeOptions): Promise
         logger,
       );
     },
+    chat: chatService,
     onConnectionChange: (connected) => {
       const wasConnected = lastExtensionConnected;
       lastExtensionConnected = connected;
