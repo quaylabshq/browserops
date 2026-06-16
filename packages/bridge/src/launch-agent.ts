@@ -94,9 +94,9 @@ const AGENT_LAUNCHERS: Partial<Record<AgentId, AgentLauncher>> = {
   claude: {
     binary: "claude",
     macArgs: ({ safeMode }) =>
-      `${safeMode ? "" : "--dangerously-skip-permissions "}--append-system-prompt "$CTX"`,
+      `${safeMode ? "" : "--dangerously-skip-permissions "}--append-system-prompt "$SYS"`,
     winArgs: ({ safeMode }) =>
-      `${safeMode ? "" : "--dangerously-skip-permissions "}--append-system-prompt $ctx`,
+      `${safeMode ? "" : "--dangerously-skip-permissions "}--append-system-prompt $sys`,
   },
 };
 
@@ -104,25 +104,33 @@ const AGENT_LAUNCHERS: Partial<Record<AgentId, AgentLauncher>> = {
 // Pure builders (heavily unit-tested)
 // ---------------------------------------------------------------------------
 
-/** Build the system-prompt context text written to the `.ctx` file. */
-export function buildContext(page: PageContext): string {
-  const lines: string[] = [
+/**
+ * Operational guidance for the agent, written to the `.sys` file and passed
+ * via --append-system-prompt. Deliberately page-agnostic: the page facts live
+ * in the *visible* prompt (buildPrompt) so the user can see them in the
+ * terminal conversation, not buried in an invisible system prompt.
+ */
+export function buildSystemPrompt(): string {
+  return [
     "You were launched from the BrowserOps Chrome extension into the user's live Chrome session.",
     "The browserops MCP tools (browser_*) are available; use the /browserops skill for any browser action.",
-    "",
-    "When the user launched you, their active browser tab was:",
-    `- URL: ${page.url || "(unknown)"}`,
-  ];
+    "The user's first message states the page they were on plus their request. Operate on that page with browser_* tools only if the request concerns it (call browser_list_tabs to find its tab_id); otherwise treat it as background.",
+  ].join("\n");
+}
+
+/**
+ * The first, VISIBLE prompt: the page the user was on followed by their typed
+ * request. Passed as the positional arg so the agent shows it as the opening
+ * turn — that's how the user sees the page context took effect.
+ */
+export function buildPrompt(page: PageContext, instruction?: string): string {
+  const lines = ["Current page when I launched you:", `- URL: ${page.url || "(unknown)"}`];
   if (page.title) lines.push(`- Title: ${page.title}`);
   if (page.description) lines.push(`- Description: ${page.description}`);
   if (page.siteName) lines.push(`- Site: ${page.siteName}`);
-  lines.push(
-    "",
-    "This page is background context only. The user's request follows (if any).",
-    "Decide from their request whether it concerns this page: if so, operate on it with the " +
-      "browser_* tools (call browser_list_tabs to find its tab_id); if not, ignore it.",
-  );
-  return lines.join("\n");
+  const context = lines.join("\n");
+  const instr = (instruction ?? "").trim();
+  return instr.length > 0 ? `${context}\n\n${instr}` : context;
 }
 
 /** POSIX single-quote a string so it is safe to embed in a bash script. */
@@ -136,18 +144,20 @@ export function psSingleQuote(s: string): string {
 }
 
 export interface ScriptParams {
-  ctxPath: string;
-  instrPath: string;
+  /** System-prompt guidance file (--append-system-prompt). */
+  sysPath: string;
+  /** Visible first-prompt file (page facts + the user's request). */
+  promptPath: string;
   scriptPath: string;
   binary: string;
-  /** Agent argv between the binary and the optional instruction positional. */
+  /** Agent argv between the binary and the positional prompt. */
   execArgs: string;
 }
 
-/** macOS / bash launcher. Reads ctx + instruction, self-deletes, execs the agent. */
+/** macOS / bash launcher. Reads sys + prompt, self-deletes, execs the agent. */
 export function buildMacScript({
-  ctxPath,
-  instrPath,
+  sysPath,
+  promptPath,
   scriptPath,
   binary,
   execArgs,
@@ -155,46 +165,38 @@ export function buildMacScript({
   return [
     "#!/bin/bash",
     `echo "BrowserOps -> launching ${binary}..."`,
-    `CTX="$(cat ${shSingleQuote(ctxPath)} 2>/dev/null)"`,
-    `INSTR="$(cat ${shSingleQuote(instrPath)} 2>/dev/null)"`,
-    `rm -f ${shSingleQuote(ctxPath)} ${shSingleQuote(instrPath)} ${shSingleQuote(scriptPath)}`,
+    `SYS="$(cat ${shSingleQuote(sysPath)} 2>/dev/null)"`,
+    `PROMPT="$(cat ${shSingleQuote(promptPath)} 2>/dev/null)"`,
+    `rm -f ${shSingleQuote(sysPath)} ${shSingleQuote(promptPath)} ${shSingleQuote(scriptPath)}`,
     `if ! command -v ${binary} >/dev/null 2>&1; then`,
     `  echo "${binary} CLI not found on PATH. Install it, then relaunch."`,
     '  read -r -p "Press Enter to close..."',
     "  exit 1",
     "fi",
-    `if [ -n "$INSTR" ]; then`,
-    `  exec ${binary} ${execArgs} "$INSTR"`,
-    "else",
-    `  exec ${binary} ${execArgs}`,
-    "fi",
+    `exec ${binary} ${execArgs} "$PROMPT"`,
     "",
   ].join("\n");
 }
 
-/** Windows / PowerShell launcher. Reads ctx + instruction, self-deletes, runs the agent. */
+/** Windows / PowerShell launcher. Reads sys + prompt, self-deletes, runs the agent. */
 export function buildWindowsScript({
-  ctxPath,
-  instrPath,
+  sysPath,
+  promptPath,
   scriptPath,
   binary,
   execArgs,
 }: ScriptParams): string {
   return [
     `Write-Host "BrowserOps -> launching ${binary}..."`,
-    `$ctx = Get-Content -Raw -Path ${psSingleQuote(ctxPath)}`,
-    `$instr = Get-Content -Raw -Path ${psSingleQuote(instrPath)}`,
-    `Remove-Item -Force -Path ${psSingleQuote(ctxPath)}, ${psSingleQuote(instrPath)}, ${psSingleQuote(scriptPath)}`,
+    `$sys = Get-Content -Raw -Path ${psSingleQuote(sysPath)}`,
+    `$prompt = Get-Content -Raw -Path ${psSingleQuote(promptPath)}`,
+    `Remove-Item -Force -Path ${psSingleQuote(sysPath)}, ${psSingleQuote(promptPath)}, ${psSingleQuote(scriptPath)}`,
     `if (-not (Get-Command ${binary} -ErrorAction SilentlyContinue)) {`,
     `  Write-Host "${binary} CLI not found on PATH. Install it, then relaunch."`,
     '  Read-Host "Press Enter to close"',
     "  exit 1",
     "}",
-    "if (-not [string]::IsNullOrWhiteSpace($instr)) {",
-    `  ${binary} ${execArgs} $instr`,
-    "} else {",
-    `  ${binary} ${execArgs}`,
-    "}",
+    `${binary} ${execArgs} $prompt`,
     "",
   ].join("\r\n");
 }
@@ -342,16 +344,16 @@ export async function launchAgent(
   const dir = deps.dir ?? launchDir();
   const safeMode = await (deps.safeMode ?? loadSafeMode)();
   const id = (deps.randomId ?? defaultRandomId)();
-  const ctxPath = join(dir, `${id}.ctx`);
-  const instrPath = join(dir, `${id}.instr`);
+  const sysPath = join(dir, `${id}.sys`);
+  const promptPath = join(dir, `${id}.prompt`);
   const scriptPath = join(dir, platform === "darwin" ? `${id}.command` : `${id}.ps1`);
   const execArgs =
     platform === "darwin" ? launcher.macArgs({ safeMode }) : launcher.winArgs({ safeMode });
 
   const scriptBody =
     platform === "darwin"
-      ? buildMacScript({ ctxPath, instrPath, scriptPath, binary: launcher.binary, execArgs })
-      : buildWindowsScript({ ctxPath, instrPath, scriptPath, binary: launcher.binary, execArgs });
+      ? buildMacScript({ sysPath, promptPath, scriptPath, binary: launcher.binary, execArgs })
+      : buildWindowsScript({ sysPath, promptPath, scriptPath, binary: launcher.binary, execArgs });
 
   const opener = terminalCommand(platform, scriptPath, {
     iTerm: platform === "darwin" && (await (deps.iTermInstalled ?? defaultITermInstalled)()),
@@ -365,8 +367,11 @@ export async function launchAgent(
 
   try {
     await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-    await fs.writeFile(ctxPath, buildContext(req.page), { encoding: "utf8", mode: 0o600 });
-    await fs.writeFile(instrPath, req.instruction ?? "", { encoding: "utf8", mode: 0o600 });
+    await fs.writeFile(sysPath, buildSystemPrompt(), { encoding: "utf8", mode: 0o600 });
+    await fs.writeFile(promptPath, buildPrompt(req.page, req.instruction), {
+      encoding: "utf8",
+      mode: 0o600,
+    });
     await fs.writeFile(scriptPath, scriptBody, { encoding: "utf8", mode: 0o700 });
   } catch (err) {
     await logger.write({ dir: "system", event: "launch_write_failed", error: errMsg(err) });
@@ -383,8 +388,8 @@ export async function launchAgent(
       detail: result.detail ?? "",
     });
     // The launcher script never ran, so it didn't self-delete. Clean up.
-    await safeUnlink(ctxPath);
-    await safeUnlink(instrPath);
+    await safeUnlink(sysPath);
+    await safeUnlink(promptPath);
     await safeUnlink(scriptPath);
     return { ok: false, error: "no_terminal" };
   }
