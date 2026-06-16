@@ -501,6 +501,24 @@ describe("WSBridge POST /launch", () => {
     }
   });
 
+  it("forwards agent + instruction to the launch handler", async () => {
+    const rec = recorder();
+    const fixture = await startBridge({ pinnedExtensionId: PIN, onLaunch: rec.onLaunch });
+    try {
+      const res = await postLaunch(fixture.port, {
+        token: VALID_TOKEN,
+        agent: "claude",
+        instruction: "summarize this page",
+        url: "https://x.test",
+      });
+      expect(res.status).toBe(200);
+      expect(rec.seen[0]?.agent).toBe("claude");
+      expect(rec.seen[0]?.instruction).toBe("summarize this page");
+    } finally {
+      await fixture.bridge.stop();
+    }
+  });
+
   it("rejects a wrong token with 401 and never calls onLaunch", async () => {
     const rec = recorder();
     const fixture = await startBridge({ pinnedExtensionId: PIN, onLaunch: rec.onLaunch });

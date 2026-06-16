@@ -1,30 +1,34 @@
 /**
- * Spawn an interactive `claude` session in a brand-new terminal window, on
- * request from the extension popup (via the bridge's POST /launch endpoint).
+ * Spawn an interactive coding-agent session in a brand-new terminal window, on
+ * request from the extension's side-panel launcher (via POST /launch).
  *
  * Why a new terminal at all: the daemon runs detached with `stdio: "ignore"`
  * and has no controlling TTY, so it cannot `stdio: "inherit"` the way the CLI
  * launcher (`packages/cli/src/launchers/claude.ts`) does. Instead it writes a
- * tiny launcher script + a context file under the 0700 state dir, then asks
- * the OS to open a terminal that runs the script.
+ * tiny launcher script + a context file + an instruction file under the 0700
+ * state dir, then asks the OS to open a terminal that runs the script.
  *
- * Injection safety (the load-bearing invariant): the page metadata seeded into
- * Claude's system prompt only ever crosses into the shell as the *content of a
- * file* read into a variable (`cat` / `Get-Content -Raw`). It is NEVER
+ * Agent-agnostic: each agent has a small launch spec in AGENT_LAUNCHERS keyed
+ * by the shared agent registry. Only enabled agents (currently just `claude`)
+ * are launchable; others are refused with `agent_disabled`.
+ *
+ * Injection safety (the load-bearing invariant): page metadata AND the user's
+ * typed instruction only ever cross into the shell as the *content of a file*
+ * read into a variable (`cat` / `Get-Content -Raw`). They are NEVER
  * interpolated into the launcher script source or a command line. Only
- * repo-controlled values (our own random temp paths, the fixed danger flag)
- * are interpolated. A page `<title>` of `$(rm -rf ~)` is therefore inert.
+ * repo-controlled values (our random temp paths, the agent binary name, fixed
+ * flags) are interpolated. A page `<title>` or instruction of `$(rm -rf ~)` is
+ * therefore inert.
  *
- * `claude` is invoked by bare name *inside the new terminal*, which inherits
- * the user's interactive PATH — not the daemon's possibly-minimal PATH. The
- * launcher guards with `command -v claude` / `Get-Command claude` and prints a
- * window-staying error when it's missing.
+ * The agent binary is invoked by bare name *inside the new terminal*, which
+ * inherits the user's interactive PATH — not the daemon's minimal one.
  */
 import { spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
+import { type AgentId, isLaunchableAgent } from "@browserops/shared";
 import { loadSafeMode } from "./config.js";
 import { launchDir } from "./paths.js";
 import type { Logger } from "./logger.js";
@@ -36,9 +40,21 @@ export interface PageContext {
   siteName?: string;
 }
 
+export interface LaunchRequest {
+  /** Agent id from the wire; validated against the registry here. */
+  agent: string;
+  /** Optional first instruction the user typed in the composer. */
+  instruction?: string;
+  page: PageContext;
+}
+
 export type LaunchResult = { ok: true } | { ok: false; error: LaunchError };
 
-export type LaunchError = "unsupported_platform" | "write_failed" | "no_terminal";
+export type LaunchError =
+  | "agent_disabled"
+  | "unsupported_platform"
+  | "write_failed"
+  | "no_terminal";
 
 /** Minimal child-process surface we depend on, so tests can inject a fake. */
 interface SpawnedChild {
@@ -59,6 +75,32 @@ export interface LaunchDeps {
 }
 
 // ---------------------------------------------------------------------------
+// Per-agent launch specs
+// ---------------------------------------------------------------------------
+
+/**
+ * How to invoke a given agent's CLI. `macArgs`/`winArgs` return the argv
+ * BETWEEN the binary and the optional instruction positional, as a shell
+ * template that may reference the `$CTX` (bash) / `$ctx` (PowerShell) vars
+ * the launcher script populates from the context file.
+ */
+interface AgentLauncher {
+  binary: string;
+  macArgs(opts: { safeMode: boolean }): string;
+  winArgs(opts: { safeMode: boolean }): string;
+}
+
+const AGENT_LAUNCHERS: Partial<Record<AgentId, AgentLauncher>> = {
+  claude: {
+    binary: "claude",
+    macArgs: ({ safeMode }) =>
+      `${safeMode ? "" : "--dangerously-skip-permissions "}--append-system-prompt "$CTX"`,
+    winArgs: ({ safeMode }) =>
+      `${safeMode ? "" : "--dangerously-skip-permissions "}--append-system-prompt $ctx`,
+  },
+};
+
+// ---------------------------------------------------------------------------
 // Pure builders (heavily unit-tested)
 // ---------------------------------------------------------------------------
 
@@ -76,7 +118,7 @@ export function buildContext(page: PageContext): string {
   if (page.siteName) lines.push(`- Site: ${page.siteName}`);
   lines.push(
     "",
-    "This page is background context only. The user will type their actual request next.",
+    "This page is background context only. The user's request follows (if any).",
     "Decide from their request whether it concerns this page: if so, operate on it with the " +
       "browser_* tools (call browser_list_tabs to find its tab_id); if not, ignore it.",
   );
@@ -95,42 +137,64 @@ export function psSingleQuote(s: string): string {
 
 export interface ScriptParams {
   ctxPath: string;
+  instrPath: string;
   scriptPath: string;
-  /** The danger flag, or null in safe mode. */
-  dangerFlag: string | null;
+  binary: string;
+  /** Agent argv between the binary and the optional instruction positional. */
+  execArgs: string;
 }
 
-/** macOS / bash launcher. Reads the ctx file, self-deletes, execs claude. */
-export function buildMacScript({ ctxPath, scriptPath, dangerFlag }: ScriptParams): string {
-  const flag = dangerFlag ? `${dangerFlag} ` : "";
+/** macOS / bash launcher. Reads ctx + instruction, self-deletes, execs the agent. */
+export function buildMacScript({
+  ctxPath,
+  instrPath,
+  scriptPath,
+  binary,
+  execArgs,
+}: ScriptParams): string {
   return [
     "#!/bin/bash",
-    'echo "BrowserOps -> launching Claude..."',
+    `echo "BrowserOps -> launching ${binary}..."`,
     `CTX="$(cat ${shSingleQuote(ctxPath)} 2>/dev/null)"`,
-    `rm -f ${shSingleQuote(ctxPath)} ${shSingleQuote(scriptPath)}`,
-    "if ! command -v claude >/dev/null 2>&1; then",
-    '  echo "claude CLI not found on PATH. Install it, then relaunch."',
+    `INSTR="$(cat ${shSingleQuote(instrPath)} 2>/dev/null)"`,
+    `rm -f ${shSingleQuote(ctxPath)} ${shSingleQuote(instrPath)} ${shSingleQuote(scriptPath)}`,
+    `if ! command -v ${binary} >/dev/null 2>&1; then`,
+    `  echo "${binary} CLI not found on PATH. Install it, then relaunch."`,
     '  read -r -p "Press Enter to close..."',
     "  exit 1",
     "fi",
-    `exec claude ${flag}--append-system-prompt "$CTX"`,
+    `if [ -n "$INSTR" ]; then`,
+    `  exec ${binary} ${execArgs} "$INSTR"`,
+    "else",
+    `  exec ${binary} ${execArgs}`,
+    "fi",
     "",
   ].join("\n");
 }
 
-/** Windows / PowerShell launcher. Reads the ctx file, self-deletes, runs claude. */
-export function buildWindowsScript({ ctxPath, scriptPath, dangerFlag }: ScriptParams): string {
-  const flag = dangerFlag ? `${dangerFlag} ` : "";
+/** Windows / PowerShell launcher. Reads ctx + instruction, self-deletes, runs the agent. */
+export function buildWindowsScript({
+  ctxPath,
+  instrPath,
+  scriptPath,
+  binary,
+  execArgs,
+}: ScriptParams): string {
   return [
-    'Write-Host "BrowserOps -> launching Claude..."',
+    `Write-Host "BrowserOps -> launching ${binary}..."`,
     `$ctx = Get-Content -Raw -Path ${psSingleQuote(ctxPath)}`,
-    `Remove-Item -Force -Path ${psSingleQuote(ctxPath)}, ${psSingleQuote(scriptPath)}`,
-    "if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {",
-    '  Write-Host "claude CLI not found on PATH. Install it, then relaunch."',
+    `$instr = Get-Content -Raw -Path ${psSingleQuote(instrPath)}`,
+    `Remove-Item -Force -Path ${psSingleQuote(ctxPath)}, ${psSingleQuote(instrPath)}, ${psSingleQuote(scriptPath)}`,
+    `if (-not (Get-Command ${binary} -ErrorAction SilentlyContinue)) {`,
+    `  Write-Host "${binary} CLI not found on PATH. Install it, then relaunch."`,
     '  Read-Host "Press Enter to close"',
     "  exit 1",
     "}",
-    `claude ${flag}--append-system-prompt $ctx`,
+    "if (-not [string]::IsNullOrWhiteSpace($instr)) {",
+    `  ${binary} ${execArgs} $instr`,
+    "} else {",
+    `  ${binary} ${execArgs}`,
+    "}",
     "",
   ].join("\r\n");
 }
@@ -258,11 +322,17 @@ function errMsg(err: unknown): string {
 // Orchestrator
 // ---------------------------------------------------------------------------
 
-export async function launchClaude(
-  page: PageContext,
+export async function launchAgent(
+  req: LaunchRequest,
   logger: Logger,
   deps: LaunchDeps = {},
 ): Promise<LaunchResult> {
+  const launcher = isLaunchableAgent(req.agent) ? AGENT_LAUNCHERS[req.agent] : undefined;
+  if (launcher === undefined) {
+    await logger.write({ dir: "system", event: "launch_agent_disabled", agent: req.agent });
+    return { ok: false, error: "agent_disabled" };
+  }
+
   const platform = deps.platform ?? process.platform;
   if (platform !== "darwin" && platform !== "win32") {
     await logger.write({ dir: "system", event: "launch_unsupported_platform", platform });
@@ -271,15 +341,17 @@ export async function launchClaude(
 
   const dir = deps.dir ?? launchDir();
   const safeMode = await (deps.safeMode ?? loadSafeMode)();
-  const dangerFlag = safeMode ? null : "--dangerously-skip-permissions";
   const id = (deps.randomId ?? defaultRandomId)();
   const ctxPath = join(dir, `${id}.ctx`);
+  const instrPath = join(dir, `${id}.instr`);
   const scriptPath = join(dir, platform === "darwin" ? `${id}.command` : `${id}.ps1`);
+  const execArgs =
+    platform === "darwin" ? launcher.macArgs({ safeMode }) : launcher.winArgs({ safeMode });
 
   const scriptBody =
     platform === "darwin"
-      ? buildMacScript({ ctxPath, scriptPath, dangerFlag })
-      : buildWindowsScript({ ctxPath, scriptPath, dangerFlag });
+      ? buildMacScript({ ctxPath, instrPath, scriptPath, binary: launcher.binary, execArgs })
+      : buildWindowsScript({ ctxPath, instrPath, scriptPath, binary: launcher.binary, execArgs });
 
   const opener = terminalCommand(platform, scriptPath, {
     iTerm: platform === "darwin" && (await (deps.iTermInstalled ?? defaultITermInstalled)()),
@@ -293,7 +365,8 @@ export async function launchClaude(
 
   try {
     await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-    await fs.writeFile(ctxPath, buildContext(page), { encoding: "utf8", mode: 0o600 });
+    await fs.writeFile(ctxPath, buildContext(req.page), { encoding: "utf8", mode: 0o600 });
+    await fs.writeFile(instrPath, req.instruction ?? "", { encoding: "utf8", mode: 0o600 });
     await fs.writeFile(scriptPath, scriptBody, { encoding: "utf8", mode: 0o700 });
   } catch (err) {
     await logger.write({ dir: "system", event: "launch_write_failed", error: errMsg(err) });
@@ -311,10 +384,17 @@ export async function launchClaude(
     });
     // The launcher script never ran, so it didn't self-delete. Clean up.
     await safeUnlink(ctxPath);
+    await safeUnlink(instrPath);
     await safeUnlink(scriptPath);
     return { ok: false, error: "no_terminal" };
   }
 
-  await logger.write({ dir: "system", event: "launch_dispatched", platform, opener: opener.cmd });
+  await logger.write({
+    dir: "system",
+    event: "launch_dispatched",
+    agent: req.agent,
+    platform,
+    opener: opener.cmd,
+  });
   return { ok: true };
 }
