@@ -74,6 +74,16 @@ export {
   type EventMap,
 } from "./events.js";
 
+// Launchable coding-agent catalogue (extension picker + bridge validation).
+export {
+  type AgentId,
+  type AgentInfo,
+  AGENTS,
+  DEFAULT_AGENT_ID,
+  getAgent,
+  isLaunchableAgent,
+} from "./agents.js";
+
 // Runtime constants — defaults, timeouts, well-known filenames, env keys.
 export {
   DEFAULT_WS_HOST,
