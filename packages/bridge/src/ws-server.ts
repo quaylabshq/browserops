@@ -26,8 +26,12 @@ import {
 import type { Logger } from "./logger.js";
 import type { ConfirmationChannel } from "./safety.js";
 
-/** Page metadata forwarded from the popup to the launch handler. */
+/** Launch request forwarded from the side-panel launcher to the handler. */
 export interface LaunchRequestParams {
+  /** Agent id (e.g. "claude"); validated against the registry downstream. */
+  agent?: string;
+  /** Optional first instruction the user typed in the composer. */
+  instruction?: string;
   url: string;
   title?: string;
   description?: string;
@@ -526,6 +530,8 @@ export class WSBridge {
     }
 
     const params: LaunchRequestParams = {
+      agent: capField(body["agent"], 32),
+      instruction: capField(body["instruction"], 8000),
       url: capField(body["url"]) ?? "",
       title: capField(body["title"]),
       description: capField(body["description"]),

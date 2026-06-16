@@ -18,7 +18,7 @@ import { TabRegistry, type TabRecord } from "./tab-registry.js";
 import { loadOrCreateToken } from "./token.js";
 import { loadPinnedExtensionId, persistPinnedExtensionId } from "./extension-pin.js";
 import { WSBridge } from "./ws-server.js";
-import { launchClaude } from "./launch-claude.js";
+import { launchAgent } from "./launch-agent.js";
 import { ensureIndex } from "./procedures/index-builder.js";
 import { proceduresRoot } from "./procedures/paths.js";
 import { loadConfigFeatures } from "./config.js";
@@ -136,10 +136,22 @@ export async function bootDaemonRuntime(opts: BootDaemonRuntimeOptions): Promise
       }
     },
     onLaunch: async (params) => {
-      // The popup gesture is the user-consent event; the launch is gated by
+      // The launcher gesture is the user-consent event; the launch is gated by
       // the pinned-origin + token check in the endpoint, not the risky-action
       // approval layer (which gates actions the agent takes, not starting it).
-      return launchClaude(params, logger);
+      return launchAgent(
+        {
+          agent: params.agent ?? "claude",
+          instruction: params.instruction,
+          page: {
+            url: params.url,
+            title: params.title,
+            description: params.description,
+            siteName: params.siteName,
+          },
+        },
+        logger,
+      );
     },
     onConnectionChange: (connected) => {
       const wasConnected = lastExtensionConnected;
