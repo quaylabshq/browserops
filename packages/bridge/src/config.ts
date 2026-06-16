@@ -21,6 +21,14 @@ import { configPath } from "./paths.js";
 
 interface ConfigFileShape {
   features?: Partial<Record<FeatureName, boolean>>;
+  /**
+   * When true, launchers (the CLI `--claude` flag and the extension's
+   * "Launch Claude here" button) start `claude` WITHOUT
+   * `--dangerously-skip-permissions`, so Claude prompts for each action.
+   * Absent/false (the default) means danger mode. Written by the CLI's
+   * `browserops config set safe_mode <bool>`; mirrors the CLI's getSafeMode.
+   */
+  safe_mode?: boolean;
 }
 
 export interface FeatureResolution {
@@ -53,6 +61,26 @@ export async function loadConfigFeatures(): Promise<FeatureResolution> {
     source: fileShape !== null ? "config_file" : "defaults",
     unknownEnv: [],
   };
+}
+
+/**
+ * Read the `safe_mode` flag from the config file. Defaults to `false`
+ * (danger mode) when the file is missing, unreadable, or malformed —
+ * matching the CLI launcher's getSafeMode so the daemon-side launch path
+ * and `browserops --claude` agree on the danger flag.
+ *
+ * The path is injectable for hermetic tests; production callers use the
+ * default `configPath()` (`~/.browserops/config.json`).
+ */
+export async function loadSafeMode(path: string = configPath()): Promise<boolean> {
+  try {
+    const raw = await fs.readFile(path, "utf8");
+    const parsed = JSON.parse(raw) as ConfigFileShape;
+    return parsed?.safe_mode === true;
+  } catch {
+    // ENOENT, parse error, or anything else → default to danger mode.
+    return false;
+  }
 }
 
 /**
