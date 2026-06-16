@@ -51,6 +51,11 @@ export function buildLaunchBody(input: LaunchInput): Record<string, string> {
   return body;
 }
 
+/** The assistant-bubble copy shown after a successful launch. */
+export function launchedMessage(agentLabel: string): string {
+  return `Launched ${agentLabel} in your terminal — continue the conversation there.`;
+}
+
 /** Map a /launch response (or a null = unreachable bridge) to launcher copy. */
 export function launchStatusMessage(
   res: { ok: boolean; status: number } | null,

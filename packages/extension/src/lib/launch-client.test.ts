@@ -1,5 +1,17 @@
 import { describe, it, expect } from "vitest";
-import { buildLaunchBody, clampText, launchStatusMessage } from "./launch-client.js";
+import {
+  buildLaunchBody,
+  clampText,
+  launchedMessage,
+  launchStatusMessage,
+} from "./launch-client.js";
+
+describe("launchedMessage", () => {
+  it("names the agent and points to the terminal", () => {
+    expect(launchedMessage("Claude Code")).toMatch(/Claude Code/);
+    expect(launchedMessage("Claude Code")).toMatch(/terminal/);
+  });
+});
 
 describe("clampText", () => {
   it("trims, drops empties, and caps length", () => {

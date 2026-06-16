@@ -9,35 +9,38 @@
     <div class="panel">
       <header class="panel-head">
         <span class="panel-title">Launcher</span>
-        <span id="status" class="pill pill--off" aria-live="polite">Disconnected</span>
+        <div class="head-right">
+          <button id="new-session" type="button" class="link-btn" hidden>↻ New</button>
+          <span id="status" class="pill pill--off" aria-live="polite">Disconnected</span>
+        </div>
       </header>
+
+      <div id="agents" class="agents" role="radiogroup" aria-label="Agent"></div>
 
       <!-- Shown only when disconnected: launching needs a live bridge. -->
       <div id="disconnected" class="notice">
         Not connected to the bridge. Open the BrowserOps popup and connect, then come back.
       </div>
 
-      <div id="composer" class="composer">
-        <div class="field">
-          <div class="field-label">Agent</div>
-          <div id="agents" class="agents" role="radiogroup" aria-label="Agent"></div>
+      <div id="transcript" class="transcript" aria-live="polite">
+        <div id="empty" class="empty">
+          Send a message to launch your agent in a terminal. Your first message becomes its
+          task; the conversation then continues in the terminal.
         </div>
-
-        <div class="field">
-          <div class="field-label">Instruction <span class="muted">(optional)</span></div>
-          <textarea
-            id="instruction"
-            class="instruction"
-            rows="5"
-            placeholder="What should the agent do? Leave blank to just open a session…"
-          ></textarea>
-        </div>
-
-        <div id="context" class="context muted">current tab: …</div>
-
-        <button id="launch" type="button" class="btn btn--block">Launch in terminal ▸</button>
-        <div id="launch-status" class="launch-status" aria-live="polite"></div>
       </div>
+
+      <div id="context" class="context muted">current tab: …</div>
+
+      <form id="composer" class="inputbar">
+        <textarea
+          id="message"
+          class="message"
+          rows="1"
+          placeholder="Message…"
+          aria-label="Message"
+        ></textarea>
+        <button id="send" type="submit" class="send" aria-label="Send">▸</button>
+      </form>
     </div>
     <script type="module" src="./index.ts"></script>
   </body>
