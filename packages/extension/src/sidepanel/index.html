@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>BrowserOps Launcher</title>
+    <link rel="stylesheet" href="./sidepanel.css" />
+  </head>
+  <body>
+    <div class="panel">
+      <header class="panel-head">
+        <span class="panel-title">Launcher</span>
+        <span id="status" class="pill pill--off" aria-live="polite">Disconnected</span>
+      </header>
+
+      <!-- Shown only when disconnected: launching needs a live bridge. -->
+      <div id="disconnected" class="notice">
+        Not connected to the bridge. Open the BrowserOps popup and connect, then come back.
+      </div>
+
+      <div id="composer" class="composer">
+        <div class="field">
+          <div class="field-label">Agent</div>
+          <div id="agents" class="agents" role="radiogroup" aria-label="Agent"></div>
+        </div>
+
+        <div class="field">
+          <div class="field-label">Instruction <span class="muted">(optional)</span></div>
+          <textarea
+            id="instruction"
+            class="instruction"
+            rows="5"
+            placeholder="What should the agent do? Leave blank to just open a session…"
+          ></textarea>
+        </div>
+
+        <div id="context" class="context muted">current tab: …</div>
+
+        <button id="launch" type="button" class="btn btn--block">Launch in terminal ▸</button>
+        <div id="launch-status" class="launch-status" aria-live="polite"></div>
+      </div>
+    </div>
+    <script type="module" src="./index.ts"></script>
+  </body>
+</html>

@@ -22,7 +22,17 @@ export default defineManifest({
   version: "0.0.9",
   minimum_chrome_version: "120",
   key: EXTENSION_KEY,
-  permissions: ["tabs", "tabGroups", "scripting", "debugger", "storage", "alarms", "webNavigation", "webRequest"],
+  permissions: [
+    "tabs",
+    "tabGroups",
+    "scripting",
+    "debugger",
+    "storage",
+    "alarms",
+    "webNavigation",
+    "webRequest",
+    "sidePanel",
+  ],
   host_permissions: ["<all_urls>"],
   background: {
     service_worker: "src/background/index.ts",
@@ -47,6 +57,11 @@ export default defineManifest({
   options_ui: {
     page: "src/options/index.html",
     open_in_tab: true,
+  },
+  // The launcher lives in a side panel (roomier than the popup). The popup's
+  // "Open launcher" button calls chrome.sidePanel.open() for the window.
+  side_panel: {
+    default_path: "src/sidepanel/index.html",
   },
   // Expose the onboarding page so it can be opened directly via
   // chrome.tabs.create(chrome.runtime.getURL("src/onboard/index.html")) and
