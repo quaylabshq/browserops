@@ -2,14 +2,32 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>BrowserOps Launcher</title>
+    <title>BrowserOps Chat</title>
     <link rel="stylesheet" href="./sidepanel.css" />
   </head>
   <body>
     <div class="panel">
       <header class="panel-head">
-        <span class="panel-title">Launcher</span>
+        <span class="panel-title">Chat</span>
         <div class="head-right">
+          <button
+            id="term-mirror"
+            type="button"
+            class="link-btn"
+            hidden
+            title="Watch this session live in a terminal (read-only)"
+          >
+            ▤ Terminal
+          </button>
+          <button
+            id="term-takeover"
+            type="button"
+            class="link-btn"
+            hidden
+            title="Take over this session in a terminal"
+          >
+            ⤢ Take over
+          </button>
           <button id="new-session" type="button" class="link-btn" hidden>↻ New</button>
           <span id="status" class="pill pill--off" aria-live="polite">Disconnected</span>
         </div>
@@ -17,17 +35,21 @@
 
       <div id="agents" class="agents" role="radiogroup" aria-label="Agent"></div>
 
-      <!-- Shown only when disconnected: launching needs a live bridge. -->
+      <!-- Shown only when disconnected: chatting needs a live bridge. -->
       <div id="disconnected" class="notice">
         Not connected to the bridge. Open the BrowserOps popup and connect, then come back.
       </div>
 
+      <div id="sessions" class="sessions" aria-label="Recent sessions" hidden></div>
+
       <div id="transcript" class="transcript" aria-live="polite">
         <div id="empty" class="empty">
-          Send a message to launch your agent in a terminal. Your first message becomes its
-          task; the conversation then continues in the terminal.
+          Send a message to start chatting. Replies stream here, and the agent can act on the page
+          you’re viewing.
         </div>
       </div>
+
+      <div id="agent-status" class="agent-status" hidden></div>
 
       <div id="context" class="context muted">current tab: …</div>
 
