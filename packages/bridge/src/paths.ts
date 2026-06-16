@@ -41,3 +41,13 @@ export function daemonPidfilePath(): string {
 export function configPath(): string {
   return join(stateDir(), "config.json");
 }
+
+/**
+ * Directory for transient launcher artifacts written by `launch-claude.ts`
+ * (the per-launch context file + shell/PowerShell launcher script). Lives
+ * under the already-0700 state dir rather than a world-readable temp dir so
+ * the seeded page metadata stays private. Created on demand at launch time.
+ */
+export function launchDir(): string {
+  return join(stateDir(), "launch");
+}
