@@ -27,6 +27,8 @@ user's real Chrome tabs (with existing logins intact)
 
 **Procedure runtime.** Named, parameterised action graphs stored under `~/browserops/procedures/` as YAML. Five `procedures_*` tools (search, get, save, delete, execute) manage them. The store ships empty — new procedures are authored on-demand by the `browserops-teach` skill (autonomous) or by hand.
 
+**In-panel chat engine.** Besides the MCP path, the bridge can drive an agent as a **bidirectional chat** for the extension's side panel. The daemon runs the agent headless (Claude today: `claude --print --output-format stream-json --verbose`, one process per turn, `--session-id` for the first turn then `--resume`), parses its stream-json into normalized `ChatMessage`s, and streams them to the panel over **SSE** (`GET /chat/stream`); the panel sends turns via `POST /chat/new` / `/chat/send`. Each agent is a pluggable `AgentDriver` (Codex/Cursor slot in behind the same interface); **history is re-read from the agent's own transcript** (`~/.claude/projects/<slug>/<id>.jsonl`), not a bespoke store. A live session can also be surfaced in a terminal via `POST /chat/terminal`: a read-only **mirror** (tail the engine's mirror log) or a **takeover** (the engine lets go and an interactive `claude --resume <id>` becomes the sole writer). The `/chat/*` endpoints reuse the `/launch` two-gate auth (pinned-extension origin + loopback token). Spawned headless, the agent loads the user's own browserops MCP → shim → same daemon socket → same Chrome, so `browser_*` works inside chat too.
+
 ## Where to look
 
 | Want to understand…                                                                 | File                                                                                                                      |
@@ -34,6 +36,7 @@ user's real Chrome tabs (with existing logins intact)
 | The tool catalogue (names, schemas, descriptions)                                   | `packages/shared/src/tools.ts`                                                                                            |
 | MCP dispatch pipeline (validate → rate-limit → risky-gate → forward)                | `packages/bridge/src/mcp-server.ts`                                                                                       |
 | Bridge↔extension WebSocket protocol                                                 | `packages/shared/src/protocol.ts` + `packages/bridge/src/ws-server.ts` + `packages/extension/src/background/ws-client.ts` |
+| In-panel chat engine (drivers, sessions, manager, `/chat/*`, side-panel client)     | `packages/bridge/src/engine/` + `packages/shared/src/chat.ts` + `packages/extension/src/lib/chat-client.ts`               |
 | Extension handlers (what actually runs in Chrome)                                   | `packages/extension/src/background/handlers/`                                                                             |
 | Procedure YAML schema + search ranker                                               | `packages/shared/src/procedures.ts` + `packages/bridge/src/procedures/`                                                   |
 | Error codes + WebSocket close codes                                                 | `packages/shared/src/errors.ts`                                                                                           |
