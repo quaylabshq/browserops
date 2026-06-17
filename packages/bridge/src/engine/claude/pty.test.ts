@@ -11,8 +11,6 @@ import {
 
 afterEach(() => resetPtyCache());
 
-const ESC = "\x1b";
-
 describe("submitText", () => {
   const immediate = () => Promise.resolve();
 
@@ -22,10 +20,10 @@ describe("submitText", () => {
     expect(writes).toEqual(["what page am I on?", "\r"]);
   });
 
-  it("bracketed-pastes multi-line text so embedded newlines don't submit early", async () => {
+  it("flattens multi-line text to a single line so the TUI submits it", async () => {
     const writes: string[] = [];
     await submitText((d) => writes.push(d), "line1\nline2", { sleep: immediate });
-    expect(writes).toEqual([`${ESC}[200~line1\nline2${ESC}[201~`, "\r"]);
+    expect(writes).toEqual(["line1 line2", "\r"]);
   });
 
   it("presses Enter only after the settle delay resolves", async () => {

@@ -117,7 +117,8 @@ describe("ClaudePtyDriver", () => {
     ]);
     expect(spawnOpts()!.args).not.toContain("--print");
     expect(spawnOpts()!.args).not.toContain("--dangerously-skip-permissions");
-    await sleep(50); // ready (10ms) + seed submit
+    fake.emitData("rendered"); // TUI emits output → readiness quiesces, seed submits
+    await sleep(60);
     expect(fake.writes).toEqual(["SEED:do it:https://x.test", "\r"]);
   });
 
@@ -156,7 +157,8 @@ describe("ClaudePtyDriver", () => {
   it("send injects a follow-up turn into the live session", async () => {
     const { driver, fake } = make();
     const ref = await driver.start({ page, cwd });
-    await sleep(40); // let the seed submit first
+    fake.emitData("rendered"); // TUI emits output → readiness quiesces, seed submits
+    await sleep(60);
     const before = fake.writes.length;
     await driver.send(ref, "follow up");
     expect(fake.writes.slice(before)).toEqual(["follow up", "\r"]);
