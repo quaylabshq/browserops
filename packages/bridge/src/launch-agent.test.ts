@@ -14,6 +14,7 @@ import {
   launchAgent,
   openSessionTerminal,
   psSingleQuote,
+  resumePermissionArgs,
   shSingleQuote,
   terminalCommand,
   type LaunchDeps,
@@ -315,38 +316,52 @@ describe("session terminal scripts", () => {
     expect(s).toContain("\r\n");
   });
 
-  it("macOS takeover resumes the session id, honoring safe_mode", () => {
-    const danger = buildMacResumeScript({
+  it("resumePermissionArgs is interactive, never skip-permissions", () => {
+    expect(resumePermissionArgs(false)).toBe(
+      "--permission-mode acceptEdits --allowedTools mcp__browserops",
+    );
+    expect(resumePermissionArgs(true)).toBe("--permission-mode default");
+    expect(resumePermissionArgs(false)).not.toContain("dangerously-skip-permissions");
+  });
+
+  it("macOS takeover resumes with interactive permission flags (never skip-permissions)", () => {
+    const normal = buildMacResumeScript({
       sessionId: "sess-123",
       cwd: "/work",
-      safeMode: false,
+      permissionArgs: resumePermissionArgs(false),
       binary: "claude",
       scriptPath: "/d/x.command",
     });
-    expect(danger).toContain("cd '/work'");
-    expect(danger).toContain("command -v claude");
-    expect(danger).toContain("exec claude --dangerously-skip-permissions --resume 'sess-123'");
+    expect(normal).toContain("cd '/work'");
+    expect(normal).toContain("command -v claude");
+    expect(normal).toContain(
+      "exec claude --permission-mode acceptEdits --allowedTools mcp__browserops --resume 'sess-123'",
+    );
+    expect(normal).not.toContain("dangerously-skip-permissions");
 
     const safe = buildMacResumeScript({
       sessionId: "sess-123",
       cwd: "/work",
-      safeMode: true,
+      permissionArgs: resumePermissionArgs(true),
       binary: "claude",
       scriptPath: "/d/x.command",
     });
-    expect(safe).toContain("exec claude --resume 'sess-123'");
+    expect(safe).toContain("exec claude --permission-mode default --resume 'sess-123'");
     expect(safe).not.toContain("dangerously-skip-permissions");
   });
 
-  it("Windows takeover resumes the session id with CRLF", () => {
+  it("Windows takeover resumes with interactive permission flags, CRLF", () => {
     const s = buildWindowsResumeScript({
       sessionId: "sess-123",
       cwd: "C:\\work",
-      safeMode: false,
+      permissionArgs: resumePermissionArgs(false),
       binary: "claude",
       scriptPath: "C:\\d\\x.ps1",
     });
-    expect(s).toContain("claude --dangerously-skip-permissions --resume 'sess-123'");
+    expect(s).toContain(
+      "claude --permission-mode acceptEdits --allowedTools mcp__browserops --resume 'sess-123'",
+    );
+    expect(s).not.toContain("dangerously-skip-permissions");
     expect(s).toContain("Set-Location -Path 'C:\\work'");
     expect(s).toContain("\r\n");
   });
@@ -356,7 +371,7 @@ describe("session terminal scripts", () => {
     const s = buildMacResumeScript({
       sessionId: "s",
       cwd: evil,
-      safeMode: true,
+      permissionArgs: resumePermissionArgs(true),
       binary: "claude",
       scriptPath: "/d/x.command",
     });
@@ -406,7 +421,7 @@ describe("openSessionTerminal", () => {
     expect(calls[0]).toEqual({ cmd: "open", args: ["-a", "Terminal", join(dir, "term1.command")] });
   });
 
-  it("takeover: writes a resume .command that resumes the session id", async () => {
+  it("takeover: writes a resume .command with interactive flags (never skip-permissions)", async () => {
     const { deps: d } = deps();
     await openSessionTerminal(
       { mode: "takeover", sessionId: "s1", cwd: "/work", mirrorPath: "/c/s1.mirror.log" },
@@ -415,7 +430,8 @@ describe("openSessionTerminal", () => {
     );
     const script = await fs.readFile(join(dir, "term1.command"), "utf8");
     expect(script).toContain("--resume 's1'");
-    expect(script).toContain("--dangerously-skip-permissions");
+    expect(script).toContain("--permission-mode acceptEdits --allowedTools mcp__browserops");
+    expect(script).not.toContain("dangerously-skip-permissions");
   });
 
   it("writes a .ps1 + opens Windows Terminal on win32", async () => {
