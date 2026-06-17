@@ -51,3 +51,25 @@ export function configPath(): string {
 export function launchDir(): string {
   return join(stateDir(), "launch");
 }
+
+/**
+ * Per-session chat-engine artifacts: the human-readable mirror logs the
+ * "Show in terminal" affordance tails. Under the 0700 state dir.
+ */
+export function chatDir(): string {
+  return join(stateDir(), "chat");
+}
+
+/** The session index (sessions the chat engine has started) lives here. */
+export function sessionsDir(): string {
+  return join(stateDir(), "sessions");
+}
+
+/**
+ * Neutral working directory the chat engine runs agents in, so a danger-mode
+ * session has a bounded filesystem blast radius and its transcripts live at a
+ * predictable cwd. Override with BROWSEROPS_WORKSPACE_DIR.
+ */
+export function workspaceDir(): string {
+  return process.env["BROWSEROPS_WORKSPACE_DIR"] || join(stateDir(), "workspace");
+}

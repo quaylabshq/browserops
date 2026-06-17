@@ -19,6 +19,23 @@ import { dirname } from "node:path";
 import { ENV, type FeatureName, parseFeaturesEnv, resolveFeatures } from "@browserops/shared";
 import { configPath } from "./paths.js";
 
+/**
+ * Which transport the in-panel chat engine uses to drive Claude:
+ *  - `terminal` (default): a real INTERACTIVE `claude` session on a pty — input
+ *    injected at the TTY, output read from Claude's own transcript — which is
+ *    indistinguishable from hand-usage (no `--print`, no skip-permissions).
+ *  - `headless`: the `claude --print` stream-json driver (one process per turn).
+ * Driver selection degrades `terminal` → `headless` automatically when node-pty
+ * can't load, so this is a preference, not a hard requirement.
+ */
+export type ChatTransport = "terminal" | "headless";
+
+const CHAT_TRANSPORTS: readonly ChatTransport[] = ["terminal", "headless"];
+
+function isChatTransport(value: unknown): value is ChatTransport {
+  return typeof value === "string" && (CHAT_TRANSPORTS as readonly string[]).includes(value);
+}
+
 interface ConfigFileShape {
   features?: Partial<Record<FeatureName, boolean>>;
   /**
@@ -29,6 +46,8 @@ interface ConfigFileShape {
    * `browserops config set safe_mode <bool>`; mirrors the CLI's getSafeMode.
    */
   safe_mode?: boolean;
+  /** In-panel chat transport. See {@link ChatTransport}. */
+  chat_transport?: ChatTransport;
 }
 
 export interface FeatureResolution {
@@ -81,6 +100,29 @@ export async function loadSafeMode(path: string = configPath()): Promise<boolean
     // ENOENT, parse error, or anything else → default to danger mode.
     return false;
   }
+}
+
+/**
+ * Resolve the in-panel chat transport. Resolution order:
+ *   1. the `BROWSEROPS_CHAT_TRANSPORT` env override (one-shot runs / E2E),
+ *   2. the config file's `chat_transport`,
+ *   3. the `"terminal"` default.
+ * Unknown / malformed values fall through to the default rather than throwing —
+ * driver selection then degrades to headless at runtime if node-pty is missing.
+ * The path is injectable for hermetic tests.
+ */
+export async function loadChatTransport(path: string = configPath()): Promise<ChatTransport> {
+  const envOverride = process.env["BROWSEROPS_CHAT_TRANSPORT"];
+  if (isChatTransport(envOverride)) return envOverride;
+  try {
+    const raw = await fs.readFile(path, "utf8");
+    const parsed = JSON.parse(raw) as ConfigFileShape | null;
+    const fromFile = parsed?.chat_transport;
+    if (isChatTransport(fromFile)) return fromFile;
+  } catch {
+    // ENOENT, parse error, or anything else → default.
+  }
+  return "terminal";
 }
 
 /**

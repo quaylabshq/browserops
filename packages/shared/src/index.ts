@@ -77,12 +77,30 @@ export {
 // Launchable coding-agent catalogue (extension picker + bridge validation).
 export {
   type AgentId,
+  type AgentCaps,
   type AgentInfo,
   AGENTS,
   DEFAULT_AGENT_ID,
   getAgent,
   isLaunchableAgent,
+  canChatAgent,
 } from "./agents.js";
+
+// Normalized chat vocabulary (engine ↔ side-panel chat client).
+export {
+  type ChatRole,
+  CHAT_ROLES,
+  isChatRole,
+  type ChatBlock,
+  type ChatMessage,
+  type SessionRef,
+  type ChatStatusState,
+  type ChatEvent,
+  type ChatPageContext,
+  TERMINAL_MODES,
+  type TerminalMode,
+  isTerminalMode,
+} from "./chat.js";
 
 // Runtime constants — defaults, timeouts, well-known filenames, env keys.
 export {

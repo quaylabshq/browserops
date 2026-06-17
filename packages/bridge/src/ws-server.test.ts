@@ -1,7 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
-import { CloseCode, HELLO_TIMEOUT_MS, PROTOCOL_VERSION } from "@browserops/shared";
-import { WSBridge, type LaunchOutcome, type LaunchRequestParams } from "./ws-server.js";
+import { CloseCode, HELLO_TIMEOUT_MS, PROTOCOL_VERSION, type SessionRef } from "@browserops/shared";
+import {
+  WSBridge,
+  type ChatService,
+  type LaunchOutcome,
+  type LaunchRequestParams,
+} from "./ws-server.js";
+import { EngineError } from "./engine/errors.js";
 import type { Logger } from "./logger.js";
 
 const VALID_TOKEN = "a".repeat(64);
@@ -10,6 +16,14 @@ const PIN_ORIGIN = `chrome-extension://${PIN}`;
 
 function stubLogger(): Logger {
   return { async write() {} } as unknown as Logger;
+}
+
+async function waitFor(cond: () => boolean, ms = 1000): Promise<void> {
+  const start = Date.now();
+  while (!cond()) {
+    if (Date.now() - start > ms) throw new Error("waitFor timeout");
+    await new Promise((r) => setTimeout(r, 10));
+  }
 }
 
 interface BridgeFixture {
@@ -22,6 +36,7 @@ interface StartOpts {
   pinnedExtensionId?: string | null;
   onExtensionPin?: (extId: string) => Promise<void>;
   onLaunch?: (params: LaunchRequestParams) => Promise<LaunchOutcome>;
+  chat?: ChatService;
 }
 
 async function startBridge(opts: StartOpts = {}): Promise<BridgeFixture> {
@@ -34,6 +49,7 @@ async function startBridge(opts: StartOpts = {}): Promise<BridgeFixture> {
     logger: stubLogger(),
     onEvent: () => {},
     onLaunch: opts.onLaunch,
+    chat: opts.chat,
     pinnedExtensionId: opts.pinnedExtensionId ?? null,
     onExtensionPin: opts.onExtensionPin,
   });
@@ -652,6 +668,347 @@ describe("WSBridge POST /launch", () => {
       });
       expect(res.status).toBe(204);
       expect(res.headers.get("access-control-allow-methods")).toContain("POST");
+    } finally {
+      await fixture.bridge.stop();
+    }
+  });
+});
+
+describe("WSBridge /chat/*", () => {
+  function fakeChat() {
+    const sent: { id: string; text: string }[] = [];
+    const terminals: { id: string; mode: string }[] = [];
+    const sessions: (SessionRef & { lastActive: number })[] = [];
+    const ptyWrites: string[] = [];
+    const ptyResizes: { cols: number; rows: number }[] = [];
+    const chat: ChatService = {
+      async start(params) {
+        const ref: SessionRef = {
+          agent: "claude",
+          sessionId: "s1",
+          cwd: "/w",
+          createdAt: 1,
+          ...(params.instruction !== undefined ? { title: params.instruction } : {}),
+        };
+        sessions.unshift({ ...ref, lastActive: 1 });
+        return ref;
+      },
+      async send(id, text) {
+        if (id === "missing") throw new EngineError("unknown_session");
+        if (id === "noterm") throw new EngineError("pty_unavailable");
+        sent.push({ id, text });
+      },
+      async subscribe(id, listener) {
+        if (id === "missing") throw new EngineError("unknown_session");
+        listener({ type: "status", state: "thinking" }); // exercises replay-before-headers
+        return () => {};
+      },
+      async history(id) {
+        if (id === "missing") throw new EngineError("unknown_session");
+        return [{ id: "m", role: "assistant", blocks: [{ kind: "text", text: "hist" }] }];
+      },
+      async listSessions() {
+        return sessions;
+      },
+      async terminal(id, mode) {
+        terminals.push({ id, mode });
+        return { ok: true };
+      },
+      attachTerminal(id) {
+        if (id === "missing") throw new EngineError("unknown_session");
+        return {
+          onData: (cb) => {
+            cb("REPLAY"); // simulated scrollback replay on attach
+            return () => {};
+          },
+          write: (d) => void ptyWrites.push(d),
+          resize: (cols, rows) => void ptyResizes.push({ cols, rows }),
+        };
+      },
+      terminalCapable(id) {
+        return id !== "noterm"; // a "noterm" session is headless/cold → no toggle
+      },
+    };
+    return { chat, sent, terminals, sessions, ptyWrites, ptyResizes };
+  }
+
+  function postChat(
+    port: number,
+    path: string,
+    body: unknown,
+    origin: string | undefined = PIN_ORIGIN,
+  ): Promise<Response> {
+    return fetch(`http://127.0.0.1:${port}${path}`, {
+      method: "POST",
+      headers: origin
+        ? { "content-type": "application/json", Origin: origin }
+        : { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  function getChat(port: number, path: string, origin = PIN_ORIGIN): Promise<Response> {
+    return fetch(`http://127.0.0.1:${port}${path}`, { headers: { Origin: origin } });
+  }
+
+  /** Read an SSE body until `needle` appears or a timeout cancels it. */
+  async function readStream(res: Response, needle: string, ms = 1500): Promise<string> {
+    const reader = res.body!.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    const timer = setTimeout(() => void reader.cancel().catch(() => {}), ms);
+    try {
+      while (!buf.includes(needle)) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        if (value) buf += dec.decode(value, { stream: true });
+      }
+    } catch {
+      /* cancelled */
+    } finally {
+      clearTimeout(timer);
+      await reader.cancel().catch(() => {});
+    }
+    return buf;
+  }
+
+  it("POST /chat/new starts a session and returns its ref", async () => {
+    const f = fakeChat();
+    const fixture = await startBridge({ pinnedExtensionId: PIN, chat: f.chat });
+    try {
+      const res = await postChat(fixture.port, "/chat/new", {
+        token: VALID_TOKEN,
+        agent: "claude",
+        instruction: "hello",
+        url: "https://x.test",
+        title: "T",
+        site_name: "S",
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        ok: boolean;
+        session: SessionRef & { title?: string };
+        terminal?: boolean;
+      };
+      expect(body.ok).toBe(true);
+      expect(body.session.sessionId).toBe("s1");
+      expect(body.session.title).toBe("hello");
+      expect(body.terminal).toBe(true); // s1 has a live pty → embedded-terminal toggle offered
+    } finally {
+      await fixture.bridge.stop();
+    }
+  });
+
+  it("POST /chat/new is gated by token and origin-pin", async () => {
+    const f = fakeChat();
+    const fixture = await startBridge({ pinnedExtensionId: PIN, chat: f.chat });
+    try {
+      expect((await postChat(fixture.port, "/chat/new", { token: "nope", url: "x" })).status).toBe(
+        401,
+      );
+      expect(
+        (
+          await postChat(
+            fixture.port,
+            "/chat/new",
+            { token: VALID_TOKEN, url: "x" },
+            "https://evil.com",
+          )
+        ).status,
+      ).toBe(403);
+      expect(
+        (
+          await postChat(
+            fixture.port,
+            "/chat/new",
+            { token: VALID_TOKEN, url: "x" },
+            "chrome-extension://ccccdddd",
+          )
+        ).status,
+      ).toBe(403);
+      expect(f.sessions).toHaveLength(0);
+    } finally {
+      await fixture.bridge.stop();
+    }
+  });
+
+  it("POST /chat/* returns 503 chat_unavailable when no chat service is wired", async () => {
+    const fixture = await startBridge({ pinnedExtensionId: PIN });
+    try {
+      const res = await postChat(fixture.port, "/chat/new", { token: VALID_TOKEN, url: "x" });
+      expect(res.status).toBe(503);
+      expect(((await res.json()) as { error?: string }).error).toBe("chat_unavailable");
+    } finally {
+      await fixture.bridge.stop();
+    }
+  });
+
+  it("POST /chat/send routes the turn; bad input → 400; unknown session → 404; pty_unavailable → 503", async () => {
+    const f = fakeChat();
+    const fixture = await startBridge({ pinnedExtensionId: PIN, chat: f.chat });
+    try {
+      expect(
+        (
+          await postChat(fixture.port, "/chat/send", {
+            token: VALID_TOKEN,
+            session_id: "s1",
+            text: "hi",
+          })
+        ).status,
+      ).toBe(200);
+      expect(f.sent).toEqual([{ id: "s1", text: "hi" }]);
+      expect(
+        (await postChat(fixture.port, "/chat/send", { token: VALID_TOKEN, session_id: "s1" }))
+          .status,
+      ).toBe(400);
+      expect(
+        (
+          await postChat(fixture.port, "/chat/send", {
+            token: VALID_TOKEN,
+            session_id: "missing",
+            text: "hi",
+          })
+        ).status,
+      ).toBe(404);
+      expect(
+        (
+          await postChat(fixture.port, "/chat/send", {
+            token: VALID_TOKEN,
+            session_id: "noterm",
+            text: "hi",
+          })
+        ).status,
+      ).toBe(503);
+    } finally {
+      await fixture.bridge.stop();
+    }
+  });
+
+  it("POST /chat/terminal forwards a valid mode; rejects an invalid one", async () => {
+    const f = fakeChat();
+    const fixture = await startBridge({ pinnedExtensionId: PIN, chat: f.chat });
+    try {
+      const ok = await postChat(fixture.port, "/chat/terminal", {
+        token: VALID_TOKEN,
+        session_id: "s1",
+        mode: "mirror",
+      });
+      expect(ok.status).toBe(200);
+      expect(f.terminals).toEqual([{ id: "s1", mode: "mirror" }]);
+      const bad = await postChat(fixture.port, "/chat/terminal", {
+        token: VALID_TOKEN,
+        session_id: "s1",
+        mode: "explode",
+      });
+      expect(bad.status).toBe(400);
+    } finally {
+      await fixture.bridge.stop();
+    }
+  });
+
+  it("GET /chat/sessions lists sessions (token in query)", async () => {
+    const f = fakeChat();
+    const fixture = await startBridge({ pinnedExtensionId: PIN, chat: f.chat });
+    try {
+      await postChat(fixture.port, "/chat/new", { token: VALID_TOKEN, url: "x" });
+      const res = await getChat(fixture.port, `/chat/sessions?token=${VALID_TOKEN}`);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { sessions: { sessionId: string; terminal?: boolean }[] };
+      expect(body.sessions.map((s) => s.sessionId)).toEqual(["s1"]);
+      expect(body.sessions[0]?.terminal).toBe(true); // capability surfaced per session
+      expect((await getChat(fixture.port, `/chat/sessions?token=wrong`)).status).toBe(401);
+    } finally {
+      await fixture.bridge.stop();
+    }
+  });
+
+  it("GET /chat/history returns normalized messages; unknown → 404", async () => {
+    const f = fakeChat();
+    const fixture = await startBridge({ pinnedExtensionId: PIN, chat: f.chat });
+    try {
+      const res = await getChat(fixture.port, `/chat/history?token=${VALID_TOKEN}&session_id=s1`);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { messages: { role: string }[] };
+      expect(body.messages.map((m) => m.role)).toEqual(["assistant"]);
+      expect((await getChat(fixture.port, `/chat/history?token=${VALID_TOKEN}`)).status).toBe(400);
+      expect(
+        (await getChat(fixture.port, `/chat/history?token=${VALID_TOKEN}&session_id=missing`))
+          .status,
+      ).toBe(404);
+    } finally {
+      await fixture.bridge.stop();
+    }
+  });
+
+  it("GET /chat/stream is an SSE feed that replays buffered events", async () => {
+    const f = fakeChat();
+    const fixture = await startBridge({ pinnedExtensionId: PIN, chat: f.chat });
+    try {
+      const res = await getChat(fixture.port, `/chat/stream?token=${VALID_TOKEN}&session_id=s1`);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toContain("text/event-stream");
+      const text = await readStream(res, "thinking");
+      expect(text).toContain(`"state":"thinking"`);
+    } finally {
+      await fixture.bridge.stop();
+    }
+  });
+
+  it("GET /chat/stream maps a wrong token to 401 and an unknown session to 404", async () => {
+    const f = fakeChat();
+    const fixture = await startBridge({ pinnedExtensionId: PIN, chat: f.chat });
+    try {
+      expect((await getChat(fixture.port, `/chat/stream?token=wrong&session_id=s1`)).status).toBe(
+        401,
+      );
+      const unknown = await getChat(
+        fixture.port,
+        `/chat/stream?token=${VALID_TOKEN}&session_id=missing`,
+      );
+      expect(unknown.status).toBe(404);
+    } finally {
+      await fixture.bridge.stop();
+    }
+  });
+
+  it("WS /chat/pty bridges raw output out and JSON input/resize in", async () => {
+    const f = fakeChat();
+    const fixture = await startBridge({ pinnedExtensionId: PIN, chat: f.chat });
+    try {
+      const ws = new WebSocket(
+        `ws://127.0.0.1:${fixture.port}/chat/pty?token=${VALID_TOKEN}&session_id=s1`,
+        { headers: { Origin: PIN_ORIGIN } },
+      );
+      const got: string[] = [];
+      ws.on("message", (d) => got.push(d.toString()));
+      await new Promise<void>((resolve, reject) => {
+        ws.on("open", () => resolve());
+        ws.on("error", reject);
+      });
+      await waitFor(() => got.includes("REPLAY")); // scrollback replay on attach
+      ws.send(JSON.stringify({ type: "input", data: "hi there" }));
+      ws.send(JSON.stringify({ type: "resize", cols: 80, rows: 24 }));
+      await waitFor(() => f.ptyWrites.length > 0 && f.ptyResizes.length > 0);
+      expect(f.ptyWrites).toEqual(["hi there"]);
+      expect(f.ptyResizes).toEqual([{ cols: 80, rows: 24 }]);
+      ws.close();
+    } finally {
+      await fixture.bridge.stop();
+    }
+  });
+
+  it("WS /chat/pty rejects a bad token at the upgrade", async () => {
+    const f = fakeChat();
+    const fixture = await startBridge({ pinnedExtensionId: PIN, chat: f.chat });
+    try {
+      const ws = new WebSocket(`ws://127.0.0.1:${fixture.port}/chat/pty?token=nope&session_id=s1`, {
+        headers: { Origin: PIN_ORIGIN },
+      });
+      const outcome = await new Promise<string>((resolve) => {
+        ws.on("open", () => resolve("opened"));
+        ws.on("error", () => resolve("rejected"));
+      });
+      expect(outcome).toBe("rejected");
     } finally {
       await fixture.bridge.stop();
     }

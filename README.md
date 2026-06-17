@@ -57,6 +57,17 @@ A bare `browserops "task"` routes through your configured default launcher (set 
 
 Or open the editor you registered in Step 2 and just talk to it — `browserops` is wired in as an MCP server, so any prompt that could use the browser will pick it up.
 
+### Chat from the side panel
+
+You can also chat with an agent **inside Chrome**, no terminal required. Open the BrowserOps popup (toolbar icon) → **Open launcher** to reveal the side panel, then just type. Your first message starts a session, seeded with the page you're on (URL, title, description — so "summarize this" knows what "this" is); replies stream back into the panel, and the agent can drive the very tab you're looking at.
+
+- **Conversation stays in the panel** — keep sending follow-ups, no terminal needed.
+- **▤ Terminal** switches the whole panel to a **full-window** live terminal — the real interactive Claude TUI — and toggles back to chat anytime (chat _or_ terminal, never a cramped split). The session keeps running across the toggle, so anything you type in the terminal also shows up in the chat.
+- **⤢ Take over** ejects the session into a separate external terminal (`claude --resume <id>`) for full TUI control. The panel then becomes a **live read-only mirror**: it keeps streaming the turns you type in your terminal (input here is locked). The resume runs interactively (`--permission-mode acceptEdits`), **never** with `--dangerously-skip-permissions`.
+- The **recent-sessions strip** reopens a past conversation — its transcript is re-read from the agent's own local session files.
+
+Under the hood the panel drives **Claude Code as a normal interactive session** (a real terminal on a pty — no `--print`, no skip-permissions), so it's indistinguishable from running Claude yourself; your turns are injected at the prompt and replies are read from Claude's own transcript. Codex and Cursor are coming, and it honors the same safe-mode toggle as the launcher. (Set `chat_transport: "headless"` in `~/.browserops/config.json` to use the `claude --print` path instead; it's also the automatic fallback when the terminal backend can't load.)
+
 ### Daily lifecycle
 
 ```bash
