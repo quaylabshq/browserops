@@ -62,11 +62,11 @@ Or open the editor you registered in Step 2 and just talk to it — `browserops`
 You can also chat with an agent **inside Chrome**, no terminal required. Open the BrowserOps popup (toolbar icon) → **Open launcher** to reveal the side panel, then just type. Your first message starts a session, seeded with the page you're on (URL, title, description — so "summarize this" knows what "this" is); replies stream back into the panel, and the agent can drive the very tab you're looking at.
 
 - **Conversation stays in the panel** — keep sending follow-ups, no terminal needed.
-- **▤ Terminal** opens a read-only mirror of the live session in a terminal window (watch the raw agent work) while you keep chatting in the panel.
-- **⤢ Take over** ejects the session into an interactive terminal (`claude --resume <id>`) for full TUI control; the panel then goes read-only.
+- **▤ Terminal** opens a live terminal **inside the panel** — the real interactive Claude TUI. Watch it work, or type directly into it; it drives the same session, so anything you type there also shows up in the chat.
+- **⤢ Take over** ejects the session into a separate external terminal (`claude --resume <id>`) for full TUI control; the panel then goes read-only.
 - The **recent-sessions strip** reopens a past conversation — its transcript is re-read from the agent's own local session files.
 
-Today the side-panel chat drives **Claude Code** (Codex and Cursor are coming) and honors the same safe-mode toggle as the launcher.
+Under the hood the panel drives **Claude Code as a normal interactive session** (a real terminal on a pty — no `--print`, no skip-permissions), so it's indistinguishable from running Claude yourself; your turns are injected at the prompt and replies are read from Claude's own transcript. Codex and Cursor are coming, and it honors the same safe-mode toggle as the launcher. (Set `chat_transport: "headless"` in `~/.browserops/config.json` to use the `claude --print` path instead; it's also the automatic fallback when the terminal backend can't load.)
 
 ### Daily lifecycle
 
