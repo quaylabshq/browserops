@@ -54,6 +54,30 @@ describe("reduceChat", () => {
     expect(s.messages[0]!.blocks[0]).toEqual({ kind: "text", text: "one-updated" });
   });
 
+  it("reconciles an optimistic user echo with its transcript record (no duplicate)", () => {
+    let s = appendUserMessage(initialChatState(), "hello there");
+    const optimisticId = s.messages[0]!.id;
+    expect(optimisticId.startsWith("local-")).toBe(true);
+
+    // The pty tailer later emits the same turn as a real transcript record (uuid
+    // id, flattened text) — adopt the id, keep the original text, no 2nd bubble.
+    s = reduceChat(s, {
+      type: "message",
+      message: { id: "u-uuid", role: "user", blocks: [{ kind: "text", text: "hello there" }] },
+    });
+    expect(s.messages).toHaveLength(1);
+    expect(s.messages[0]!.id).toBe("u-uuid");
+    expect(s.messages[0]!.blocks[0]).toEqual({ kind: "text", text: "hello there" });
+  });
+
+  it("a user turn with no pending optimistic echo appends (live read-only mirror)", () => {
+    const s = reduceChat(initialChatState(), {
+      type: "message",
+      message: { id: "u-ext", role: "user", blocks: [{ kind: "text", text: "typed in terminal" }] },
+    });
+    expect(s.messages.map((m) => m.id)).toEqual(["u-ext"]);
+  });
+
   it("tracks status, latches ejected, and drops terminalCapable on eject", () => {
     let s = { ...initialChatState(), terminalCapable: true };
     s = reduceChat(s, { type: "status", state: "thinking" });

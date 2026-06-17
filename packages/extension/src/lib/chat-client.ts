@@ -61,13 +61,35 @@ export function initialChatState(): ChatState {
   return { messages: [], status: "idle", ejected: false, terminalCapable: false };
 }
 
-/** Append, or replace by id when a message re-emits (streaming). */
+const OPTIMISTIC_PREFIX = "local-";
+const isOptimistic = (id: string): boolean => id.startsWith(OPTIMISTIC_PREFIX);
+
+/**
+ * Append, or replace by id when a message re-emits (streaming).
+ *
+ * One extra case for the terminal transport: the panel echoes the user's turn
+ * optimistically on send (id `local-*`), and the pty tailer ALSO emits that turn
+ * as a real transcript record (id = uuid, text flattened to one line / the seed
+ * wrapped with page context). To avoid a duplicate bubble, a real user record
+ * reconciles the oldest pending optimistic echo — adopting the real id but
+ * KEEPING the user's original text. A user record with no pending echo (a turn
+ * typed directly in the terminal, or one streamed in after an external eject)
+ * just appends, which is exactly the live read-only mirror.
+ */
 function upsertMessage(messages: ChatMessage[], incoming: ChatMessage): ChatMessage[] {
   const idx = messages.findIndex((m) => m.id === incoming.id);
   if (idx >= 0) {
     const next = messages.slice();
     next[idx] = incoming;
     return next;
+  }
+  if (incoming.role === "user" && !isOptimistic(incoming.id)) {
+    const pending = messages.findIndex((m) => m.role === "user" && isOptimistic(m.id));
+    if (pending >= 0) {
+      const next = messages.slice();
+      next[pending] = { ...messages[pending]!, id: incoming.id };
+      return next;
+    }
   }
   return [...messages, incoming];
 }
@@ -99,7 +121,7 @@ let optimisticSeq = 0;
 /** The user's own turn isn't echoed by the R2 stream, so we add it optimistically. */
 export function appendUserMessage(state: ChatState, text: string): ChatState {
   const message: ChatMessage = {
-    id: `local-${++optimisticSeq}`,
+    id: `${OPTIMISTIC_PREFIX}${++optimisticSeq}`,
     role: "user",
     blocks: [{ kind: "text", text }],
   };
