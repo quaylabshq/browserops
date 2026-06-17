@@ -39,7 +39,7 @@ const contextEl = $<HTMLDivElement>("context");
 const composerForm = $<HTMLFormElement>("composer");
 const messageEl = $<HTMLTextAreaElement>("message");
 const sendBtn = $<HTMLButtonElement>("send");
-const termPane = $<HTMLDivElement>("terminal-pane");
+const panelEl = $<HTMLDivElement>("panel");
 const termHost = $<HTMLDivElement>("terminal-host");
 
 let selectedAgent: string = DEFAULT_AGENT_ID;
@@ -47,6 +47,7 @@ let connected = false;
 let state: ChatState = initialChatState();
 let stream: EventSource | null = null;
 let terminal: EmbeddedTerminal | null = null;
+let view: "chat" | "terminal" = "chat";
 let tokenCache: string | null = null;
 let systemSeq = 0;
 
@@ -123,6 +124,13 @@ function renderBlocks(parent: HTMLElement, message: ChatMessage): void {
 }
 
 function render(): void {
+  // Terminal view falls back to chat if the session lost its pty (eject,
+  // disconnect, or a new/cold session that has none).
+  if (view === "terminal" && (!connected || !state.session || !state.terminalCapable)) {
+    closeTerminal();
+  }
+  panelEl.classList.toggle("view-terminal", view === "terminal");
+
   // Conversation.
   for (const node of transcriptEl.querySelectorAll(".msg, .thinking-dots")) node.remove();
   emptyEl.hidden = state.messages.length > 0;
@@ -147,9 +155,11 @@ function render(): void {
 
   // Header controls + composer.
   const hasSession = state.session !== undefined;
-  termMirrorBtn.hidden = !hasSession || !connected;
+  // Embedded-terminal toggle: only when this live session has a pty to attach.
+  termMirrorBtn.hidden = !hasSession || !connected || !state.terminalCapable;
   termTakeoverBtn.hidden = !hasSession || !connected || state.ejected;
   newSessionBtn.hidden = state.messages.length === 0 && !hasSession;
+  syncTerminalBtn();
   syncComposer();
 }
 
@@ -194,6 +204,7 @@ async function openSession(summary: SessionSummary): Promise<void> {
   closeStream();
   closeTerminal();
   state = reduceChat(initialChatState(), { type: "session", ref: summary });
+  state = { ...state, terminalCapable: summary.terminal === true };
   render();
   const history = await chatHistory(token, summary.sessionId);
   state = { ...state, messages: history };
@@ -322,6 +333,7 @@ async function sendMessage(): Promise<void> {
       return;
     }
     state = reduceChat(state, { type: "session", ref: res.session });
+    state = { ...state, terminalCapable: res.terminal === true };
     openStream(token, res.session.sessionId);
     render();
     await loadSessions();
@@ -352,30 +364,35 @@ function sendError(status: number, error?: string): string {
 
 // --- terminal affordances ---------------------------------------------------
 
-// ▤ Terminal: toggle the embedded xterm pane bound to this session's live pty.
-// Typing here drives the same interactive Claude the chat does (and shows up in
-// the chat view via the transcript). xterm is lazy-imported on first open.
-async function toggleTerminal(): Promise<void> {
-  if (terminal) {
+// ▤ Terminal: a full-window VIEW toggle. The panel shows EITHER the chat OR a
+// full-window live terminal bound to this session's pty — never both at once.
+// The pty session keeps running across the toggle; typing in the terminal drives
+// the same interactive Claude the chat does (and shows up in the chat via the
+// transcript). xterm is lazy-imported the first time the terminal opens.
+async function setView(next: "chat" | "terminal"): Promise<void> {
+  if (next === view) return;
+  if (next === "chat") {
     closeTerminal();
+    render();
     return;
   }
-  if (!state.session) return;
+  if (!state.session || !state.terminalCapable || !connected) return;
   const token = await getToken();
   if (!token) {
     pushSystem("Run setup first (no token).");
     return;
   }
-  termPane.hidden = false;
+  view = "terminal";
+  render(); // applies .view-terminal first so the pane is laid out at full size
   try {
     const { mountTerminal } = await import("../lib/pty-terminal.js");
     terminal = mountTerminal({ container: termHost, token, sessionId: state.session.sessionId });
     requestAnimationFrame(() => terminal?.fit());
   } catch {
-    termPane.hidden = true;
+    closeTerminal();
+    render();
     pushSystem("Couldn't open the embedded terminal.");
   }
-  syncTerminalBtn();
 }
 
 function closeTerminal(): void {
@@ -384,12 +401,12 @@ function closeTerminal(): void {
     terminal = null;
   }
   termHost.replaceChildren();
-  termPane.hidden = true;
+  view = "chat";
   syncTerminalBtn();
 }
 
 function syncTerminalBtn(): void {
-  termMirrorBtn.textContent = terminal ? "▤ Hide terminal" : "▤ Terminal";
+  termMirrorBtn.textContent = view === "terminal" ? "✕ Close terminal" : "▤ Terminal";
 }
 
 // ⤢ Take over: eject the session into a real external terminal (claude --resume).
@@ -440,7 +457,9 @@ messageEl.addEventListener("keydown", (e) => {
   }
 });
 newSessionBtn.addEventListener("click", newSession);
-termMirrorBtn.addEventListener("click", () => void toggleTerminal());
+termMirrorBtn.addEventListener("click", () => {
+  void setView(view === "terminal" ? "chat" : "terminal");
+});
 termTakeoverBtn.addEventListener("click", () => void takeoverTerminal());
 
 chrome.storage.onChanged.addListener((changes, area) => {

@@ -257,23 +257,37 @@ body {
   color: var(--color-brand);
 }
 
-/* Embedded terminal pane (xterm bound to /chat/pty) */
+/* Full-window terminal view (xterm bound to /chat/pty). Hidden by default; the
+   panel swaps to it — and collapses the chat surfaces — when .view-terminal is
+   set, so it's a real view toggle, not a cramped pane shown alongside chat. */
 .terminal-pane {
-  height: 280px;
+  display: none;
   margin: 4px 0 8px;
   border: 1px solid var(--color-ink-12);
   border-radius: 8px;
   overflow: hidden;
   background: #19181b;
 }
-.terminal-pane[hidden] {
-  display: none;
-}
 .terminal-host {
   width: 100%;
   height: 100%;
   padding: 6px;
   box-sizing: border-box;
+}
+
+.panel.view-terminal .terminal-pane {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  margin: 4px 0 12px;
+}
+.panel.view-terminal .agents,
+.panel.view-terminal .sessions,
+.panel.view-terminal .transcript,
+.panel.view-terminal .agent-status,
+.panel.view-terminal .context,
+.panel.view-terminal .inputbar {
+  display: none;
 }
 
 /* Agent status line above the composer */
