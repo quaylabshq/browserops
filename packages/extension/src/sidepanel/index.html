@@ -15,7 +15,7 @@
             type="button"
             class="link-btn"
             hidden
-            title="Watch this session live in a terminal (read-only)"
+            title="Show or hide the live terminal in this panel"
           >
             ▤ Terminal
           </button>
@@ -47,6 +47,10 @@
           Send a message to start chatting. Replies stream here, and the agent can act on the page
           you’re viewing.
         </div>
+      </div>
+
+      <div id="terminal-pane" class="terminal-pane" hidden>
+        <div id="terminal-host" class="terminal-host"></div>
       </div>
 
       <div id="agent-status" class="agent-status" hidden></div>

@@ -222,3 +222,17 @@ export async function chatHistory(token: string, sessionId: string): Promise<Cha
 export function streamUrl(token: string, sessionId: string): string {
   return `${CHAT_BASE}/chat/stream?token=${encodeURIComponent(token)}&session_id=${encodeURIComponent(sessionId)}`;
 }
+
+/** The /chat/pty WebSocket URL for the embedded terminal (ws://, token in the query like SSE). */
+export function ptyUrl(token: string, sessionId: string): string {
+  const base = CHAT_BASE.replace(/^http/, "ws");
+  return `${base}/chat/pty?token=${encodeURIComponent(token)}&session_id=${encodeURIComponent(sessionId)}`;
+}
+
+/** Client→server pty frames. Raw pty output comes back the other way, unframed. */
+export function ptyInputFrame(data: string): string {
+  return JSON.stringify({ type: "input", data });
+}
+export function ptyResizeFrame(cols: number, rows: number): string {
+  return JSON.stringify({ type: "resize", cols, rows });
+}
