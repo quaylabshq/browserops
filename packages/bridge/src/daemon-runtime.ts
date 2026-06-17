@@ -27,10 +27,12 @@ import { join } from "node:path";
 import { WSBridge, type ChatService } from "./ws-server.js";
 import { launchAgent, openSessionTerminal } from "./launch-agent.js";
 import { ChatEngine } from "./engine/manager.js";
+import { ClaudeDriver } from "./engine/claude/driver.js";
+import { ClaudePtyDriver } from "./engine/claude/terminal-driver.js";
 import { chatDir } from "./paths.js";
 import { ensureIndex } from "./procedures/index-builder.js";
 import { proceduresRoot } from "./procedures/paths.js";
-import { loadConfigFeatures } from "./config.js";
+import { loadChatTransport, loadConfigFeatures } from "./config.js";
 
 export interface DaemonRuntime {
   version: string;
@@ -114,9 +116,20 @@ export async function bootDaemonRuntime(opts: BootDaemonRuntimeOptions): Promise
   const token = await loadOrCreateToken();
   const pinnedExtensionId = await loadPinnedExtensionId();
 
-  // The in-panel chat engine (bidirectional, agent-agnostic). The terminal
-  // mirror / takeover-eject is wired in a follow-up step.
-  const chatEngine = new ChatEngine({ logger });
+  // The in-panel chat engine (bidirectional, agent-agnostic). The transport
+  // selects how Claude is driven: a real INTERACTIVE session on a pty (default)
+  // or the headless `--print` path. Terminal degrades to headless when node-pty
+  // can't load — the engine catches `pty_unavailable` from the driver's start().
+  const chatTransport = await loadChatTransport();
+  const headlessDriver = new ClaudeDriver({ logger });
+  const chatEngine = new ChatEngine({
+    logger,
+    drivers: {
+      claude: chatTransport === "terminal" ? new ClaudePtyDriver({ logger }) : headlessDriver,
+    },
+    ...(chatTransport === "terminal" ? { fallbacks: { claude: headlessDriver } } : {}),
+  });
+  await logger.write({ dir: "system", event: "chat_transport", transport: chatTransport });
   const chatService: ChatService = {
     start: (params) =>
       chatEngine.start({
@@ -132,15 +145,18 @@ export async function bootDaemonRuntime(opts: BootDaemonRuntimeOptions): Promise
       const meta = await chatEngine.getSession(sessionId);
       if (!meta) return { ok: false, error: "unknown_session" };
       // Takeover hands the session to an interactive terminal, so the engine
-      // must let go first — one writer at a time. Mirror is read-only and
-      // leaves the engine driving.
-      if (mode === "takeover") await chatEngine.stop(sessionId);
+      // must let go first — one writer at a time. eject() prefers the driver's
+      // relinquish (the pty transport keeps a live read-only transcript mirror);
+      // mirror mode is read-only and leaves the engine driving.
+      if (mode === "takeover") await chatEngine.eject(sessionId);
       const result = await openSessionTerminal(
         { mode, sessionId, cwd: meta.cwd, mirrorPath: join(chatDir(), `${sessionId}.mirror.log`) },
         logger,
       );
       return result.ok ? { ok: true } : { ok: false, error: result.error };
     },
+    attachTerminal: (sessionId) => chatEngine.attachTerminal(sessionId),
+    terminalCapable: (sessionId) => chatEngine.terminalCapable(sessionId),
   };
 
   const wsBridge = new WSBridge({

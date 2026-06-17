@@ -3,8 +3,15 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChatEvent, ChatMessage, SessionRef } from "@browserops/shared";
-import type { AgentDriver, ChatEventListener, StartOpts, Unsubscribe } from "./driver.js";
-import { engineErrorCode } from "./errors.js";
+import type {
+  AgentDriver,
+  ChatEventListener,
+  StartOpts,
+  TerminalAttachable,
+  TerminalHandle,
+  Unsubscribe,
+} from "./driver.js";
+import { EngineError, engineErrorCode, type EngineErrorCode } from "./errors.js";
 import { ChatEngine } from "./manager.js";
 import { SessionIndex } from "./sessions.js";
 
@@ -49,6 +56,45 @@ class FakeDriver implements AgentDriver {
   }
   emit(sessionId: string, event: ChatEvent): void {
     for (const l of this.listeners.get(sessionId) ?? []) l(event);
+  }
+}
+
+class FailingDriver implements AgentDriver {
+  readonly id = "claude" as const;
+  constructor(private readonly code: EngineErrorCode) {}
+  start(): Promise<SessionRef> {
+    return Promise.reject(new EngineError(this.code));
+  }
+  send(): Promise<void> {
+    return Promise.resolve();
+  }
+  subscribe(): Unsubscribe {
+    return () => {};
+  }
+  history(): Promise<ChatMessage[]> {
+    return Promise.resolve([]);
+  }
+  stop(): Promise<void> {
+    return Promise.resolve();
+  }
+}
+
+/** A driver with a distinct eject (the pty transport's relinquish). */
+class RelinquishDriver extends FakeDriver {
+  relinquished: string[] = [];
+  async relinquish(ref: SessionRef): Promise<void> {
+    this.relinquished.push(ref.sessionId);
+  }
+}
+
+/** A terminal-attachable driver with a controllable live flag. */
+class FakeTerminalDriver extends FakeDriver implements TerminalAttachable {
+  live = true;
+  attachTerminal(): TerminalHandle {
+    return { onData: () => () => {}, write: () => {}, resize: () => {} };
+  }
+  terminalLive(): boolean {
+    return this.live;
   }
 }
 
@@ -112,10 +158,41 @@ describe("ChatEngine", () => {
     expect(await engine.history(ref.sessionId)).toEqual(driver.historyResult);
   });
 
-  it("stop ejects via the driver", async () => {
+  it("stop tears down via the driver", async () => {
     const ref = await engine.start({ agent: "claude", page: { url: "x" } });
     await engine.stop(ref.sessionId);
     expect(driver.stopped).toEqual(["s1"]);
+  });
+
+  it("eject prefers the driver's relinquish over stop", async () => {
+    const d = new RelinquishDriver();
+    const e = new ChatEngine({ drivers: { claude: d }, index, now: () => 1 });
+    const ref = await e.start({ agent: "claude", page: { url: "x" } });
+    await e.eject(ref.sessionId);
+    expect(d.relinquished).toEqual([ref.sessionId]);
+    expect(d.stopped).toEqual([]); // hard stop NOT used when relinquish exists
+  });
+
+  it("eject falls back to stop for a driver without relinquish (headless)", async () => {
+    const ref = await engine.start({ agent: "claude", page: { url: "x" } });
+    await engine.eject(ref.sessionId);
+    expect(driver.stopped).toEqual(["s1"]);
+  });
+
+  it("terminalCapable: live terminal driver true; not-live / headless / cold false", async () => {
+    const term = new FakeTerminalDriver();
+    const e = new ChatEngine({ drivers: { claude: term }, index, now: () => 1 });
+    const ref = await e.start({ agent: "claude", page: { url: "x" } });
+    expect(e.terminalCapable(ref.sessionId)).toBe(true);
+    term.live = false; // after eject the pty is gone
+    expect(e.terminalCapable(ref.sessionId)).toBe(false);
+    expect(e.terminalCapable("never-seen")).toBe(false); // cold / not cached
+
+    // A headless (non-terminal-attachable) driver is never terminal-capable.
+    const headless = new FakeDriver();
+    const e2 = new ChatEngine({ drivers: { claude: headless }, index, now: () => 1 });
+    const ref2 = await e2.start({ agent: "claude", page: { url: "x" } });
+    expect(e2.terminalCapable(ref2.sessionId)).toBe(false);
   });
 
   it("resolves a cold session from the index after a restart", async () => {
@@ -131,5 +208,41 @@ describe("ChatEngine", () => {
     expect(await codeOf(engine.start({ agent: "codex", page: { url: "x" } }))).toBe(
       "agent_unavailable",
     );
+  });
+
+  it("falls back to the fallback driver on pty_unavailable, routing later calls to it", async () => {
+    const primary = new FailingDriver("pty_unavailable");
+    const fallback = new FakeDriver();
+    const e = new ChatEngine({
+      drivers: { claude: primary },
+      fallbacks: { claude: fallback },
+      index,
+      now: () => 1,
+    });
+    const ref = await e.start({ agent: "claude", page: { url: "x" }, instruction: "hi" });
+    expect(fallback.started).toHaveLength(1);
+    await e.send(ref.sessionId, "next");
+    expect(fallback.sent).toEqual([{ id: ref.sessionId, text: "next" }]);
+  });
+
+  it("does not fall back for non-pty errors", async () => {
+    const fallback = new FakeDriver();
+    const e = new ChatEngine({
+      drivers: { claude: new FailingDriver("claude_not_found") },
+      fallbacks: { claude: fallback },
+      index,
+      now: () => 1,
+    });
+    expect(await codeOf(e.start({ agent: "claude", page: { url: "x" } }))).toBe("claude_not_found");
+    expect(fallback.started).toHaveLength(0);
+  });
+
+  it("propagates pty_unavailable when no fallback is registered", async () => {
+    const e = new ChatEngine({
+      drivers: { claude: new FailingDriver("pty_unavailable") },
+      index,
+      now: () => 1,
+    });
+    expect(await codeOf(e.start({ agent: "claude", page: { url: "x" } }))).toBe("pty_unavailable");
   });
 });
