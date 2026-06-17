@@ -409,7 +409,10 @@ function syncTerminalBtn(): void {
   termMirrorBtn.textContent = view === "terminal" ? "✕ Close terminal" : "▤ Terminal";
 }
 
-// ⤢ Take over: eject the session into a real external terminal (claude --resume).
+// ⤢ Take over: eject the session into your own external terminal (claude
+// --resume). The daemon keeps tailing the transcript, so we KEEP the SSE stream
+// open — the chat here becomes a LIVE read-only mirror of the turns you type in
+// the external terminal. Only input is locked (composer + embedded terminal).
 async function takeoverTerminal(): Promise<void> {
   if (!state.session) return;
   const token = await getToken();
@@ -422,10 +425,9 @@ async function takeoverTerminal(): Promise<void> {
     pushSystem("Couldn't open the terminal.");
     return;
   }
-  closeStream();
-  closeTerminal();
+  closeTerminal(); // leave the embedded terminal view; you drive in the external one now
   state = reduceChat(state, { type: "status", state: "ejected" });
-  pushSystem("Taken over in your terminal — continue there.");
+  pushSystem("Taken over in your terminal — the chat here is now a live read-only view.");
 }
 
 function newSession(): void {
