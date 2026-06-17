@@ -17,6 +17,7 @@ import {
   type PageMeta,
   type SessionSummary,
 } from "../lib/chat-client.js";
+import type { EmbeddedTerminal } from "../lib/pty-terminal.js";
 
 const $ = <T extends HTMLElement>(id: string): T => {
   const el = document.getElementById(id);
@@ -38,11 +39,15 @@ const contextEl = $<HTMLDivElement>("context");
 const composerForm = $<HTMLFormElement>("composer");
 const messageEl = $<HTMLTextAreaElement>("message");
 const sendBtn = $<HTMLButtonElement>("send");
+const panelEl = $<HTMLDivElement>("panel");
+const termHost = $<HTMLDivElement>("terminal-host");
 
 let selectedAgent: string = DEFAULT_AGENT_ID;
 let connected = false;
 let state: ChatState = initialChatState();
 let stream: EventSource | null = null;
+let terminal: EmbeddedTerminal | null = null;
+let view: "chat" | "terminal" = "chat";
 let tokenCache: string | null = null;
 let systemSeq = 0;
 
@@ -119,6 +124,13 @@ function renderBlocks(parent: HTMLElement, message: ChatMessage): void {
 }
 
 function render(): void {
+  // Terminal view falls back to chat if the session lost its pty (eject,
+  // disconnect, or a new/cold session that has none).
+  if (view === "terminal" && (!connected || !state.session || !state.terminalCapable)) {
+    closeTerminal();
+  }
+  panelEl.classList.toggle("view-terminal", view === "terminal");
+
   // Conversation.
   for (const node of transcriptEl.querySelectorAll(".msg, .thinking-dots")) node.remove();
   emptyEl.hidden = state.messages.length > 0;
@@ -143,9 +155,11 @@ function render(): void {
 
   // Header controls + composer.
   const hasSession = state.session !== undefined;
-  termMirrorBtn.hidden = !hasSession || !connected;
+  // Embedded-terminal toggle: only when this live session has a pty to attach.
+  termMirrorBtn.hidden = !hasSession || !connected || !state.terminalCapable;
   termTakeoverBtn.hidden = !hasSession || !connected || state.ejected;
   newSessionBtn.hidden = state.messages.length === 0 && !hasSession;
+  syncTerminalBtn();
   syncComposer();
 }
 
@@ -188,7 +202,9 @@ async function openSession(summary: SessionSummary): Promise<void> {
   const token = await getToken();
   if (!token) return;
   closeStream();
+  closeTerminal();
   state = reduceChat(initialChatState(), { type: "session", ref: summary });
+  state = { ...state, terminalCapable: summary.terminal === true };
   render();
   const history = await chatHistory(token, summary.sessionId);
   state = { ...state, messages: history };
@@ -317,6 +333,7 @@ async function sendMessage(): Promise<void> {
       return;
     }
     state = reduceChat(state, { type: "session", ref: res.session });
+    state = { ...state, terminalCapable: res.terminal === true };
     openStream(token, res.session.sessionId);
     render();
     await loadSessions();
@@ -347,31 +364,75 @@ function sendError(status: number, error?: string): string {
 
 // --- terminal affordances ---------------------------------------------------
 
-async function openTerminal(mode: "mirror" | "takeover"): Promise<void> {
+// ▤ Terminal: a full-window VIEW toggle. The panel shows EITHER the chat OR a
+// full-window live terminal bound to this session's pty — never both at once.
+// The pty session keeps running across the toggle; typing in the terminal drives
+// the same interactive Claude the chat does (and shows up in the chat via the
+// transcript). xterm is lazy-imported the first time the terminal opens.
+async function setView(next: "chat" | "terminal"): Promise<void> {
+  if (next === view) return;
+  if (next === "chat") {
+    closeTerminal();
+    render();
+    return;
+  }
+  if (!state.session || !state.terminalCapable || !connected) return;
+  const token = await getToken();
+  if (!token) {
+    pushSystem("Run setup first (no token).");
+    return;
+  }
+  view = "terminal";
+  render(); // applies .view-terminal first so the pane is laid out at full size
+  try {
+    const { mountTerminal } = await import("../lib/pty-terminal.js");
+    terminal = mountTerminal({ container: termHost, token, sessionId: state.session.sessionId });
+    requestAnimationFrame(() => terminal?.fit());
+  } catch {
+    closeTerminal();
+    render();
+    pushSystem("Couldn't open the embedded terminal.");
+  }
+}
+
+function closeTerminal(): void {
+  if (terminal) {
+    terminal.dispose();
+    terminal = null;
+  }
+  termHost.replaceChildren();
+  view = "chat";
+  syncTerminalBtn();
+}
+
+function syncTerminalBtn(): void {
+  termMirrorBtn.textContent = view === "terminal" ? "✕ Close terminal" : "▤ Terminal";
+}
+
+// ⤢ Take over: eject the session into your own external terminal (claude
+// --resume). The daemon keeps tailing the transcript, so we KEEP the SSE stream
+// open — the chat here becomes a LIVE read-only mirror of the turns you type in
+// the external terminal. Only input is locked (composer + embedded terminal).
+async function takeoverTerminal(): Promise<void> {
   if (!state.session) return;
   const token = await getToken();
   if (!token) {
     pushSystem("Run setup first (no token).");
     return;
   }
-  const res = await chatTerminal(token, state.session.sessionId, mode);
+  const res = await chatTerminal(token, state.session.sessionId, "takeover");
   if (!res.ok) {
-    pushSystem(
-      mode === "mirror" ? "Couldn't open a terminal mirror." : "Couldn't open the terminal.",
-    );
+    pushSystem("Couldn't open the terminal.");
     return;
   }
-  if (mode === "mirror") {
-    pushSystem("Opened a read-only mirror in your terminal.");
-  } else {
-    closeStream();
-    state = reduceChat(state, { type: "status", state: "ejected" });
-    pushSystem("Taken over in your terminal — continue there.");
-  }
+  closeTerminal(); // leave the embedded terminal view; you drive in the external one now
+  state = reduceChat(state, { type: "status", state: "ejected" });
+  pushSystem("Taken over in your terminal — the chat here is now a live read-only view.");
 }
 
 function newSession(): void {
   closeStream();
+  closeTerminal();
   state = initialChatState();
   render();
   messageEl.focus();
@@ -398,8 +459,10 @@ messageEl.addEventListener("keydown", (e) => {
   }
 });
 newSessionBtn.addEventListener("click", newSession);
-termMirrorBtn.addEventListener("click", () => void openTerminal("mirror"));
-termTakeoverBtn.addEventListener("click", () => void openTerminal("takeover"));
+termMirrorBtn.addEventListener("click", () => {
+  void setView(view === "terminal" ? "chat" : "terminal");
+});
+termTakeoverBtn.addEventListener("click", () => void takeoverTerminal());
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;

@@ -19,6 +19,11 @@
     "pnpm": ">=9"
   },
   "packageManager": "pnpm@9.12.0",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "node-pty"
+    ]
+  },
   "scripts": {
     "setup": "pnpm install && pnpm build && node packages/cli/dist/index.js init",
     "start": "pnpm build && node packages/cli/dist/index.js start",

@@ -6,7 +6,7 @@
     <link rel="stylesheet" href="./sidepanel.css" />
   </head>
   <body>
-    <div class="panel">
+    <div id="panel" class="panel">
       <header class="panel-head">
         <span class="panel-title">Chat</span>
         <div class="head-right">
@@ -15,7 +15,7 @@
             type="button"
             class="link-btn"
             hidden
-            title="Watch this session live in a terminal (read-only)"
+            title="Switch between chat and the full-window live terminal"
           >
             ▤ Terminal
           </button>
@@ -47,6 +47,11 @@
           Send a message to start chatting. Replies stream here, and the agent can act on the page
           you’re viewing.
         </div>
+      </div>
+
+      <!-- Full-window terminal view; shown only when .panel.view-terminal is set. -->
+      <div id="terminal-pane" class="terminal-pane">
+        <div id="terminal-host" class="terminal-host"></div>
       </div>
 
       <div id="agent-status" class="agent-status" hidden></div>

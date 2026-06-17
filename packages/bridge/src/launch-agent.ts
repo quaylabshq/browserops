@@ -228,24 +228,38 @@ export function buildWindowsTailScript(mirrorPath: string, scriptPath: string): 
   ].join("\r\n");
 }
 
+/**
+ * Interactive permission flags for a takeover/resume. NEVER
+ * `--dangerously-skip-permissions` — that is the exact ban-risk flag the
+ * interactive-terminal transport exists to avoid, and an ejected session is
+ * driven by a human in a terminal, so prompting is fine. Mirrors the pty
+ * driver's interactive args ([terminal-driver.ts] buildArgs): acceptEdits plus a
+ * pre-allowed browserops tool when not in safe mode, full prompting in safe mode.
+ */
+export function resumePermissionArgs(safeMode: boolean): string {
+  return safeMode
+    ? "--permission-mode default"
+    : "--permission-mode acceptEdits --allowedTools mcp__browserops";
+}
+
 export interface ResumeScriptParams {
   sessionId: string;
   cwd: string;
-  safeMode: boolean;
+  /** Interactive permission flags — see {@link resumePermissionArgs}. */
+  permissionArgs: string;
   binary: string;
   scriptPath: string;
 }
 
 /** macOS takeover: resume the same session id interactively. The engine has
- * already let go (stop), so this terminal becomes the session's sole writer. */
+ * already let go (eject), so this terminal becomes the session's sole writer. */
 export function buildMacResumeScript({
   sessionId,
   cwd,
-  safeMode,
+  permissionArgs,
   binary,
   scriptPath,
 }: ResumeScriptParams): string {
-  const danger = safeMode ? "" : "--dangerously-skip-permissions ";
   return [
     "#!/bin/bash",
     `echo "BrowserOps -> taking over this session in the terminal..."`,
@@ -256,7 +270,7 @@ export function buildMacResumeScript({
     '  read -r -p "Press Enter to close..."',
     "  exit 1",
     "fi",
-    `exec ${binary} ${danger}--resume ${shSingleQuote(sessionId)}`,
+    `exec ${binary} ${permissionArgs} --resume ${shSingleQuote(sessionId)}`,
     "",
   ].join("\n");
 }
@@ -265,11 +279,10 @@ export function buildMacResumeScript({
 export function buildWindowsResumeScript({
   sessionId,
   cwd,
-  safeMode,
+  permissionArgs,
   binary,
   scriptPath,
 }: ResumeScriptParams): string {
-  const danger = safeMode ? "" : "--dangerously-skip-permissions ";
   return [
     `Write-Host "BrowserOps -> taking over this session in the terminal..."`,
     `Remove-Item -Force -Path ${psSingleQuote(scriptPath)}`,
@@ -279,7 +292,7 @@ export function buildWindowsResumeScript({
     '  Read-Host "Press Enter to close"',
     "  exit 1",
     "}",
-    `${binary} ${danger}--resume ${psSingleQuote(sessionId)}`,
+    `${binary} ${permissionArgs} --resume ${psSingleQuote(sessionId)}`,
     "",
   ].join("\r\n");
 }
@@ -527,7 +540,13 @@ export async function openSessionTerminal(
         : buildWindowsTailScript(req.mirrorPath, scriptPath);
   } else {
     const safeMode = await (deps.safeMode ?? loadSafeMode)();
-    const params = { sessionId: req.sessionId, cwd: req.cwd, safeMode, binary, scriptPath };
+    const params = {
+      sessionId: req.sessionId,
+      cwd: req.cwd,
+      permissionArgs: resumePermissionArgs(safeMode),
+      binary,
+      scriptPath,
+    };
     scriptBody =
       platform === "darwin" ? buildMacResumeScript(params) : buildWindowsResumeScript(params);
   }

@@ -49,6 +49,48 @@ export interface AgentDriver {
   /** Re-read the agent's own transcript into normalized messages. */
   history(ref: SessionRef): Promise<ChatMessage[]>;
 
-  /** Relinquish the session (engine stops writing) — used by the takeover eject. */
+  /** Tear the session down completely (kill the process, end the stream). */
   stop(ref: SessionRef): Promise<void>;
+
+  /**
+   * Hand the session to an external terminal (the takeover eject): the driver
+   * stops being a *writer* but may keep a read-only mirror alive. The pty
+   * transport kills its own pty (one writer at a time) yet keeps tailing the
+   * transcript the external `claude --resume` writes, so the panel chat stays a
+   * live read-only view. Optional — drivers without a distinct eject (the
+   * headless driver, whose `stop()` is already a soft eject) omit it and the
+   * engine falls back to {@link stop}.
+   */
+  relinquish?(ref: SessionRef): Promise<void>;
+}
+
+/** A live raw-terminal handle the WS bridge binds an embedded xterm pane to. */
+export interface TerminalHandle {
+  /** Subscribe to raw pty output; the bounded scrollback is replayed first. */
+  onData(listener: (data: string) => void): Unsubscribe;
+  /** Forward keystrokes typed in the pane back to the pty. */
+  write(data: string): void;
+  /** Resize the pty to match the pane geometry. */
+  resize(cols: number, rows: number): void;
+}
+
+/**
+ * An optional capability on top of {@link AgentDriver}: exposing the live session
+ * as a real terminal so the panel can embed an xterm pane (over `/chat/pty`).
+ * Drivers that don't run a tty (the headless Claude driver) simply omit it.
+ */
+export interface TerminalAttachable {
+  attachTerminal(ref: SessionRef): TerminalHandle;
+  /**
+   * Whether this ref currently has a live pty to attach (false once the session
+   * has been stopped or ejected to an external terminal). Lets the engine tell
+   * the panel whether to offer the embedded-terminal toggle.
+   */
+  terminalLive?(ref: SessionRef): boolean;
+}
+
+export function isTerminalAttachable(
+  driver: AgentDriver,
+): driver is AgentDriver & TerminalAttachable {
+  return typeof (driver as Partial<TerminalAttachable>).attachTerminal === "function";
 }
