@@ -139,9 +139,6 @@ export function resetPtyCache(): void {
   cachedSpawner = undefined;
 }
 
-const BRACKET_PASTE_START = "\x1b[200~";
-const BRACKET_PASTE_END = "\x1b[201~";
-
 export interface SubmitOptions {
   /** Gap between writing the text and pressing Enter. */
   settleMs?: number;
@@ -150,20 +147,22 @@ export interface SubmitOptions {
 }
 
 /**
- * Submit a turn to an interactive TUI on a pty. The text and the Enter are
- * SEPARATE writes with a settle gap — a single `text\r` write is swallowed as a
- * paste. Multi-line text is bracketed-pasted so embedded newlines don't submit
- * early; one discrete Enter then sends it.
+ * Submit a turn to an interactive TUI on a pty. Two rules, both verified against
+ * Claude's Ink TUI:
+ *  1. the text and the Enter must be SEPARATE writes with a settle gap — a
+ *     combined `text\r` write is swallowed as a paste and never submits;
+ *  2. the text is flattened to a single line — a multi-line write is treated as a
+ *     paste and collapses into a "pasted text" attachment instead of sending.
  */
 export async function submitText(
   write: (data: string) => void,
   text: string,
   opts: SubmitOptions = {},
 ): Promise<void> {
-  const settleMs = opts.settleMs ?? 140;
+  const settleMs = opts.settleMs ?? 300;
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
-  if (text.includes("\n")) write(`${BRACKET_PASTE_START}${text}${BRACKET_PASTE_END}`);
-  else write(text);
+  const line = text.replace(/\s*\n\s*/g, " ").trim();
+  write(line);
   await sleep(settleMs);
   write("\r");
 }
@@ -244,8 +243,8 @@ export class PtySession {
 
   /** Resolve once output has been quiet for `quietMs`, or after `timeoutMs` (hard cap). */
   waitUntilReady(opts: { quietMs?: number; timeoutMs?: number } = {}): Promise<void> {
-    const quietMs = opts.quietMs ?? 600;
-    const timeoutMs = opts.timeoutMs ?? 15000;
+    const quietMs = opts.quietMs ?? 1200;
+    const timeoutMs = opts.timeoutMs ?? 20000;
     return new Promise<void>((resolve) => {
       let settled = false;
       let quiet: ReturnType<typeof setTimeout> | undefined;
@@ -264,8 +263,12 @@ export class PtySession {
         quiet = setTimeout(finish, quietMs);
       };
       hard = setTimeout(finish, timeoutMs);
+      // The quiet timer starts on the FIRST byte (onData replays any buffered
+      // scrollback synchronously) and resets on each byte, so we resolve once the
+      // TUI has actually rendered AND settled — never before it emits anything,
+      // which would inject the seed into an unmounted prompt. The hard timeout is
+      // the floor if it somehow never outputs.
       unsub = this.onData(() => bump());
-      bump();
     });
   }
 
