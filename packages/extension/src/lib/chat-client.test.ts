@@ -4,6 +4,9 @@ import {
   appendUserMessage,
   buildNewBody,
   initialChatState,
+  ptyInputFrame,
+  ptyResizeFrame,
+  ptyUrl,
   reduceChat,
   statusLabel,
   streamUrl,
@@ -95,6 +98,19 @@ describe("streamUrl", () => {
     const url = streamUrl("tok en", "s/1");
     expect(url).toContain("/chat/stream?token=tok%20en");
     expect(url).toContain("session_id=s%2F1");
+  });
+});
+
+describe("ptyUrl / pty frames", () => {
+  it("builds a ws:// url with token + session id in the query", () => {
+    const url = ptyUrl("tok en", "s/1");
+    expect(url.startsWith("ws://127.0.0.1:57321/chat/pty?")).toBe(true);
+    expect(url).toContain("token=tok%20en");
+    expect(url).toContain("session_id=s%2F1");
+  });
+  it("frames input and resize as JSON", () => {
+    expect(ptyInputFrame("a\r")).toBe(JSON.stringify({ type: "input", data: "a\r" }));
+    expect(ptyResizeFrame(80, 24)).toBe(JSON.stringify({ type: "resize", cols: 80, rows: 24 }));
   });
 });
 
