@@ -48,8 +48,7 @@
  * Semantic token layer — the panel is the one surface that themes. The controller
  * in index.ts resolves "system" to light/dark and sets data-theme on <html>, so
  * the CSS only needs a light default + a [data-theme="dark"] override (no media
- * duplication). Components reference these semantic names; a few legacy aliases
- * keep the pre-redesign component CSS working until each phase migrates it.
+ * duplication). Components reference these semantic names.
  */
 :root {
   /* surfaces + text — LIGHT */
@@ -83,20 +82,6 @@
   --color-term-text: #f3f3f5;
   --color-term-prompt: #7ee787;
   --color-term-muted: rgba(255, 255, 255, 0.45);
-
-  /* legacy aliases → semantic (migrated away in later phases). var() resolves
-     lazily, so these follow the dark overrides automatically. */
-  --color-bg: var(--bg);
-  --color-surface: var(--surface);
-  --color-ink: var(--text);
-  --color-ink-60: var(--text-muted);
-  --color-ink-45: var(--text-faint);
-  --color-ink-12: var(--border-strong);
-  --color-ink-08: var(--border);
-  --color-ink-04: var(--fill);
-  --color-brand: var(--accent);
-  --color-brand-deep: var(--accent-press);
-  --color-success: var(--ok);
 
   color-scheme: light;
 }
@@ -150,92 +135,171 @@ body {
   display: flex;
   flex-direction: column;
   height: 100vh;
-  padding: 12px 12px 0;
+  padding: 10px 12px 0;
   box-sizing: border-box;
 }
 
-.panel-head {
+/* ── Header ─────────────────────────────────────────────────────────────── */
+.head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 10px;
+  gap: 8px;
+  padding-bottom: 8px;
 }
-.panel-title {
-  font-weight: 600;
-  font-size: 13px;
-}
-.head-right {
+.head__id {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
 }
-.link-btn {
-  font: inherit;
-  font-size: 11px;
+.head__mark {
+  width: 16px;
+  height: 16px;
+  border-radius: 5px;
+  flex-shrink: 0;
+  background: linear-gradient(150deg, var(--accent), var(--accent-press));
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+}
+.head__title {
+  font-size: 13px;
   font-weight: 600;
-  border: none;
-  background: none;
-  color: var(--color-brand);
-  cursor: pointer;
-  padding: 0;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.link-btn[hidden] {
+.head__actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background 80ms ease,
+    color 80ms ease,
+    transform 80ms ease;
+}
+.icon-btn:hover {
+  background: var(--fill);
+  color: var(--text);
+}
+.icon-btn:active {
+  transform: scale(0.94);
+}
+.icon-btn:focus-visible {
+  outline: 0;
+  box-shadow: 0 0 0 3px var(--accent-tint);
+}
+.icon-btn[hidden] {
   display: none;
 }
 
-.pill {
-  font-size: 10px;
-  font-weight: 600;
-  padding: 2px 8px;
+.dot {
+  width: 8px;
+  height: 8px;
   border-radius: 999px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  flex-shrink: 0;
+  margin-left: 4px;
 }
-.pill--on {
-  color: var(--color-success);
-  background: rgba(47, 125, 50, 0.12);
+.dot--on {
+  background: var(--ok);
+  box-shadow: 0 0 0 3px var(--ok-tint);
 }
-.pill--off {
-  color: var(--color-ink-60);
-  background: var(--color-ink-08);
+.dot--off {
+  background: var(--text-faint);
 }
 
-.notice {
-  font-size: 12px;
-  color: var(--color-ink-60);
-  background: var(--color-ink-04);
-  border: 1px solid var(--color-ink-08);
+/* ── Context bar — the tab the agent can drive ──────────────────────────── */
+.context {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 8px;
+  margin-bottom: 8px;
   border-radius: 8px;
-  padding: 10px 12px;
-  margin-bottom: 10px;
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--border);
+  font-size: 11px;
+  min-width: 0;
+}
+.context[hidden] {
+  display: none;
+}
+.context__fav {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  flex-shrink: 0;
+  background: var(--fill) center / contain no-repeat;
+}
+.context__label {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.context__live {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  flex-shrink: 0;
+  background: var(--accent);
+  animation: bo-pulse 1.6s ease-in-out infinite;
+}
+.context__live[hidden] {
+  display: none;
 }
 
+/* ── Agent picker ───────────────────────────────────────────────────────── */
 .agents {
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
 }
 .agent-chip {
   font: inherit;
   font-size: 12px;
   font-weight: 500;
-  padding: 4px 11px;
+  padding: 3px 10px;
   border-radius: 999px;
-  border: 1px solid var(--color-ink-12);
-  background: var(--color-surface);
-  color: var(--color-ink);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
   cursor: pointer;
+  transition:
+    background 80ms ease,
+    border-color 80ms ease,
+    color 80ms ease;
 }
 .agent-chip[aria-checked="true"] {
-  border-color: var(--color-brand);
-  background: var(--color-brand);
-  color: #fff;
+  border-color: transparent;
+  background: var(--accent);
+  color: var(--on-accent);
 }
 .agent-chip:disabled {
   cursor: not-allowed;
-  color: var(--color-ink-45);
-  background: var(--color-ink-04);
+  color: var(--text-faint);
+  background: var(--fill);
+  border-color: var(--border);
 }
 .agent-chip .agent-note {
   font-size: 9px;
@@ -245,146 +309,456 @@ body {
   opacity: 0.7;
 }
 
-/* Conversation */
-.transcript {
-  flex: 1;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 4px 2px;
-}
-.empty {
-  margin: auto;
-  max-width: 240px;
-  text-align: center;
-  color: var(--color-ink-45);
-  font-size: 12px;
-}
-.msg {
-  max-width: 85%;
-  padding: 7px 11px;
-  border-radius: 12px;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-.msg--user {
-  align-self: flex-end;
-  background: var(--color-brand);
-  color: #fff;
-  border-bottom-right-radius: 4px;
-}
-.msg--assistant {
-  align-self: flex-start;
-  background: var(--color-surface);
-  border: 1px solid var(--color-ink-08);
-  color: var(--color-ink);
-  border-bottom-left-radius: 4px;
-}
-.msg--tool {
-  align-self: flex-start;
-  max-width: 92%;
-  background: transparent;
-  padding: 0;
-}
-.msg--system {
-  align-self: center;
-  max-width: 92%;
-  text-align: center;
-  background: var(--color-ink-04);
-  color: var(--color-ink-60);
-  font-size: 11px;
-  border-radius: 8px;
-}
-
-.msg .block-text + .block-text {
-  margin-top: 6px;
-}
-.block-thinking {
-  color: var(--color-ink-45);
-  font-style: italic;
-  font-size: 11px;
-  white-space: pre-wrap;
-}
-.tool-chip {
-  display: inline-block;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 11px;
-  padding: 3px 8px;
-  border-radius: 6px;
-  background: var(--color-ink-04);
-  border: 1px solid var(--color-ink-08);
-  color: var(--color-ink-60);
-  margin-top: 4px;
-  word-break: break-word;
-}
-.tool-chip--ok {
-  color: var(--color-success);
-  border-color: rgba(47, 125, 50, 0.25);
-}
-.tool-chip--err {
-  color: #b3261e;
-  border-color: rgba(179, 38, 30, 0.3);
-}
-
-.thinking-dots {
-  align-self: flex-start;
-  color: var(--color-ink-45);
-  letter-spacing: 2px;
-  padding: 2px 4px;
-  animation: bo-pulse 1.1s ease-in-out infinite;
-}
-@keyframes bo-pulse {
-  0%,
-  100% {
-    opacity: 0.35;
-  }
-  50% {
-    opacity: 0.9;
-  }
-}
-
-/* Recent-sessions strip */
+/* ── Recent-sessions strip ──────────────────────────────────────────────── */
 .sessions {
   display: flex;
   gap: 6px;
   overflow-x: auto;
   padding-bottom: 8px;
-  margin-bottom: 4px;
+  scrollbar-width: none;
+}
+.sessions::-webkit-scrollbar {
+  display: none;
 }
 .sessions[hidden] {
   display: none;
 }
 .session-chip {
   flex: 0 0 auto;
-  max-width: 140px;
+  max-width: 150px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   font: inherit;
   font-size: 11px;
-  padding: 4px 9px;
+  padding: 4px 10px;
   border-radius: 999px;
-  border: 1px solid var(--color-ink-12);
-  background: var(--color-surface);
-  color: var(--color-ink-60);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
   cursor: pointer;
+  transition:
+    border-color 80ms ease,
+    color 80ms ease;
+}
+.session-chip:hover {
+  color: var(--text);
 }
 .session-chip--active {
-  border-color: var(--color-brand);
-  color: var(--color-brand);
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
-/* Full-window terminal view (xterm bound to /chat/pty). Hidden by default; the
-   panel swaps to it — and collapses the chat surfaces — when .view-terminal is
-   set, so it's a real view toggle, not a cramped pane shown alongside chat. */
+/* ── Stream ─────────────────────────────────────────────────────────────── */
+.stream {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 6px 2px 8px;
+  scrollbar-width: thin;
+}
+
+/* Empty + state cards */
+.empty {
+  margin: auto;
+  max-width: 260px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 24px 8px;
+}
+.empty__mark {
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  background: linear-gradient(150deg, var(--accent), var(--accent-press));
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.2);
+  margin-bottom: 4px;
+}
+.empty__lead {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+}
+.empty__sub {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+.empty[hidden] {
+  display: none;
+}
+.state {
+  margin: auto;
+  max-width: 280px;
+  text-align: center;
+  padding: 16px;
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+.state[hidden] {
+  display: none;
+}
+.state__title {
+  margin: 0 0 4px;
+  font-weight: 600;
+}
+.state__body {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* ── Turns ──────────────────────────────────────────────────────────────── */
+.turn {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.turn__who {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 400;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.turn__glyph {
+  font-size: 11px;
+  color: var(--accent);
+  letter-spacing: 0;
+}
+
+/* User turn — quiet, accent-edged */
+.turn--user .turn__body {
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding: 7px 11px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--border);
+  border-left: 2px solid var(--accent);
+}
+
+/* Agent turn — flowing prose + an action timeline */
+.turn--agent .turn__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.turn--agent .turn__body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.block-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.55;
+  color: var(--text);
+}
+.block-text a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.block-text code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--fill);
+}
+.block-thinking {
+  font-size: 12px;
+  font-style: italic;
+  color: var(--text-faint);
+  white-space: pre-wrap;
+  border-left: 2px solid var(--border-strong);
+  padding-left: 8px;
+}
+
+/* Status chip on the active agent turn */
+.status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  font-weight: 500;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--fill);
+  color: var(--text-muted);
+}
+.status-chip::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: currentColor;
+}
+.status-chip--working {
+  color: var(--accent);
+  background: var(--accent-tint);
+}
+.status-chip--working::before {
+  animation: bo-pulse 1.2s ease-in-out infinite;
+}
+.status-chip--error {
+  color: var(--danger);
+  background: var(--danger-tint);
+}
+
+/* ── Browser-action timeline ────────────────────────────────────────────── */
+.actions {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1.5px solid var(--rail);
+  padding-left: 0;
+  margin-left: 4px;
+}
+.action {
+  display: grid;
+  grid-template-columns: 20px 1fr auto;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 4px 3px 8px;
+  border: 0;
+  background: transparent;
+  width: 100%;
+  text-align: left;
+  color: var(--text-muted);
+  font: inherit;
+  cursor: default;
+  border-radius: 6px;
+}
+.action.is-expandable {
+  cursor: pointer;
+}
+.action.is-expandable:hover {
+  background: var(--fill);
+}
+.action.is-expandable:focus-visible {
+  outline: 0;
+  box-shadow: 0 0 0 3px var(--accent-tint);
+}
+.action__icon {
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-faint);
+}
+.action__icon svg {
+  width: 14px;
+  height: 14px;
+  display: block;
+}
+.action__main {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  overflow: hidden;
+}
+.action__verb {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+.action__target {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.action__risky {
+  color: var(--warn);
+  font-size: 10px;
+  flex-shrink: 0;
+}
+.action__state {
+  font-size: 11px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+}
+.action--ok .action__state {
+  color: var(--ok);
+}
+.action--err {
+  color: var(--text);
+}
+.action--err .action__state {
+  color: var(--danger);
+}
+.action--run .action__icon {
+  color: var(--accent);
+  animation: bo-pulse 1.1s ease-in-out infinite;
+}
+.action__spinner {
+  width: 11px;
+  height: 11px;
+  border-radius: 999px;
+  border: 1.5px solid var(--accent-tint);
+  border-top-color: var(--accent);
+  animation: bo-spin 0.7s linear infinite;
+}
+.action__detail {
+  grid-column: 2 / -1;
+  margin-top: 2px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 180px;
+  overflow: auto;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--fill);
+}
+.action__detail[hidden] {
+  display: none;
+}
+.action--err .action__detail {
+  color: var(--danger);
+  background: var(--danger-tint);
+}
+
+/* System note — centered, quiet */
+.sysnote {
+  align-self: center;
+  max-width: 92%;
+  text-align: center;
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--fill);
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+
+/* Thinking shimmer (between an injected turn and the first reply token) */
+.thinking {
+  align-self: flex-start;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-faint);
+  font-size: 12px;
+}
+.thinking__bar {
+  width: 80px;
+  height: 6px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--fill), var(--border-strong), var(--fill));
+  background-size: 200% 100%;
+  animation: bo-shimmer 1.4s linear infinite;
+}
+
+/* ── Composer ───────────────────────────────────────────────────────────── */
+.composer {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 0 10px;
+  position: sticky;
+  bottom: 0;
+  background: var(--bg);
+}
+.composer__box {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+.composer__input {
+  flex: 1;
+  font: inherit;
+  font-size: 13px;
+  resize: none;
+  border: 0;
+  border-radius: 10px;
+  padding: 9px 11px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--border);
+  max-height: 132px;
+  transition: box-shadow 80ms ease;
+}
+.composer__input::placeholder {
+  color: var(--text-faint);
+}
+.composer__input:focus {
+  outline: none;
+  box-shadow:
+    inset 0 0 0 1px var(--accent),
+    0 0 0 3px var(--accent-tint);
+}
+.composer__input:disabled {
+  background: var(--fill);
+  color: var(--text-faint);
+}
+.composer__send {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  font-size: 15px;
+  border: none;
+  border-radius: 10px;
+  background: var(--accent);
+  color: var(--on-accent);
+  cursor: pointer;
+  transition:
+    background 80ms ease,
+    transform 80ms ease;
+}
+.composer__send:hover {
+  background: var(--accent-press);
+}
+.composer__send:active {
+  transform: scale(0.96);
+}
+.composer__send:disabled {
+  background: var(--border-strong);
+  color: var(--text-faint);
+  cursor: not-allowed;
+}
+.composer__hint {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  color: var(--text-faint);
+  padding: 0 2px;
+}
+.composer__hint--ejected {
+  color: var(--warn);
+}
+
+/* ── Embedded terminal (full-window view; .terminal* chrome added in a later
+      phase). Shown only when .panel.view-terminal is set. ─────────────────── */
 .terminal-pane {
   display: none;
   margin: 4px 0 8px;
-  border: 1px solid var(--color-ink-12);
   border-radius: 8px;
   overflow: hidden;
-  background: #19181b;
+  background: var(--color-term-bg);
+  box-shadow: inset 0 0 0 1px var(--border);
 }
 .terminal-host {
   width: 100%;
@@ -392,87 +766,64 @@ body {
   padding: 6px;
   box-sizing: border-box;
 }
-
 .panel.view-terminal .terminal-pane {
   display: flex;
   flex: 1;
   min-height: 0;
   margin: 4px 0 12px;
 }
+.panel.view-terminal .context,
 .panel.view-terminal .agents,
 .panel.view-terminal .sessions,
-.panel.view-terminal .transcript,
-.panel.view-terminal .agent-status,
-.panel.view-terminal .context,
-.panel.view-terminal .inputbar {
+.panel.view-terminal .stream,
+.panel.view-terminal .composer {
   display: none;
 }
 
-/* Agent status line above the composer */
-.agent-status {
-  font-size: 11px;
-  color: var(--color-ink-45);
-  padding: 2px 2px 0;
+/* ── Motion ─────────────────────────────────────────────────────────────── */
+@keyframes bo-pulse {
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 1;
+  }
 }
-.agent-status[hidden] {
-  display: none;
+@keyframes bo-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+@keyframes bo-rowin {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes bo-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
-.context {
-  font-size: 11px;
-  word-break: break-all;
-  padding: 6px 2px;
-}
-.muted {
-  color: var(--color-ink-45);
-}
-
-/* Input bar */
-.inputbar {
-  display: flex;
-  gap: 8px;
-  align-items: flex-end;
-  padding: 10px 0 12px;
-  position: sticky;
-  bottom: 0;
-  background: var(--color-bg);
-}
-.message {
-  flex: 1;
-  font: inherit;
-  resize: none;
-  border: 1px solid var(--color-ink-12);
-  border-radius: 10px;
-  padding: 8px 10px;
-  background: var(--color-surface);
-  color: var(--color-ink);
-  max-height: 120px;
-}
-.message:focus {
-  outline: none;
-  border-color: var(--color-brand);
-  box-shadow: 0 0 0 3px rgba(46, 94, 196, 0.12);
-}
-.message:disabled {
-  background: var(--color-ink-04);
-  color: var(--color-ink-45);
-}
-.send {
-  flex: 0 0 auto;
-  width: 34px;
-  height: 34px;
-  font-size: 15px;
-  border: none;
-  border-radius: 10px;
-  background: var(--color-brand);
-  color: #fff;
-  cursor: pointer;
-}
-.send:hover {
-  background: var(--color-brand-deep);
-}
-.send:disabled {
-  background: var(--color-ink-12);
-  color: var(--color-ink-45);
-  cursor: not-allowed;
+@media (prefers-reduced-motion: reduce) {
+  .turn,
+  .action {
+    animation: none;
+  }
+  .context__live,
+  .status-chip--working::before,
+  .action--run .action__icon,
+  .thinking__bar,
+  .action__spinner {
+    animation: none;
+  }
 }

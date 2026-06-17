@@ -7,46 +7,40 @@
   </head>
   <body>
     <div id="panel" class="panel">
-      <header class="panel-head">
-        <span class="panel-title">Chat</span>
-        <div class="head-right">
-          <button
-            id="term-mirror"
-            type="button"
-            class="link-btn"
-            hidden
-            title="Switch between chat and the full-window live terminal"
-          >
-            ▤ Terminal
-          </button>
-          <button
-            id="term-takeover"
-            type="button"
-            class="link-btn"
-            hidden
-            title="Take over this session in a terminal"
-          >
-            ⤢ Take over
-          </button>
-          <button id="new-session" type="button" class="link-btn" hidden>↻ New</button>
-          <button id="theme-toggle" type="button" class="link-btn" title="Theme: Auto">◐</button>
-          <span id="status" class="pill pill--off" aria-live="polite">Disconnected</span>
+      <header class="head">
+        <div class="head__id">
+          <span class="head__mark" aria-hidden="true"></span>
+          <span id="head-title" class="head__title">BrowserOps</span>
+        </div>
+        <div class="head__actions">
+          <button id="new-session" class="icon-btn" type="button" hidden title="New chat" aria-label="New chat">↻</button>
+          <button id="term-mirror" class="icon-btn" type="button" hidden title="Open the live terminal" aria-label="Open terminal">▤</button>
+          <button id="term-takeover" class="icon-btn" type="button" hidden title="Take over in your terminal" aria-label="Take over in your terminal">⤢</button>
+          <button id="theme-toggle" class="icon-btn" type="button" title="Theme: Auto" aria-label="Theme: Auto">◐</button>
+          <span id="status-dot" class="dot dot--off" role="status" title="Disconnected" aria-label="Disconnected"></span>
         </div>
       </header>
 
-      <div id="agents" class="agents" role="radiogroup" aria-label="Agent"></div>
-
-      <!-- Shown only when disconnected: chatting needs a live bridge. -->
-      <div id="disconnected" class="notice">
-        Not connected to the bridge. Open the BrowserOps popup and connect, then come back.
+      <!-- The page the agent can see and drive — BrowserOps' identity. -->
+      <div id="context" class="context" hidden>
+        <span id="context-fav" class="context__fav" aria-hidden="true"></span>
+        <span id="context-label" class="context__label"></span>
+        <span id="context-live" class="context__live" title="Agent can act on this tab" hidden></span>
       </div>
+
+      <div id="agents" class="agents" role="radiogroup" aria-label="Agent"></div>
 
       <div id="sessions" class="sessions" aria-label="Recent sessions" hidden></div>
 
-      <div id="transcript" class="transcript" aria-live="polite">
+      <div id="stream" class="stream" aria-live="polite" aria-label="Conversation">
         <div id="empty" class="empty">
-          Send a message to start chatting. Replies stream here, and the agent can act on the page
-          you’re viewing.
+          <span class="empty__mark" aria-hidden="true"></span>
+          <p class="empty__lead">Chat with an agent that can see and drive this tab.</p>
+          <p class="empty__sub">Replies stream here; the agent acts on the page you’re viewing.</p>
+        </div>
+        <div id="disconnected" class="state" hidden>
+          <p class="state__title">Bridge not connected</p>
+          <p class="state__body">Open the BrowserOps popup and connect, then come back.</p>
         </div>
       </div>
 
@@ -55,19 +49,18 @@
         <div id="terminal-host" class="terminal-host"></div>
       </div>
 
-      <div id="agent-status" class="agent-status" hidden></div>
-
-      <div id="context" class="context muted">current tab: …</div>
-
-      <form id="composer" class="inputbar">
-        <textarea
-          id="message"
-          class="message"
-          rows="1"
-          placeholder="Message…"
-          aria-label="Message"
-        ></textarea>
-        <button id="send" type="submit" class="send" aria-label="Send">▸</button>
+      <form id="composer" class="composer">
+        <div class="composer__box">
+          <textarea
+            id="message"
+            class="composer__input"
+            rows="1"
+            placeholder="Message…"
+            aria-label="Message"
+          ></textarea>
+          <button id="send" class="composer__send" type="submit" aria-label="Send">▸</button>
+        </div>
+        <div id="composer-hint" class="composer__hint">⏎ send · ⇧⏎ newline</div>
       </form>
     </div>
     <script type="module" src="./index.ts"></script>
