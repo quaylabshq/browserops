@@ -188,6 +188,43 @@ describe("ClaudePtyDriver", () => {
     unsub();
   });
 
+  it("relinquish ejects: kills the pty, keeps the tailer mirroring, refuses driving", async () => {
+    const { driver, fake } = make();
+    const ref = await driver.start({ page, instruction: "hi", cwd });
+    const events: ChatEvent[] = [];
+    driver.subscribe(ref, (e) => events.push(e));
+
+    await driver.relinquish(ref);
+    expect(fake.killed).toBe(true);
+    expect(events.some((e) => e.type === "status" && e.state === "ejected")).toBe(true);
+    expect(driver.terminalLive(ref)).toBe(false);
+
+    // The killed pty actually dies — onExit must stay silent (no end / error),
+    // because WE killed it to hand off to the external terminal.
+    fake.emitExit({ exitCode: 1 });
+    await sleep(10);
+    expect(events.some((e) => e.type === "end")).toBe(false);
+    expect(events.some((e) => e.type === "status" && e.state === "error")).toBe(false);
+
+    // The tailer lives on: a record written as if by the external `claude
+    // --resume` still streams to subscribers — the live read-only mirror.
+    await writeTranscript(
+      jsonl([userText("u1", "hi"), asstText("a1", "m", "from the external terminal", "end_turn")]),
+    );
+    await sleep(80);
+    const texts = events
+      .filter((e): e is Extract<ChatEvent, { type: "message" }> => e.type === "message")
+      .flatMap((e) => e.message.blocks)
+      .flatMap((b) => (b.kind === "text" ? [b.text] : []));
+    expect(texts).toContain("from the external terminal");
+
+    // Driving is refused — the external terminal is the sole writer now.
+    await expect(driver.send(ref, "x").catch((e) => engineErrorCode(e))).resolves.toBe(
+      "session_ejected",
+    );
+    expect(() => driver.attachTerminal(ref)).toThrow();
+  });
+
   it("stop kills the pty, ends the stream, and refuses further sends", async () => {
     const { driver, fake } = make();
     const ref = await driver.start({ page, cwd });

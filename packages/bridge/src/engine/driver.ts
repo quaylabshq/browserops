@@ -49,8 +49,19 @@ export interface AgentDriver {
   /** Re-read the agent's own transcript into normalized messages. */
   history(ref: SessionRef): Promise<ChatMessage[]>;
 
-  /** Relinquish the session (engine stops writing) — used by the takeover eject. */
+  /** Tear the session down completely (kill the process, end the stream). */
   stop(ref: SessionRef): Promise<void>;
+
+  /**
+   * Hand the session to an external terminal (the takeover eject): the driver
+   * stops being a *writer* but may keep a read-only mirror alive. The pty
+   * transport kills its own pty (one writer at a time) yet keeps tailing the
+   * transcript the external `claude --resume` writes, so the panel chat stays a
+   * live read-only view. Optional — drivers without a distinct eject (the
+   * headless driver, whose `stop()` is already a soft eject) omit it and the
+   * engine falls back to {@link stop}.
+   */
+  relinquish?(ref: SessionRef): Promise<void>;
 }
 
 /** A live raw-terminal handle the WS bridge binds an embedded xterm pane to. */
@@ -70,6 +81,12 @@ export interface TerminalHandle {
  */
 export interface TerminalAttachable {
   attachTerminal(ref: SessionRef): TerminalHandle;
+  /**
+   * Whether this ref currently has a live pty to attach (false once the session
+   * has been stopped or ejected to an external terminal). Lets the engine tell
+   * the panel whether to offer the embedded-terminal toggle.
+   */
+  terminalLive?(ref: SessionRef): boolean;
 }
 
 export function isTerminalAttachable(

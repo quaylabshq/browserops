@@ -119,10 +119,25 @@ export class ChatEngine {
     return this.driverForSession(sessionId, ref.agent).history(ref);
   }
 
-  /** Eject: the driver lets go so a terminal can take over the same session. */
+  /** Tear a session down completely (kill the process, end the stream). */
   async stop(sessionId: string): Promise<SessionRef> {
     const ref = await this.resolveRef(sessionId);
     await this.driverForSession(sessionId, ref.agent).stop(ref);
+    await this.index.touch(sessionId, this.now());
+    return ref;
+  }
+
+  /**
+   * Eject: hand the session to an external terminal. Prefers the driver's
+   * {@link AgentDriver.relinquish} (the pty transport kills its pty but keeps a
+   * read-only transcript mirror alive); falls back to {@link AgentDriver.stop}
+   * for drivers without a distinct eject (the headless driver's soft-eject).
+   */
+  async eject(sessionId: string): Promise<SessionRef> {
+    const ref = await this.resolveRef(sessionId);
+    const driver = this.driverForSession(sessionId, ref.agent);
+    if (driver.relinquish) await driver.relinquish(ref);
+    else await driver.stop(ref);
     await this.index.touch(sessionId, this.now());
     return ref;
   }
@@ -138,6 +153,20 @@ export class ChatEngine {
     const driver = this.driverForSession(sessionId, ref.agent);
     if (!isTerminalAttachable(driver)) throw new EngineError("pty_unavailable");
     return driver.attachTerminal(ref);
+  }
+
+  /**
+   * Whether the panel should offer the embedded-terminal toggle for a session:
+   * it must be live and driven by a terminal-attachable driver that still owns
+   * its pty — false for the headless fallback, cold post-restart sessions, and
+   * sessions already ejected to an external terminal.
+   */
+  terminalCapable(sessionId: string): boolean {
+    const ref = this.refs.get(sessionId);
+    if (!ref) return false;
+    const driver = this.driverForSession(sessionId, ref.agent);
+    if (!isTerminalAttachable(driver)) return false;
+    return driver.terminalLive ? driver.terminalLive(ref) : true;
   }
 
   listSessions(): Promise<SessionMeta[]> {

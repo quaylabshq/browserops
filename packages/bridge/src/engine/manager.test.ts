@@ -3,7 +3,14 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChatEvent, ChatMessage, SessionRef } from "@browserops/shared";
-import type { AgentDriver, ChatEventListener, StartOpts, Unsubscribe } from "./driver.js";
+import type {
+  AgentDriver,
+  ChatEventListener,
+  StartOpts,
+  TerminalAttachable,
+  TerminalHandle,
+  Unsubscribe,
+} from "./driver.js";
 import { EngineError, engineErrorCode, type EngineErrorCode } from "./errors.js";
 import { ChatEngine } from "./manager.js";
 import { SessionIndex } from "./sessions.js";
@@ -72,6 +79,25 @@ class FailingDriver implements AgentDriver {
   }
 }
 
+/** A driver with a distinct eject (the pty transport's relinquish). */
+class RelinquishDriver extends FakeDriver {
+  relinquished: string[] = [];
+  async relinquish(ref: SessionRef): Promise<void> {
+    this.relinquished.push(ref.sessionId);
+  }
+}
+
+/** A terminal-attachable driver with a controllable live flag. */
+class FakeTerminalDriver extends FakeDriver implements TerminalAttachable {
+  live = true;
+  attachTerminal(): TerminalHandle {
+    return { onData: () => () => {}, write: () => {}, resize: () => {} };
+  }
+  terminalLive(): boolean {
+    return this.live;
+  }
+}
+
 async function codeOf(p: Promise<unknown>): Promise<string | undefined> {
   try {
     await p;
@@ -132,10 +158,41 @@ describe("ChatEngine", () => {
     expect(await engine.history(ref.sessionId)).toEqual(driver.historyResult);
   });
 
-  it("stop ejects via the driver", async () => {
+  it("stop tears down via the driver", async () => {
     const ref = await engine.start({ agent: "claude", page: { url: "x" } });
     await engine.stop(ref.sessionId);
     expect(driver.stopped).toEqual(["s1"]);
+  });
+
+  it("eject prefers the driver's relinquish over stop", async () => {
+    const d = new RelinquishDriver();
+    const e = new ChatEngine({ drivers: { claude: d }, index, now: () => 1 });
+    const ref = await e.start({ agent: "claude", page: { url: "x" } });
+    await e.eject(ref.sessionId);
+    expect(d.relinquished).toEqual([ref.sessionId]);
+    expect(d.stopped).toEqual([]); // hard stop NOT used when relinquish exists
+  });
+
+  it("eject falls back to stop for a driver without relinquish (headless)", async () => {
+    const ref = await engine.start({ agent: "claude", page: { url: "x" } });
+    await engine.eject(ref.sessionId);
+    expect(driver.stopped).toEqual(["s1"]);
+  });
+
+  it("terminalCapable: live terminal driver true; not-live / headless / cold false", async () => {
+    const term = new FakeTerminalDriver();
+    const e = new ChatEngine({ drivers: { claude: term }, index, now: () => 1 });
+    const ref = await e.start({ agent: "claude", page: { url: "x" } });
+    expect(e.terminalCapable(ref.sessionId)).toBe(true);
+    term.live = false; // after eject the pty is gone
+    expect(e.terminalCapable(ref.sessionId)).toBe(false);
+    expect(e.terminalCapable("never-seen")).toBe(false); // cold / not cached
+
+    // A headless (non-terminal-attachable) driver is never terminal-capable.
+    const headless = new FakeDriver();
+    const e2 = new ChatEngine({ drivers: { claude: headless }, index, now: () => 1 });
+    const ref2 = await e2.start({ agent: "claude", page: { url: "x" } });
+    expect(e2.terminalCapable(ref2.sessionId)).toBe(false);
   });
 
   it("resolves a cold session from the index after a restart", async () => {
