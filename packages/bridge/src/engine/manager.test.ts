@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChatEvent, ChatMessage, SessionRef } from "@browserops/shared";
 import type { AgentDriver, ChatEventListener, StartOpts, Unsubscribe } from "./driver.js";
-import { engineErrorCode } from "./errors.js";
+import { EngineError, engineErrorCode, type EngineErrorCode } from "./errors.js";
 import { ChatEngine } from "./manager.js";
 import { SessionIndex } from "./sessions.js";
 
@@ -49,6 +49,26 @@ class FakeDriver implements AgentDriver {
   }
   emit(sessionId: string, event: ChatEvent): void {
     for (const l of this.listeners.get(sessionId) ?? []) l(event);
+  }
+}
+
+class FailingDriver implements AgentDriver {
+  readonly id = "claude" as const;
+  constructor(private readonly code: EngineErrorCode) {}
+  start(): Promise<SessionRef> {
+    return Promise.reject(new EngineError(this.code));
+  }
+  send(): Promise<void> {
+    return Promise.resolve();
+  }
+  subscribe(): Unsubscribe {
+    return () => {};
+  }
+  history(): Promise<ChatMessage[]> {
+    return Promise.resolve([]);
+  }
+  stop(): Promise<void> {
+    return Promise.resolve();
   }
 }
 
@@ -131,5 +151,41 @@ describe("ChatEngine", () => {
     expect(await codeOf(engine.start({ agent: "codex", page: { url: "x" } }))).toBe(
       "agent_unavailable",
     );
+  });
+
+  it("falls back to the fallback driver on pty_unavailable, routing later calls to it", async () => {
+    const primary = new FailingDriver("pty_unavailable");
+    const fallback = new FakeDriver();
+    const e = new ChatEngine({
+      drivers: { claude: primary },
+      fallbacks: { claude: fallback },
+      index,
+      now: () => 1,
+    });
+    const ref = await e.start({ agent: "claude", page: { url: "x" }, instruction: "hi" });
+    expect(fallback.started).toHaveLength(1);
+    await e.send(ref.sessionId, "next");
+    expect(fallback.sent).toEqual([{ id: ref.sessionId, text: "next" }]);
+  });
+
+  it("does not fall back for non-pty errors", async () => {
+    const fallback = new FakeDriver();
+    const e = new ChatEngine({
+      drivers: { claude: new FailingDriver("claude_not_found") },
+      fallbacks: { claude: fallback },
+      index,
+      now: () => 1,
+    });
+    expect(await codeOf(e.start({ agent: "claude", page: { url: "x" } }))).toBe("claude_not_found");
+    expect(fallback.started).toHaveLength(0);
+  });
+
+  it("propagates pty_unavailable when no fallback is registered", async () => {
+    const e = new ChatEngine({
+      drivers: { claude: new FailingDriver("pty_unavailable") },
+      index,
+      now: () => 1,
+    });
+    expect(await codeOf(e.start({ agent: "claude", page: { url: "x" } }))).toBe("pty_unavailable");
   });
 });
