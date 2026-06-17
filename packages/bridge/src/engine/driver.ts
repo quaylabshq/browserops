@@ -52,3 +52,28 @@ export interface AgentDriver {
   /** Relinquish the session (engine stops writing) — used by the takeover eject. */
   stop(ref: SessionRef): Promise<void>;
 }
+
+/** A live raw-terminal handle the WS bridge binds an embedded xterm pane to. */
+export interface TerminalHandle {
+  /** Subscribe to raw pty output; the bounded scrollback is replayed first. */
+  onData(listener: (data: string) => void): Unsubscribe;
+  /** Forward keystrokes typed in the pane back to the pty. */
+  write(data: string): void;
+  /** Resize the pty to match the pane geometry. */
+  resize(cols: number, rows: number): void;
+}
+
+/**
+ * An optional capability on top of {@link AgentDriver}: exposing the live session
+ * as a real terminal so the panel can embed an xterm pane (over `/chat/pty`).
+ * Drivers that don't run a tty (the headless Claude driver) simply omit it.
+ */
+export interface TerminalAttachable {
+  attachTerminal(ref: SessionRef): TerminalHandle;
+}
+
+export function isTerminalAttachable(
+  driver: AgentDriver,
+): driver is AgentDriver & TerminalAttachable {
+  return typeof (driver as Partial<TerminalAttachable>).attachTerminal === "function";
+}

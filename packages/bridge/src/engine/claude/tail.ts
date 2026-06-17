@@ -95,7 +95,10 @@ export interface TailerOptions {
 }
 
 const DEFAULT_POLL_MS = 150;
-const DEFAULT_QUIESCENCE_MS = 1200;
+// Long on purpose: a terminal stop_reason ends a normal turn promptly, so this
+// only fires for a genuinely stuck/interrupted turn — NOT during the multi-second
+// gaps between an injected turn and Claude's first transcript write.
+const DEFAULT_QUIESCENCE_MS = 10000;
 
 /**
  * Tail a Claude session transcript and emit normalized ChatEvents (`message` +
@@ -141,6 +144,22 @@ export class TranscriptTailer {
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = undefined;
+    }
+  }
+
+  /**
+   * Mark the session as actively working. The driver calls this when it injects a
+   * turn — the tailer can't see the injection itself (only the transcript Claude
+   * writes afterwards), so without this its state machine could already be `idle`
+   * when a fast complete turn lands and it would never emit the matching `idle`
+   * transition. This seeds `thinking` so the eventual terminal stop_reason (or
+   * quiescence) produces a real thinking→idle edge.
+   */
+  markThinking(): void {
+    this.lastActivity = this.now();
+    if (this.state !== "thinking") {
+      this.state = "thinking";
+      this.listener({ type: "status", state: "thinking" });
     }
   }
 
