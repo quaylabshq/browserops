@@ -139,6 +139,18 @@ export function messageIdOf(record: unknown): string | undefined {
   return typeof id === "string" ? id : undefined;
 }
 
+/**
+ * The assistant message's `stop_reason` (`end_turn` | `tool_use` |
+ * `stop_sequence` | `max_tokens` | …) when present. The transcript tailer treats
+ * a terminal stop_reason (`end_turn` / `stop_sequence`) as the primary turn-end
+ * signal; `tool_use` means the turn is still in flight. Absent on `user` records.
+ */
+export function stopReasonOf(record: unknown): string | undefined {
+  const m = asObject(asObject(record)?.["message"]);
+  const sr = m?.["stop_reason"];
+  return typeof sr === "string" ? sr : undefined;
+}
+
 /** Pull `{ sessionId, cwd }` from a stream-json `system/init` envelope. */
 export function parseInit(raw: unknown): { sessionId?: string; cwd?: string } | null {
   const o = asObject(raw);

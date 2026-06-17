@@ -112,45 +112,80 @@ function tsOf(record: Record<string, unknown>): number | undefined {
   return Number.isNaN(t) ? undefined : t;
 }
 
+/** Parse one JSONL line into a record object, or null for blank / malformed lines. */
+export function parseJsonlLine(line: string): Record<string, unknown> | null {
+  if (line.trim().length === 0) return null;
+  try {
+    const parsed: unknown = JSON.parse(line);
+    if (typeof parsed !== "object" || parsed === null) return null;
+    return parsed as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+export interface ReducedRecord {
+  /** The normalized message to (re)emit. */
+  message: ChatMessage;
+  /** False when this record's blocks were merged into the previous assistant turn. */
+  isNew: boolean;
+}
+
+/**
+ * Stateful, one-record-at-a-time normalizer shared by {@link parseTranscript}
+ * (whole file) and the live tailer (incremental). Applies the same whitelist
+ * (user / assistant), drops sidechains + synthetic injections, and re-joins the
+ * per-block assistant records Claude splits a turn into (they share a
+ * `message.id`): a continuation returns the SAME ChatMessage with blocks appended
+ * and `isNew:false`, so a file reader skips re-adding it while a live tailer
+ * re-emits it (the panel replaces by id). Returns null for filtered records.
+ */
+export function createTranscriptReducer(): {
+  push(record: Record<string, unknown>): ReducedRecord | null;
+} {
+  let lastAssistantId: string | undefined;
+  let lastMessage: ChatMessage | undefined;
+  let count = 0;
+
+  return {
+    push(record) {
+      const type = record["type"];
+      if (type !== "user" && type !== "assistant") return null;
+      if (record["isSidechain"] === true) return null;
+      if (isInjectionUserRecord(record)) return null;
+
+      const id = (typeof record["uuid"] === "string" && record["uuid"]) || `rec-${count}`;
+      const msg = normalizeMessage(record["message"], { id, ts: tsOf(record) });
+      if (!msg) return null;
+
+      const recordMsgId = messageIdOf(record);
+      if (
+        type === "assistant" &&
+        recordMsgId !== undefined &&
+        recordMsgId === lastAssistantId &&
+        lastMessage
+      ) {
+        lastMessage.blocks.push(...msg.blocks);
+        return { message: lastMessage, isNew: false };
+      }
+
+      count += 1;
+      lastMessage = msg;
+      lastAssistantId = type === "assistant" ? recordMsgId : undefined;
+      return { message: msg, isNew: true };
+    },
+  };
+}
+
 /** Parse already-read JSONL text into normalized messages. Pure + sync. */
 export function parseTranscript(text: string): ChatMessage[] {
+  const reducer = createTranscriptReducer();
   const messages: ChatMessage[] = [];
-  let lastAssistantId: string | undefined;
-
   for (const line of text.split("\n")) {
-    if (line.trim().length === 0) continue;
-    let record: Record<string, unknown>;
-    try {
-      const parsed: unknown = JSON.parse(line);
-      if (typeof parsed !== "object" || parsed === null) continue;
-      record = parsed as Record<string, unknown>;
-    } catch {
-      continue;
-    }
-
-    const type = record["type"];
-    if (type !== "user" && type !== "assistant") continue;
-    if (record["isSidechain"] === true) continue;
-    if (isInjectionUserRecord(record)) continue;
-
-    const id = (typeof record["uuid"] === "string" && record["uuid"]) || `rec-${messages.length}`;
-    const msg = normalizeMessage(record["message"], { id, ts: tsOf(record) });
-    if (!msg) continue;
-
-    // Re-join the per-block assistant records Claude splits a turn into.
-    const recordMsgId = messageIdOf(record);
-    if (
-      type === "assistant" &&
-      recordMsgId !== undefined &&
-      recordMsgId === lastAssistantId &&
-      messages.length > 0
-    ) {
-      messages[messages.length - 1]!.blocks.push(...msg.blocks);
-      continue;
-    }
-
-    messages.push(msg);
-    lastAssistantId = type === "assistant" ? recordMsgId : undefined;
+    const record = parseJsonlLine(line);
+    if (!record) continue;
+    const reduced = reducer.push(record);
+    if (reduced?.isNew) messages.push(reduced.message);
   }
   return messages;
 }
