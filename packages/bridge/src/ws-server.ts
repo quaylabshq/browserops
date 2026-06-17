@@ -77,6 +77,12 @@ export interface ChatService {
   terminal(sessionId: string, mode: TerminalMode): Promise<ChatTerminalOutcome>;
   /** Bind a live raw-terminal handle for the embedded xterm pane (via /chat/pty). */
   attachTerminal(sessionId: string): TerminalHandle;
+  /**
+   * Whether a session has a live pty right now, so the panel knows whether to
+   * offer the embedded-terminal toggle (false for the headless fallback, cold
+   * post-restart sessions, and sessions ejected to an external terminal).
+   */
+  terminalCapable(sessionId: string): boolean;
 }
 
 export interface WSBridgeOptions {
@@ -771,7 +777,11 @@ export class WSBridge {
           agent: params.agent,
           session: ref.sessionId,
         });
-        this.endJson(res, 200, { ok: true, session: ref });
+        this.endJson(res, 200, {
+          ok: true,
+          session: ref,
+          terminal: this.chat.terminalCapable(ref.sessionId),
+        });
         return;
       }
 
@@ -828,7 +838,12 @@ export class WSBridge {
     }
     try {
       if (path === "/chat/sessions") {
-        this.endJson(res, 200, { ok: true, sessions: await this.chat.listSessions() });
+        const chat = this.chat;
+        const sessions = (await chat.listSessions()).map((s) => ({
+          ...s,
+          terminal: chat.terminalCapable(s.sessionId),
+        }));
+        this.endJson(res, 200, { ok: true, sessions });
         return;
       }
       const sessionId = this.queryParam(req, "session_id");

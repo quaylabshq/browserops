@@ -156,6 +156,7 @@ export async function bootDaemonRuntime(opts: BootDaemonRuntimeOptions): Promise
       return result.ok ? { ok: true } : { ok: false, error: result.error };
     },
     attachTerminal: (sessionId) => chatEngine.attachTerminal(sessionId),
+    terminalCapable: (sessionId) => chatEngine.terminalCapable(sessionId),
   };
 
   const wsBridge = new WSBridge({

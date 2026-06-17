@@ -54,12 +54,14 @@ describe("reduceChat", () => {
     expect(s.messages[0]!.blocks[0]).toEqual({ kind: "text", text: "one-updated" });
   });
 
-  it("tracks status and latches ejected", () => {
-    let s = initialChatState();
+  it("tracks status, latches ejected, and drops terminalCapable on eject", () => {
+    let s = { ...initialChatState(), terminalCapable: true };
     s = reduceChat(s, { type: "status", state: "thinking" });
     expect(s.status).toBe("thinking");
+    expect(s.terminalCapable).toBe(true); // still live
     s = reduceChat(s, { type: "status", state: "ejected" });
     expect(s.ejected).toBe(true);
+    expect(s.terminalCapable).toBe(false); // pty handed to the external terminal
     s = reduceChat(s, { type: "status", state: "idle" });
     expect(s.status).toBe("idle");
     expect(s.ejected).toBe(true); // latched

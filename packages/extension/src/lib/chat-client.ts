@@ -18,6 +18,8 @@ export const CHAT_BASE = "http://127.0.0.1:57321";
 
 export interface SessionSummary extends SessionRef {
   lastActive: number;
+  /** Transient: the session has a live pty right now (embedded-terminal toggle ok). */
+  terminal?: boolean;
 }
 
 // --- pure: request body -----------------------------------------------------
@@ -51,10 +53,12 @@ export interface ChatState {
   messages: ChatMessage[];
   status: ChatStatusState;
   ejected: boolean;
+  /** The live session has a pty to attach an embedded terminal to. */
+  terminalCapable: boolean;
 }
 
 export function initialChatState(): ChatState {
-  return { messages: [], status: "idle", ejected: false };
+  return { messages: [], status: "idle", ejected: false, terminalCapable: false };
 }
 
 /** Append, or replace by id when a message re-emits (streaming). */
@@ -79,6 +83,9 @@ export function reduceChat(state: ChatState, event: ChatEvent): ChatState {
         ...state,
         status: event.state,
         ejected: state.ejected || event.state === "ejected",
+        // Ejected to an external terminal → the daemon no longer owns a pty, so
+        // the embedded-terminal toggle is no longer available.
+        terminalCapable: event.state === "ejected" ? false : state.terminalCapable,
       };
     case "end":
       return { ...state, status: "idle" };
@@ -135,6 +142,8 @@ async function readJson(res: Response): Promise<Record<string, unknown>> {
 export interface NewResult {
   ok: boolean;
   session?: SessionRef;
+  /** Whether the new session has a live pty (offer the embedded-terminal toggle). */
+  terminal?: boolean;
   status: number;
   error?: string;
 }
@@ -155,6 +164,7 @@ export async function chatNew(input: {
   return {
     ok: res.ok && data["ok"] === true,
     session: data["session"] as SessionRef | undefined,
+    terminal: data["terminal"] === true,
     status: res.status,
     error: typeof data["error"] === "string" ? data["error"] : undefined,
   };
