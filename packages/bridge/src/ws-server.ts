@@ -663,6 +663,8 @@ export class WSBridge {
         return 422;
       case "claude_not_found":
         return 502;
+      case "pty_unavailable":
+        return 503;
       default:
         return 500;
     }
