@@ -1,17 +1,132 @@
 @import "tailwindcss";
 
+/* Inter Display — body + UI */
+@font-face {
+  font-family: "Inter Display";
+  src: url("../assets/fonts/InterDisplay-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Inter Display";
+  src: url("../assets/fonts/InterDisplay-Medium.ttf") format("truetype");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Inter Display";
+  src: url("../assets/fonts/InterDisplay-SemiBold.ttf") format("truetype");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* Commit Mono — code, tool targets, hosts, timestamps, micro-labels */
+@font-face {
+  font-family: "Commit Mono";
+  src: url("../assets/fonts/CommitMono-400-Regular.otf") format("opentype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Commit Mono";
+  src: url("../assets/fonts/CommitMono-700-Regular.otf") format("opentype");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
 @theme {
-  --color-ink: #19181b;
-  --color-ink-60: rgba(25, 24, 27, 0.6);
-  --color-ink-45: rgba(25, 24, 27, 0.45);
-  --color-ink-12: rgba(25, 24, 27, 0.12);
-  --color-ink-08: rgba(25, 24, 27, 0.08);
-  --color-ink-04: rgba(25, 24, 27, 0.04);
-  --color-brand: #2e5ec4;
-  --color-brand-deep: #2347a6;
-  --color-surface: #ffffff;
-  --color-bg: #f4f4f6;
-  --color-success: #2f7d32;
+  --font-sans: "Inter Display", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "Commit Mono", ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
+}
+
+/*
+ * Semantic token layer — the panel is the one surface that themes. The controller
+ * in index.ts resolves "system" to light/dark and sets data-theme on <html>, so
+ * the CSS only needs a light default + a [data-theme="dark"] override (no media
+ * duplication). Components reference these semantic names; a few legacy aliases
+ * keep the pre-redesign component CSS working until each phase migrates it.
+ */
+:root {
+  /* surfaces + text — LIGHT */
+  --bg: #eaeaef;
+  --surface: #ffffff;
+  --surface-2: #fafafa;
+  --surface-3: #f3f3f5;
+  --fill: rgba(25, 24, 27, 0.04);
+  --text: #19181b;
+  --text-muted: rgba(25, 24, 27, 0.6);
+  --text-faint: rgba(25, 24, 27, 0.45);
+  --border: rgba(25, 24, 27, 0.1);
+  --border-strong: rgba(25, 24, 27, 0.16);
+  --accent: #2e5ec4;
+  --accent-press: #2347a6;
+  --accent-tint: rgba(46, 94, 196, 0.1);
+  --on-accent: #ffffff;
+  --ok: #15803d;
+  --ok-tint: rgba(21, 128, 61, 0.1);
+  --danger: #b3261e;
+  --danger-tint: rgba(179, 38, 30, 0.08);
+  --warn: #b45309;
+  --warn-tint: rgba(255, 189, 46, 0.18);
+  --rail: rgba(25, 24, 27, 0.14);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+  --shadow-pop: 0 6px 24px rgba(0, 0, 0, 0.12);
+
+  /* terminal — ALWAYS dark (the one dark surface in light theme, blends in dark) */
+  --color-term-bg: #1a191d;
+  --color-term-bar: #262429;
+  --color-term-text: #f3f3f5;
+  --color-term-prompt: #7ee787;
+  --color-term-muted: rgba(255, 255, 255, 0.45);
+
+  /* legacy aliases → semantic (migrated away in later phases). var() resolves
+     lazily, so these follow the dark overrides automatically. */
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-ink: var(--text);
+  --color-ink-60: var(--text-muted);
+  --color-ink-45: var(--text-faint);
+  --color-ink-12: var(--border-strong);
+  --color-ink-08: var(--border);
+  --color-ink-04: var(--fill);
+  --color-brand: var(--accent);
+  --color-brand-deep: var(--accent-press);
+  --color-success: var(--ok);
+
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  --bg: #1a191d;
+  --surface: #232228;
+  --surface-2: #2a2930;
+  --surface-3: #323139;
+  --fill: rgba(255, 255, 255, 0.05);
+  --text: #f3f3f5;
+  --text-muted: rgba(255, 255, 255, 0.62);
+  --text-faint: rgba(255, 255, 255, 0.42);
+  --border: rgba(255, 255, 255, 0.1);
+  --border-strong: rgba(255, 255, 255, 0.18);
+  --accent: #7aa0f0;
+  --accent-press: #6e9bf0;
+  --accent-tint: rgba(122, 160, 240, 0.16);
+  --on-accent: #0e1116;
+  --ok: #7ee787;
+  --ok-tint: rgba(126, 231, 135, 0.12);
+  --danger: #ff7b72;
+  --danger-tint: rgba(255, 123, 114, 0.12);
+  --warn: #ffbd2e;
+  --warn-tint: rgba(255, 189, 46, 0.14);
+  --rail: rgba(255, 255, 255, 0.16);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-pop: 0 8px 28px rgba(0, 0, 0, 0.55);
+
+  color-scheme: dark;
 }
 
 html,
@@ -21,11 +136,14 @@ body {
   height: 100%;
 }
 body {
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  font-size: 12px;
+  font-family: var(--font-sans);
+  font-size: 13px;
   line-height: 1.45;
-  color: var(--color-ink);
-  background: var(--color-bg);
+  letter-spacing: -0.01em;
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 .panel {

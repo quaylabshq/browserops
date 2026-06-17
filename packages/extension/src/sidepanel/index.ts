@@ -29,6 +29,7 @@ const statusPill = $<HTMLSpanElement>("status");
 const newSessionBtn = $<HTMLButtonElement>("new-session");
 const termMirrorBtn = $<HTMLButtonElement>("term-mirror");
 const termTakeoverBtn = $<HTMLButtonElement>("term-takeover");
+const themeToggleBtn = $<HTMLButtonElement>("theme-toggle");
 const disconnectedEl = $<HTMLDivElement>("disconnected");
 const agentsEl = $<HTMLDivElement>("agents");
 const sessionsEl = $<HTMLDivElement>("sessions");
@@ -60,6 +61,46 @@ async function getToken(): Promise<string | null> {
   tokenCache = typeof token === "string" && token.length > 0 ? token : null;
   return tokenCache;
 }
+
+// --- theme ------------------------------------------------------------------
+
+// "system" follows the OS; light/dark force a skin. We resolve to a concrete
+// light|dark and set it on <html data-theme> so the CSS needs only a light
+// default + a [data-theme="dark"] override (no media-query duplication).
+type ThemePref = "system" | "light" | "dark";
+const THEME_CYCLE: ThemePref[] = ["system", "light", "dark"];
+const THEME_GLYPH: Record<ThemePref, string> = { system: "◐", light: "☀", dark: "☾" };
+const THEME_LABEL: Record<ThemePref, string> = { system: "Auto", light: "Light", dark: "Dark" };
+const darkMq = window.matchMedia("(prefers-color-scheme: dark)");
+let themePref: ThemePref = "system";
+
+function isThemePref(v: unknown): v is ThemePref {
+  return v === "system" || v === "light" || v === "dark";
+}
+
+function applyTheme(): void {
+  const resolved = themePref === "system" ? (darkMq.matches ? "dark" : "light") : themePref;
+  document.documentElement.dataset["theme"] = resolved;
+  themeToggleBtn.textContent = THEME_GLYPH[themePref];
+  themeToggleBtn.title = `Theme: ${THEME_LABEL[themePref]}`;
+  themeToggleBtn.setAttribute("aria-label", `Theme: ${THEME_LABEL[themePref]}`);
+}
+
+async function loadTheme(): Promise<void> {
+  const stored = (await chrome.storage.local.get("theme"))["theme"];
+  themePref = isThemePref(stored) ? stored : "system";
+  applyTheme();
+}
+
+function cycleTheme(): void {
+  themePref = THEME_CYCLE[(THEME_CYCLE.indexOf(themePref) + 1) % THEME_CYCLE.length]!;
+  void chrome.storage.local.set({ theme: themePref });
+  applyTheme();
+}
+
+darkMq.addEventListener("change", () => {
+  if (themePref === "system") applyTheme();
+});
 
 // --- agent picker -----------------------------------------------------------
 
@@ -463,11 +504,13 @@ termMirrorBtn.addEventListener("click", () => {
   void setView(view === "terminal" ? "chat" : "terminal");
 });
 termTakeoverBtn.addEventListener("click", () => void takeoverTerminal());
+themeToggleBtn.addEventListener("click", cycleTheme);
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;
   if ("token" in changes) tokenCache = null;
   if ("connected" in changes) void refreshConnection();
+  if ("theme" in changes) void loadTheme();
 });
 chrome.tabs.onActivated.addListener(() => void refreshContext());
 chrome.tabs.onUpdated.addListener((_id, info) => {
@@ -476,5 +519,6 @@ chrome.tabs.onUpdated.addListener((_id, info) => {
 
 renderAgents();
 render();
+void loadTheme();
 void refreshConnection();
 void refreshContext();
