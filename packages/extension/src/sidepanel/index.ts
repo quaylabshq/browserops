@@ -1,14 +1,23 @@
 export {};
 
-import { AGENTS, DEFAULT_AGENT_ID, getAgent } from "@browserops/shared";
+import { AGENTS, DEFAULT_AGENT_ID, type ChatEvent, type ChatMessage } from "@browserops/shared";
 import {
-  LAUNCH_ENDPOINT,
-  buildLaunchBody,
+  appendUserMessage,
+  chatHistory,
+  chatNew,
+  chatSend,
+  chatSessions,
+  chatTerminal,
   grabPageMeta,
-  launchedMessage,
-  launchStatusMessage,
+  initialChatState,
+  reduceChat,
+  statusLabel,
+  streamUrl,
+  type ChatState,
   type PageMeta,
-} from "../lib/launch-client.js";
+  type SessionSummary,
+} from "../lib/chat-client.js";
+import type { EmbeddedTerminal } from "../lib/pty-terminal.js";
 
 const $ = <T extends HTMLElement>(id: string): T => {
   const el = document.getElementById(id);
@@ -18,21 +27,39 @@ const $ = <T extends HTMLElement>(id: string): T => {
 
 const statusPill = $<HTMLSpanElement>("status");
 const newSessionBtn = $<HTMLButtonElement>("new-session");
+const termMirrorBtn = $<HTMLButtonElement>("term-mirror");
+const termTakeoverBtn = $<HTMLButtonElement>("term-takeover");
 const disconnectedEl = $<HTMLDivElement>("disconnected");
 const agentsEl = $<HTMLDivElement>("agents");
+const sessionsEl = $<HTMLDivElement>("sessions");
 const transcriptEl = $<HTMLDivElement>("transcript");
 const emptyEl = $<HTMLDivElement>("empty");
+const agentStatusEl = $<HTMLDivElement>("agent-status");
 const contextEl = $<HTMLDivElement>("context");
 const composerForm = $<HTMLFormElement>("composer");
 const messageEl = $<HTMLTextAreaElement>("message");
 const sendBtn = $<HTMLButtonElement>("send");
+const panelEl = $<HTMLDivElement>("panel");
+const termHost = $<HTMLDivElement>("terminal-host");
 
 let selectedAgent: string = DEFAULT_AGENT_ID;
 let connected = false;
-// Once a session is launched, the conversation continues in the terminal;
-// the panel input is parked until the user starts a New session. "for now":
-// no in-panel streaming.
-let launched = false;
+let state: ChatState = initialChatState();
+let stream: EventSource | null = null;
+let terminal: EmbeddedTerminal | null = null;
+let view: "chat" | "terminal" = "chat";
+let tokenCache: string | null = null;
+let systemSeq = 0;
+
+// --- token ------------------------------------------------------------------
+
+async function getToken(): Promise<string | null> {
+  if (tokenCache) return tokenCache;
+  const local = await chrome.storage.local.get("token");
+  const token = local["token"];
+  tokenCache = typeof token === "string" && token.length > 0 ? token : null;
+  return tokenCache;
+}
 
 // --- agent picker -----------------------------------------------------------
 
@@ -51,11 +78,8 @@ function renderAgents(): void {
       note.textContent = a.note;
       chip.appendChild(note);
     }
-    if (a.enabled) {
-      chip.addEventListener("click", () => selectAgent(a.id));
-    } else {
-      chip.disabled = true;
-    }
+    if (a.caps.chat) chip.addEventListener("click", () => selectAgent(a.id));
+    else chip.disabled = true;
     agentsEl.appendChild(chip);
   }
   syncAgentSelection();
@@ -72,51 +96,148 @@ function syncAgentSelection(): void {
   }
 }
 
-// --- transcript -------------------------------------------------------------
+// --- transcript render ------------------------------------------------------
 
-function appendMessage(role: "user" | "system", text: string): void {
-  emptyEl.hidden = true;
-  const bubble = document.createElement("div");
-  bubble.className = `msg msg--${role}`;
-  bubble.textContent = text;
-  transcriptEl.appendChild(bubble);
+function oneLine(text: string, cap = 140): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.length > cap ? flat.slice(0, cap) + "…" : flat;
+}
+
+function renderBlocks(parent: HTMLElement, message: ChatMessage): void {
+  for (const b of message.blocks) {
+    const el = document.createElement("div");
+    if (b.kind === "text") {
+      el.className = "block-text";
+      el.textContent = b.text;
+    } else if (b.kind === "thinking") {
+      el.className = "block-thinking";
+      el.textContent = b.text;
+    } else if (b.kind === "tool_use") {
+      el.className = "tool-chip";
+      el.textContent = `▸ ${b.name}`;
+    } else {
+      el.className = `tool-chip tool-chip--${b.ok ? "ok" : "err"}`;
+      el.textContent = `${b.ok ? "✓" : "✗"} ${oneLine(b.preview)}`;
+    }
+    parent.appendChild(el);
+  }
+}
+
+function render(): void {
+  // Terminal view falls back to chat if the session lost its pty (eject,
+  // disconnect, or a new/cold session that has none).
+  if (view === "terminal" && (!connected || !state.session || !state.terminalCapable)) {
+    closeTerminal();
+  }
+  panelEl.classList.toggle("view-terminal", view === "terminal");
+
+  // Conversation.
+  for (const node of transcriptEl.querySelectorAll(".msg, .thinking-dots")) node.remove();
+  emptyEl.hidden = state.messages.length > 0;
+  for (const m of state.messages) {
+    const bubble = document.createElement("div");
+    bubble.className = `msg msg--${m.role}`;
+    renderBlocks(bubble, m);
+    transcriptEl.appendChild(bubble);
+  }
+  if (state.status === "thinking" && !state.ejected) {
+    const dots = document.createElement("div");
+    dots.className = "thinking-dots";
+    dots.textContent = "•••";
+    transcriptEl.appendChild(dots);
+  }
   transcriptEl.scrollTop = transcriptEl.scrollHeight;
-}
 
-function resetSession(): void {
-  launched = false;
-  for (const b of transcriptEl.querySelectorAll(".msg")) b.remove();
-  emptyEl.hidden = false;
-  syncComposer();
-  messageEl.focus();
-}
+  // Status line.
+  const label = statusLabel(state.status, state.ejected);
+  agentStatusEl.textContent = label;
+  agentStatusEl.hidden = label.length === 0;
 
-// --- connection + composer state -------------------------------------------
-
-function syncComposer(): void {
-  const canSend = connected && !launched;
-  messageEl.disabled = !canSend;
-  sendBtn.disabled = !canSend;
-  newSessionBtn.hidden = !launched;
-  messageEl.placeholder = !connected
-    ? "Connect the bridge to start…"
-    : launched
-      ? "Launched — continue in your terminal"
-      : "Message…";
-}
-
-function renderConnection(isConnected: boolean): void {
-  connected = isConnected;
-  statusPill.textContent = isConnected ? "Connected" : "Disconnected";
-  statusPill.className = `pill ${isConnected ? "pill--on" : "pill--off"}`;
-  disconnectedEl.style.display = isConnected ? "none" : "block";
+  // Header controls + composer.
+  const hasSession = state.session !== undefined;
+  // Embedded-terminal toggle: only when this live session has a pty to attach.
+  termMirrorBtn.hidden = !hasSession || !connected || !state.terminalCapable;
+  termTakeoverBtn.hidden = !hasSession || !connected || state.ejected;
+  newSessionBtn.hidden = state.messages.length === 0 && !hasSession;
+  syncTerminalBtn();
   syncComposer();
 }
 
-async function refreshConnection(): Promise<void> {
-  const local = await chrome.storage.local.get("connected");
-  renderConnection(local["connected"] === true);
+function pushSystem(text: string): void {
+  state = {
+    ...state,
+    messages: [
+      ...state.messages,
+      { id: `sys-${++systemSeq}`, role: "system", blocks: [{ kind: "text", text }] },
+    ],
+  };
+  render();
 }
+
+// --- sessions strip ---------------------------------------------------------
+
+async function loadSessions(): Promise<void> {
+  const token = await getToken();
+  if (!token) return;
+  renderSessions(await chatSessions(token));
+}
+
+function renderSessions(sessions: SessionSummary[]): void {
+  sessionsEl.replaceChildren();
+  const recent = sessions.slice(0, 8);
+  sessionsEl.hidden = recent.length === 0;
+  for (const s of recent) {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "session-chip";
+    if (state.session?.sessionId === s.sessionId) chip.classList.add("session-chip--active");
+    chip.textContent = s.title?.trim() || s.sessionId.slice(0, 8);
+    chip.title = s.title ?? s.sessionId;
+    chip.addEventListener("click", () => void openSession(s));
+    sessionsEl.appendChild(chip);
+  }
+}
+
+async function openSession(summary: SessionSummary): Promise<void> {
+  const token = await getToken();
+  if (!token) return;
+  closeStream();
+  closeTerminal();
+  state = reduceChat(initialChatState(), { type: "session", ref: summary });
+  state = { ...state, terminalCapable: summary.terminal === true };
+  render();
+  const history = await chatHistory(token, summary.sessionId);
+  state = { ...state, messages: history };
+  render();
+  openStream(token, summary.sessionId);
+  await loadSessions();
+}
+
+// --- live stream ------------------------------------------------------------
+
+function openStream(token: string, sessionId: string): void {
+  closeStream();
+  stream = new EventSource(streamUrl(token, sessionId));
+  stream.onmessage = (e: MessageEvent<string>) => {
+    let event: ChatEvent;
+    try {
+      event = JSON.parse(e.data) as ChatEvent;
+    } catch {
+      return;
+    }
+    state = reduceChat(state, event);
+    render();
+  };
+}
+
+function closeStream(): void {
+  if (stream) {
+    stream.close();
+    stream = null;
+  }
+}
+
+// --- context ----------------------------------------------------------------
 
 async function refreshContext(): Promise<void> {
   try {
@@ -150,74 +271,172 @@ async function capturePageMeta(): Promise<PageMeta> {
     const r = injected?.result as
       | { title?: string; description?: string; siteName?: string }
       | undefined;
-    if (r) {
+    if (r)
       return { url, title: r.title || title, description: r.description, siteName: r.siteName };
-    }
   } catch {
     // Restricted page (chrome://, Web Store, PDF viewer) — url + title only.
   }
   return { url, title };
 }
 
-// --- send → launch ----------------------------------------------------------
+// --- connection + composer state -------------------------------------------
+
+function syncComposer(): void {
+  const canSend = connected && !state.ejected;
+  messageEl.disabled = !canSend;
+  sendBtn.disabled = !canSend;
+  messageEl.placeholder = !connected
+    ? "Connect the bridge to start…"
+    : state.ejected
+      ? "This session is now controlled in your terminal"
+      : "Message…";
+}
+
+function renderConnection(isConnected: boolean): void {
+  connected = isConnected;
+  statusPill.textContent = isConnected ? "Connected" : "Disconnected";
+  statusPill.className = `pill ${isConnected ? "pill--on" : "pill--off"}`;
+  disconnectedEl.style.display = isConnected ? "none" : "block";
+  render();
+  if (isConnected) void loadSessions();
+}
+
+async function refreshConnection(): Promise<void> {
+  const local = await chrome.storage.local.get("connected");
+  renderConnection(local["connected"] === true);
+}
+
+// --- send -------------------------------------------------------------------
 
 async function sendMessage(): Promise<void> {
-  if (!connected || launched) return;
+  if (!connected || state.ejected) return;
   const text = messageEl.value.trim();
   if (text.length === 0) return;
-
-  appendMessage("user", text);
   messageEl.value = "";
   autoGrow();
-  launched = true; // optimistic; reverted on failure so the user can retry
-  syncComposer();
 
-  const result = await launch(text);
-  if (result.ok) {
-    const label = getAgent(selectedAgent)?.label ?? selectedAgent;
-    appendMessage("system", launchedMessage(label));
+  state = appendUserMessage(state, text);
+  render();
+
+  const token = await getToken();
+  if (!token) {
+    pushSystem("Run setup first (no token).");
+    return;
+  }
+
+  if (!state.session) {
+    const meta = await capturePageMeta();
+    const res = await chatNew({ token, agent: selectedAgent, instruction: text, meta });
+    if (!res.ok || !res.session) {
+      state = { ...state, status: "idle" };
+      pushSystem(newError(res.status, res.error));
+      return;
+    }
+    state = reduceChat(state, { type: "session", ref: res.session });
+    state = { ...state, terminalCapable: res.terminal === true };
+    openStream(token, res.session.sessionId);
+    render();
+    await loadSessions();
   } else {
-    appendMessage("system", result.message);
-    launched = false;
-    syncComposer();
+    const res = await chatSend(token, state.session.sessionId, text);
+    if (!res.ok) {
+      state = { ...state, status: "idle" };
+      pushSystem(sendError(res.status, res.error));
+    }
   }
 }
 
-async function launch(instruction: string): Promise<{ ok: boolean; message: string }> {
-  const meta = await capturePageMeta();
-  const local = await chrome.storage.local.get("token");
-  const token = local["token"];
-  if (typeof token !== "string" || token.length === 0) {
-    return { ok: false, message: "Run setup first (no token)." };
-  }
+function newError(status: number, error?: string): string {
+  if (status === 0) return "Bridge not running — start it, then retry.";
+  if (status === 401 || status === 403) return "Not authorized — re-run setup.";
+  if (error === "chat_unavailable") return "Chat isn't available on this bridge.";
+  if (error === "agent_unavailable") return "That agent isn't available yet.";
+  return "Couldn't start the chat.";
+}
 
-  let response: Response | null = null;
+function sendError(status: number, error?: string): string {
+  if (status === 0) return "Bridge not running — start it, then retry.";
+  if (status === 404) return "This session is no longer available. Start a new chat.";
+  if (status === 409 || error === "session_ejected")
+    return "This session is controlled in your terminal.";
+  return "Couldn't send that message.";
+}
+
+// --- terminal affordances ---------------------------------------------------
+
+// ▤ Terminal: a full-window VIEW toggle. The panel shows EITHER the chat OR a
+// full-window live terminal bound to this session's pty — never both at once.
+// The pty session keeps running across the toggle; typing in the terminal drives
+// the same interactive Claude the chat does (and shows up in the chat via the
+// transcript). xterm is lazy-imported the first time the terminal opens.
+async function setView(next: "chat" | "terminal"): Promise<void> {
+  if (next === view) return;
+  if (next === "chat") {
+    closeTerminal();
+    render();
+    return;
+  }
+  if (!state.session || !state.terminalCapable || !connected) return;
+  const token = await getToken();
+  if (!token) {
+    pushSystem("Run setup first (no token).");
+    return;
+  }
+  view = "terminal";
+  render(); // applies .view-terminal first so the pane is laid out at full size
   try {
-    response = await fetch(LAUNCH_ENDPOINT, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(buildLaunchBody({ token, agent: selectedAgent, instruction, meta })),
-    });
+    const { mountTerminal } = await import("../lib/pty-terminal.js");
+    terminal = mountTerminal({ container: termHost, token, sessionId: state.session.sessionId });
+    requestAnimationFrame(() => terminal?.fit());
   } catch {
-    response = null; // connection refused = bridge not running
+    closeTerminal();
+    render();
+    pushSystem("Couldn't open the embedded terminal.");
   }
+}
 
-  let payloadError: string | undefined;
-  if (response !== null && !response.ok) {
-    try {
-      payloadError = ((await response.json()) as { error?: string }).error;
-    } catch {
-      /* non-JSON error body */
-    }
+function closeTerminal(): void {
+  if (terminal) {
+    terminal.dispose();
+    terminal = null;
   }
-  const ok = response !== null && response.ok;
-  return {
-    ok,
-    message: launchStatusMessage(
-      response !== null ? { ok: response.ok, status: response.status } : null,
-      payloadError,
-    ),
-  };
+  termHost.replaceChildren();
+  view = "chat";
+  syncTerminalBtn();
+}
+
+function syncTerminalBtn(): void {
+  termMirrorBtn.textContent = view === "terminal" ? "✕ Close terminal" : "▤ Terminal";
+}
+
+// ⤢ Take over: eject the session into your own external terminal (claude
+// --resume). The daemon keeps tailing the transcript, so we KEEP the SSE stream
+// open — the chat here becomes a LIVE read-only mirror of the turns you type in
+// the external terminal. Only input is locked (composer + embedded terminal).
+async function takeoverTerminal(): Promise<void> {
+  if (!state.session) return;
+  const token = await getToken();
+  if (!token) {
+    pushSystem("Run setup first (no token).");
+    return;
+  }
+  const res = await chatTerminal(token, state.session.sessionId, "takeover");
+  if (!res.ok) {
+    pushSystem("Couldn't open the terminal.");
+    return;
+  }
+  closeTerminal(); // leave the embedded terminal view; you drive in the external one now
+  state = reduceChat(state, { type: "status", state: "ejected" });
+  pushSystem("Taken over in your terminal — the chat here is now a live read-only view.");
+}
+
+function newSession(): void {
+  closeStream();
+  closeTerminal();
+  state = initialChatState();
+  render();
+  messageEl.focus();
+  void loadSessions();
 }
 
 // --- wiring -----------------------------------------------------------------
@@ -239,10 +458,16 @@ messageEl.addEventListener("keydown", (e) => {
     void sendMessage();
   }
 });
-newSessionBtn.addEventListener("click", () => resetSession());
+newSessionBtn.addEventListener("click", newSession);
+termMirrorBtn.addEventListener("click", () => {
+  void setView(view === "terminal" ? "chat" : "terminal");
+});
+termTakeoverBtn.addEventListener("click", () => void takeoverTerminal());
 
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === "local" && "connected" in changes) void refreshConnection();
+  if (area !== "local") return;
+  if ("token" in changes) tokenCache = null;
+  if ("connected" in changes) void refreshConnection();
 });
 chrome.tabs.onActivated.addListener(() => void refreshContext());
 chrome.tabs.onUpdated.addListener((_id, info) => {
@@ -250,5 +475,6 @@ chrome.tabs.onUpdated.addListener((_id, info) => {
 });
 
 renderAgents();
+render();
 void refreshConnection();
 void refreshContext();

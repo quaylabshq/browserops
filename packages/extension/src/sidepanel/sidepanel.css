@@ -156,11 +156,148 @@ body {
   color: #fff;
   border-bottom-right-radius: 4px;
 }
-.msg--system {
+.msg--assistant {
   align-self: flex-start;
+  background: var(--color-surface);
+  border: 1px solid var(--color-ink-08);
+  color: var(--color-ink);
+  border-bottom-left-radius: 4px;
+}
+.msg--tool {
+  align-self: flex-start;
+  max-width: 92%;
+  background: transparent;
+  padding: 0;
+}
+.msg--system {
+  align-self: center;
+  max-width: 92%;
+  text-align: center;
   background: var(--color-ink-04);
   color: var(--color-ink-60);
-  border-bottom-left-radius: 4px;
+  font-size: 11px;
+  border-radius: 8px;
+}
+
+.msg .block-text + .block-text {
+  margin-top: 6px;
+}
+.block-thinking {
+  color: var(--color-ink-45);
+  font-style: italic;
+  font-size: 11px;
+  white-space: pre-wrap;
+}
+.tool-chip {
+  display: inline-block;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: var(--color-ink-04);
+  border: 1px solid var(--color-ink-08);
+  color: var(--color-ink-60);
+  margin-top: 4px;
+  word-break: break-word;
+}
+.tool-chip--ok {
+  color: var(--color-success);
+  border-color: rgba(47, 125, 50, 0.25);
+}
+.tool-chip--err {
+  color: #b3261e;
+  border-color: rgba(179, 38, 30, 0.3);
+}
+
+.thinking-dots {
+  align-self: flex-start;
+  color: var(--color-ink-45);
+  letter-spacing: 2px;
+  padding: 2px 4px;
+  animation: bo-pulse 1.1s ease-in-out infinite;
+}
+@keyframes bo-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 0.9;
+  }
+}
+
+/* Recent-sessions strip */
+.sessions {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 8px;
+  margin-bottom: 4px;
+}
+.sessions[hidden] {
+  display: none;
+}
+.session-chip {
+  flex: 0 0 auto;
+  max-width: 140px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font: inherit;
+  font-size: 11px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--color-ink-12);
+  background: var(--color-surface);
+  color: var(--color-ink-60);
+  cursor: pointer;
+}
+.session-chip--active {
+  border-color: var(--color-brand);
+  color: var(--color-brand);
+}
+
+/* Full-window terminal view (xterm bound to /chat/pty). Hidden by default; the
+   panel swaps to it — and collapses the chat surfaces — when .view-terminal is
+   set, so it's a real view toggle, not a cramped pane shown alongside chat. */
+.terminal-pane {
+  display: none;
+  margin: 4px 0 8px;
+  border: 1px solid var(--color-ink-12);
+  border-radius: 8px;
+  overflow: hidden;
+  background: #19181b;
+}
+.terminal-host {
+  width: 100%;
+  height: 100%;
+  padding: 6px;
+  box-sizing: border-box;
+}
+
+.panel.view-terminal .terminal-pane {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  margin: 4px 0 12px;
+}
+.panel.view-terminal .agents,
+.panel.view-terminal .sessions,
+.panel.view-terminal .transcript,
+.panel.view-terminal .agent-status,
+.panel.view-terminal .context,
+.panel.view-terminal .inputbar {
+  display: none;
+}
+
+/* Agent status line above the composer */
+.agent-status {
+  font-size: 11px;
+  color: var(--color-ink-45);
+  padding: 2px 2px 0;
+}
+.agent-status[hidden] {
+  display: none;
 }
 
 .context {
