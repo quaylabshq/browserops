@@ -725,6 +725,9 @@ describe("WSBridge /chat/*", () => {
           resize: (cols, rows) => void ptyResizes.push({ cols, rows }),
         };
       },
+      terminalCapable(id) {
+        return id !== "noterm"; // a "noterm" session is headless/cold → no toggle
+      },
     };
     return { chat, sent, terminals, sessions, ptyWrites, ptyResizes };
   }
@@ -782,10 +785,15 @@ describe("WSBridge /chat/*", () => {
         site_name: "S",
       });
       expect(res.status).toBe(200);
-      const body = (await res.json()) as { ok: boolean; session: SessionRef & { title?: string } };
+      const body = (await res.json()) as {
+        ok: boolean;
+        session: SessionRef & { title?: string };
+        terminal?: boolean;
+      };
       expect(body.ok).toBe(true);
       expect(body.session.sessionId).toBe("s1");
       expect(body.session.title).toBe("hello");
+      expect(body.terminal).toBe(true); // s1 has a live pty → embedded-terminal toggle offered
     } finally {
       await fixture.bridge.stop();
     }
@@ -905,8 +913,9 @@ describe("WSBridge /chat/*", () => {
       await postChat(fixture.port, "/chat/new", { token: VALID_TOKEN, url: "x" });
       const res = await getChat(fixture.port, `/chat/sessions?token=${VALID_TOKEN}`);
       expect(res.status).toBe(200);
-      const body = (await res.json()) as { sessions: { sessionId: string }[] };
+      const body = (await res.json()) as { sessions: { sessionId: string; terminal?: boolean }[] };
       expect(body.sessions.map((s) => s.sessionId)).toEqual(["s1"]);
+      expect(body.sessions[0]?.terminal).toBe(true); // capability surfaced per session
       expect((await getChat(fixture.port, `/chat/sessions?token=wrong`)).status).toBe(401);
     } finally {
       await fixture.bridge.stop();
