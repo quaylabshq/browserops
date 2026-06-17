@@ -18,6 +18,14 @@ function stubLogger(): Logger {
   return { async write() {} } as unknown as Logger;
 }
 
+async function waitFor(cond: () => boolean, ms = 1000): Promise<void> {
+  const start = Date.now();
+  while (!cond()) {
+    if (Date.now() - start > ms) throw new Error("waitFor timeout");
+    await new Promise((r) => setTimeout(r, 10));
+  }
+}
+
 interface BridgeFixture {
   bridge: WSBridge;
   port: number;
@@ -671,6 +679,8 @@ describe("WSBridge /chat/*", () => {
     const sent: { id: string; text: string }[] = [];
     const terminals: { id: string; mode: string }[] = [];
     const sessions: (SessionRef & { lastActive: number })[] = [];
+    const ptyWrites: string[] = [];
+    const ptyResizes: { cols: number; rows: number }[] = [];
     const chat: ChatService = {
       async start(params) {
         const ref: SessionRef = {
@@ -704,8 +714,19 @@ describe("WSBridge /chat/*", () => {
         terminals.push({ id, mode });
         return { ok: true };
       },
+      attachTerminal(id) {
+        if (id === "missing") throw new EngineError("unknown_session");
+        return {
+          onData: (cb) => {
+            cb("REPLAY"); // simulated scrollback replay on attach
+            return () => {};
+          },
+          write: (d) => void ptyWrites.push(d),
+          resize: (cols, rows) => void ptyResizes.push({ cols, rows }),
+        };
+      },
     };
-    return { chat, sent, terminals, sessions };
+    return { chat, sent, terminals, sessions, ptyWrites, ptyResizes };
   }
 
   function postChat(
@@ -936,6 +957,49 @@ describe("WSBridge /chat/*", () => {
         `/chat/stream?token=${VALID_TOKEN}&session_id=missing`,
       );
       expect(unknown.status).toBe(404);
+    } finally {
+      await fixture.bridge.stop();
+    }
+  });
+
+  it("WS /chat/pty bridges raw output out and JSON input/resize in", async () => {
+    const f = fakeChat();
+    const fixture = await startBridge({ pinnedExtensionId: PIN, chat: f.chat });
+    try {
+      const ws = new WebSocket(
+        `ws://127.0.0.1:${fixture.port}/chat/pty?token=${VALID_TOKEN}&session_id=s1`,
+        { headers: { Origin: PIN_ORIGIN } },
+      );
+      const got: string[] = [];
+      ws.on("message", (d) => got.push(d.toString()));
+      await new Promise<void>((resolve, reject) => {
+        ws.on("open", () => resolve());
+        ws.on("error", reject);
+      });
+      await waitFor(() => got.includes("REPLAY")); // scrollback replay on attach
+      ws.send(JSON.stringify({ type: "input", data: "hi there" }));
+      ws.send(JSON.stringify({ type: "resize", cols: 80, rows: 24 }));
+      await waitFor(() => f.ptyWrites.length > 0 && f.ptyResizes.length > 0);
+      expect(f.ptyWrites).toEqual(["hi there"]);
+      expect(f.ptyResizes).toEqual([{ cols: 80, rows: 24 }]);
+      ws.close();
+    } finally {
+      await fixture.bridge.stop();
+    }
+  });
+
+  it("WS /chat/pty rejects a bad token at the upgrade", async () => {
+    const f = fakeChat();
+    const fixture = await startBridge({ pinnedExtensionId: PIN, chat: f.chat });
+    try {
+      const ws = new WebSocket(`ws://127.0.0.1:${fixture.port}/chat/pty?token=nope&session_id=s1`, {
+        headers: { Origin: PIN_ORIGIN },
+      });
+      const outcome = await new Promise<string>((resolve) => {
+        ws.on("open", () => resolve("opened"));
+        ws.on("error", () => resolve("rejected"));
+      });
+      expect(outcome).toBe("rejected");
     } finally {
       await fixture.bridge.stop();
     }

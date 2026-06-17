@@ -31,6 +31,7 @@ import {
 import type { Logger } from "./logger.js";
 import type { ConfirmationChannel } from "./safety.js";
 import { engineErrorCode } from "./engine/errors.js";
+import type { TerminalHandle } from "./engine/driver.js";
 
 /** Launch request forwarded from the side-panel launcher to the handler. */
 export interface LaunchRequestParams {
@@ -74,6 +75,8 @@ export interface ChatService {
   listSessions(): Promise<ChatSessionSummary[]>;
   /** Open a read-only terminal mirror, or eject the session into a terminal. */
   terminal(sessionId: string, mode: TerminalMode): Promise<ChatTerminalOutcome>;
+  /** Bind a live raw-terminal handle for the embedded xterm pane (via /chat/pty). */
+  attachTerminal(sessionId: string): TerminalHandle;
 }
 
 export interface WSBridgeOptions {
@@ -156,6 +159,8 @@ export class WSBridge {
   private readonly chat?: ChatService;
   /** Open SSE responses, ended on stop() so the http server can close. */
   private readonly openStreams = new Set<ServerResponse>();
+  /** Open /chat/pty terminal sockets, closed on stop(). */
+  private readonly openPtySockets = new Set<WebSocket>();
   private readonly onConnectionChange?: (connected: boolean) => void;
   private readonly getFeatures?: () => readonly string[];
   private readonly onExtensionPin?: (extensionId: string) => Promise<void>;
@@ -275,6 +280,14 @@ export class WSBridge {
       }
     }
     this.openStreams.clear();
+    for (const ws of this.openPtySockets) {
+      try {
+        ws.close(1000, "bridge_stop");
+      } catch {
+        /* ignore */
+      }
+    }
+    this.openPtySockets.clear();
     for (const [, p] of this.pending) {
       clearTimeout(p.timer);
       if (p.signal && p.abortListener) p.signal.removeEventListener("abort", p.abortListener);
@@ -963,7 +976,81 @@ export class WSBridge {
       socket.destroy();
       return;
     }
+    const path = (req.url ?? "").split("?")[0] ?? "";
+    if (path === "/chat/pty") {
+      this.handlePtyUpgrade(req, socket, head);
+      return;
+    }
     this.wss!.handleUpgrade(req, socket, head, (ws) => this.wss!.emit("connection", ws, req));
+  }
+
+  /** Gate + upgrade a /chat/pty terminal socket (token in the query string, like SSE). */
+  private handlePtyUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
+    const reject = (status: string): void => {
+      try {
+        socket.write(`HTTP/1.1 ${status}\r\n\r\n`);
+      } catch {
+        /* ignore */
+      }
+      socket.destroy();
+    };
+    if (this.queryParam(req, "token") !== this.token) return reject("401 Unauthorized");
+    if (!this.chat) return reject("503 Service Unavailable");
+    const sessionId = this.queryParam(req, "session_id");
+    if (!sessionId) return reject("400 Bad Request");
+    this.wss!.handleUpgrade(req, socket, head, (ws) => this.handlePtyConnection(ws, sessionId));
+  }
+
+  /** Bridge a terminal socket to the live pty: raw output out, JSON input/resize in. */
+  private handlePtyConnection(ws: WebSocket, sessionId: string): void {
+    let handle: TerminalHandle;
+    try {
+      handle = this.chat!.attachTerminal(sessionId);
+    } catch (err) {
+      try {
+        ws.close(1011, engineErrorCode(err) ?? "error");
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
+    this.openPtySockets.add(ws);
+    const unsub = handle.onData((data) => {
+      try {
+        ws.send(data);
+      } catch {
+        /* client gone */
+      }
+    });
+    ws.on("message", (raw: RawData) => {
+      let msg: unknown;
+      try {
+        msg = JSON.parse(raw.toString());
+      } catch {
+        return;
+      }
+      if (typeof msg !== "object" || msg === null) return;
+      const m = msg as Record<string, unknown>;
+      if (m["type"] === "input" && typeof m["data"] === "string") {
+        handle.write(m["data"]);
+      } else if (
+        m["type"] === "resize" &&
+        Number.isInteger(m["cols"]) &&
+        Number.isInteger(m["rows"])
+      ) {
+        handle.resize(m["cols"] as number, m["rows"] as number);
+      }
+    });
+    const cleanup = (): void => {
+      this.openPtySockets.delete(ws);
+      try {
+        unsub();
+      } catch {
+        /* ignore */
+      }
+    };
+    ws.on("close", cleanup);
+    ws.on("error", cleanup);
   }
 
   private isOriginAllowed(origin: string): boolean {

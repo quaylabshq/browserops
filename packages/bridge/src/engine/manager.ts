@@ -9,7 +9,14 @@
  */
 import type { AgentId, ChatMessage, ChatPageContext, SessionRef } from "@browserops/shared";
 import type { Logger } from "../logger.js";
-import type { AgentDriver, ChatEventListener, StartOpts, Unsubscribe } from "./driver.js";
+import { isTerminalAttachable } from "./driver.js";
+import type {
+  AgentDriver,
+  ChatEventListener,
+  StartOpts,
+  TerminalHandle,
+  Unsubscribe,
+} from "./driver.js";
 import { ClaudeDriver } from "./claude/driver.js";
 import { EngineError, engineErrorCode } from "./errors.js";
 import { SessionIndex, type SessionMeta } from "./sessions.js";
@@ -118,6 +125,19 @@ export class ChatEngine {
     await this.driverForSession(sessionId, ref.agent).stop(ref);
     await this.index.touch(sessionId, this.now());
     return ref;
+  }
+
+  /**
+   * Bind a raw terminal handle for the embedded xterm pane. Live sessions only —
+   * a cold (post-restart) session has no live pty, and a session driven by a
+   * non-terminal driver (the headless fallback) reports `pty_unavailable`.
+   */
+  attachTerminal(sessionId: string): TerminalHandle {
+    const ref = this.refs.get(sessionId);
+    if (!ref) throw new EngineError("unknown_session");
+    const driver = this.driverForSession(sessionId, ref.agent);
+    if (!isTerminalAttachable(driver)) throw new EngineError("pty_unavailable");
+    return driver.attachTerminal(ref);
   }
 
   listSessions(): Promise<SessionMeta[]> {
