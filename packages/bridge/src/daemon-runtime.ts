@@ -145,9 +145,10 @@ export async function bootDaemonRuntime(opts: BootDaemonRuntimeOptions): Promise
       const meta = await chatEngine.getSession(sessionId);
       if (!meta) return { ok: false, error: "unknown_session" };
       // Takeover hands the session to an interactive terminal, so the engine
-      // must let go first — one writer at a time. Mirror is read-only and
-      // leaves the engine driving.
-      if (mode === "takeover") await chatEngine.stop(sessionId);
+      // must let go first — one writer at a time. eject() prefers the driver's
+      // relinquish (the pty transport keeps a live read-only transcript mirror);
+      // mirror mode is read-only and leaves the engine driving.
+      if (mode === "takeover") await chatEngine.eject(sessionId);
       const result = await openSessionTerminal(
         { mode, sessionId, cwd: meta.cwd, mirrorPath: join(chatDir(), `${sessionId}.mirror.log`) },
         logger,

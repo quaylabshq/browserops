@@ -68,6 +68,8 @@ interface PtyState {
   session?: PtySession;
   tailer?: TranscriptTailer;
   stopped: boolean;
+  /** Ejected to an external terminal: the pty is killed but the tailer lives on. */
+  ejected: boolean;
 }
 
 export interface ClaudePtyDriverDeps {
@@ -156,6 +158,7 @@ export class ClaudePtyDriver implements AgentDriver, TerminalAttachable {
       queue: Promise.resolve(),
       ready: Promise.resolve(),
       stopped: false,
+      ejected: false,
     };
     this.sessions.set(sessionId, state);
 
@@ -226,6 +229,21 @@ export class ClaudePtyDriver implements AgentDriver, TerminalAttachable {
     this.dispatch(state, { type: "end", reason: "stopped" });
   }
 
+  /**
+   * Eject: hand the session to an external terminal. We kill OUR pty so the
+   * resumed `claude --resume` is the session's sole writer (one writer at a
+   * time), but KEEP the transcript tailer running — the panel chat stays a live
+   * read-only mirror of the turns the external terminal writes. Unlike
+   * {@link stop} this emits `ejected` (not `end`) and leaves the tailer alive.
+   */
+  async relinquish(ref: SessionRef): Promise<void> {
+    const state = this.sessions.get(ref.sessionId);
+    if (!state || state.stopped || state.ejected) return;
+    state.ejected = true; // set BEFORE kill so onExit treats the death as expected
+    state.session?.kill();
+    this.dispatch(state, { type: "status", state: "ejected" });
+  }
+
   /** TerminalAttachable: bind the embedded xterm pane to the live pty. */
   attachTerminal(ref: SessionRef): TerminalHandle {
     const state = this.requireLive(ref);
@@ -235,6 +253,12 @@ export class ClaudePtyDriver implements AgentDriver, TerminalAttachable {
       write: (data) => session.write(data),
       resize: (cols, rows) => session.resize(cols, rows),
     };
+  }
+
+  /** TerminalAttachable: live only while we own an un-ejected, un-stopped pty. */
+  terminalLive(ref: SessionRef): boolean {
+    const state = this.sessions.get(ref.sessionId);
+    return !!state && !!state.session && !state.stopped && !state.ejected;
   }
 
   // --- internals ------------------------------------------------------------
@@ -251,6 +275,7 @@ export class ClaudePtyDriver implements AgentDriver, TerminalAttachable {
   private requireLive(ref: SessionRef): PtyState {
     const state = this.sessions.get(ref.sessionId);
     if (!state || !state.session || state.stopped) throw new EngineError("unknown_session");
+    if (state.ejected) throw new EngineError("session_ejected");
     return state;
   }
 
@@ -269,7 +294,7 @@ export class ClaudePtyDriver implements AgentDriver, TerminalAttachable {
   }
 
   private async submitTurn(state: PtyState, text: string): Promise<void> {
-    if (state.stopped || !state.session) throw new EngineError("unknown_session");
+    if (state.stopped || state.ejected || !state.session) throw new EngineError("unknown_session");
     await state.ready; // gate the first turn on the TUI being mounted
     state.tailer?.markThinking();
     await state.session.submit(text, this.submitOpts);
@@ -283,6 +308,10 @@ export class ClaudePtyDriver implements AgentDriver, TerminalAttachable {
 
   private onExit(state: PtyState, e: { exitCode: number; signal?: number }): void {
     if (state.stopped) return;
+    // Ejected: WE killed the pty to hand the session to an external terminal, so
+    // the exit is expected — keep the tailer running (the live read-only mirror)
+    // and emit nothing.
+    if (state.ejected) return;
     state.stopped = true;
     state.tailer?.stop();
     if (e.exitCode !== 0) {
