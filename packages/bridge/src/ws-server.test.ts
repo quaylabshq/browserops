@@ -685,6 +685,7 @@ describe("WSBridge /chat/*", () => {
       },
       async send(id, text) {
         if (id === "missing") throw new EngineError("unknown_session");
+        if (id === "noterm") throw new EngineError("pty_unavailable");
         sent.push({ id, text });
       },
       async subscribe(id, listener) {
@@ -813,7 +814,7 @@ describe("WSBridge /chat/*", () => {
     }
   });
 
-  it("POST /chat/send routes the turn; bad input → 400; unknown session → 404", async () => {
+  it("POST /chat/send routes the turn; bad input → 400; unknown session → 404; pty_unavailable → 503", async () => {
     const f = fakeChat();
     const fixture = await startBridge({ pinnedExtensionId: PIN, chat: f.chat });
     try {
@@ -840,6 +841,15 @@ describe("WSBridge /chat/*", () => {
           })
         ).status,
       ).toBe(404);
+      expect(
+        (
+          await postChat(fixture.port, "/chat/send", {
+            token: VALID_TOKEN,
+            session_id: "noterm",
+            text: "hi",
+          })
+        ).status,
+      ).toBe(503);
     } finally {
       await fixture.bridge.stop();
     }
