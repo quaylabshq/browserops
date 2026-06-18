@@ -1,7 +1,6 @@
 export {};
 
 import {
-  AGENTS,
   DEFAULT_AGENT_ID,
   type ChatBlock,
   type ChatEvent,
@@ -39,7 +38,8 @@ const termMirrorBtn = $<HTMLButtonElement>("term-mirror");
 const termTakeoverBtn = $<HTMLButtonElement>("term-takeover");
 const themeToggleBtn = $<HTMLButtonElement>("theme-toggle");
 const disconnectedEl = $<HTMLDivElement>("disconnected");
-const engineEl = $<HTMLDivElement>("engine");
+const tabAgentBtn = $<HTMLButtonElement>("tab-agent");
+const tabHistoryBtn = $<HTMLButtonElement>("tab-history");
 const streamEl = $<HTMLDivElement>("stream");
 const emptyEl = $<HTMLDivElement>("empty");
 const emptyChipsEl = $<HTMLDivElement>("empty-chips");
@@ -47,7 +47,7 @@ const contextEl = $<HTMLDivElement>("context");
 const contextFav = $<HTMLSpanElement>("context-fav");
 const contextLabel = $<HTMLSpanElement>("context-label");
 const contextLive = $<HTMLSpanElement>("context-live");
-const contextHistoryEl = $<HTMLDivElement>("context-history");
+const historyEl = $<HTMLDivElement>("history");
 const composerForm = $<HTMLFormElement>("composer");
 const messageEl = $<HTMLTextAreaElement>("message");
 const sendBtn = $<HTMLButtonElement>("send");
@@ -58,15 +58,13 @@ const termHost = $<HTMLDivElement>("terminal-host");
 const termTitleEl = $<HTMLSpanElement>("terminal-title");
 const termCloseBtn = $<HTMLButtonElement>("term-close");
 
-// Recent sessions, kept so the empty/header re-renders don't re-fetch.
-let sessions: SessionSummary[] = [];
-
-let selectedAgent: string = DEFAULT_AGENT_ID;
+const selectedAgent: string = DEFAULT_AGENT_ID;
 let connected = false;
 let state: ChatState = initialChatState();
 let stream: EventSource | null = null;
 let terminal: EmbeddedTerminal | null = null;
 let view: "chat" | "terminal" = "chat";
+let tab: "agent" | "history" = "agent";
 let tokenCache: string | null = null;
 let systemSeq = 0;
 
@@ -120,37 +118,34 @@ darkMq.addEventListener("change", () => {
   if (themePref === "system") applyTheme();
 });
 
-// --- engine selector (header; pre-session only) -----------------------------
+// --- view tabs (Agent ↔ History) --------------------------------------------
 
-// The engine is chosen before a chat starts; once a session is live its agent
-// is fixed, so render() hides this. Labels are shortened ("Claude Code" →
-// "Claude") to fit the segmented control in a narrow header.
-function renderEngine(): void {
-  engineEl.replaceChildren();
-  for (const a of AGENTS) {
-    const chip = document.createElement("button");
-    chip.type = "button";
-    chip.className = "engine__chip";
-    chip.setAttribute("role", "radio");
-    chip.dataset["agent"] = a.id;
-    chip.textContent = a.label.split(" ")[0] ?? a.label;
-    chip.title = a.note ? `${a.label} — ${a.note}` : a.label;
-    if (a.caps.chat) chip.addEventListener("click", () => selectAgent(a.id));
-    else chip.disabled = true;
-    engineEl.appendChild(chip);
+// Two top-level views: the chat ("Agent") and the recent-sessions list
+// ("History"). Switching to History refreshes the list and leaves any
+// full-window terminal view.
+function setTab(next: "agent" | "history"): void {
+  tab = next;
+  if (next === "history") {
+    if (view === "terminal") closeTerminal();
+    void loadSessions();
   }
-  syncEngineSelection();
+  render();
 }
 
-function selectAgent(id: string): void {
-  selectedAgent = id;
-  syncEngineSelection();
-}
-
-function syncEngineSelection(): void {
-  for (const chip of engineEl.querySelectorAll<HTMLButtonElement>(".engine__chip")) {
-    chip.setAttribute("aria-checked", String(chip.dataset["agent"] === selectedAgent));
-  }
+// Compact "5m ago" / "2h ago" / "3d ago" for the History list.
+function relativeTime(ts: number | undefined): string {
+  if (!ts) return "";
+  const diff = Date.now() - ts;
+  if (diff < 60_000) return "just now";
+  const min = Math.floor(diff / 60_000);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const day = Math.floor(hr / 24);
+  if (day < 7) return `${day}d ago`;
+  const wk = Math.floor(day / 7);
+  if (wk < 5) return `${wk}w ago`;
+  return `${Math.floor(day / 30)}mo ago`;
 }
 
 // --- activity stream render -------------------------------------------------
@@ -389,6 +384,9 @@ function render(): void {
     closeTerminal();
   }
   panelEl.classList.toggle("view-terminal", view === "terminal");
+  panelEl.classList.toggle("view-history", view !== "terminal" && tab === "history");
+  tabAgentBtn.setAttribute("aria-selected", String(tab === "agent"));
+  tabHistoryBtn.setAttribute("aria-selected", String(tab === "history"));
 
   const hasMessages = state.messages.length > 0;
   const hasSession = state.session !== undefined;
@@ -424,14 +422,16 @@ function render(): void {
     connected && (state.status === "thinking" || state.status === "starting" || state.ejected);
   statusDot.className = `dot ${connected ? "dot--on" : "dot--off"}${busy ? " dot--busy" : ""}`;
 
-  // Header — the first instruction is the title (the task); engine pre-session.
+  // Header — the first instruction is the title (the task).
   const firstUser = state.messages.find((m) => m.role === "user");
   const task = firstUser ? textOf(firstUser.blocks).replace(/\s+/g, " ").trim() : "";
-  engineEl.hidden = hasSession;
   headTitle.textContent = task || state.session?.title?.trim() || "BrowserOps";
   termTitleEl.textContent = `${state.session?.title?.trim() || "session"} · ● live`;
-  termMirrorBtn.hidden = !hasSession || !connected || !state.terminalCapable;
-  termTakeoverBtn.hidden = !hasSession || !connected || state.ejected;
+
+  // Chat-only controls; hidden on the History tab and in the terminal view.
+  const onAgent = tab === "agent" && view !== "terminal";
+  termMirrorBtn.hidden = !onAgent || !hasSession || !connected || !state.terminalCapable;
+  termTakeoverBtn.hidden = !onAgent || !hasSession || !connected || state.ejected;
   newSessionBtn.hidden = !hasMessages && !hasSession;
   syncTerminalBtn();
   syncComposer();
@@ -448,7 +448,7 @@ function pushSystem(text: string): void {
   render();
 }
 
-// --- recent sessions (context-bar history tags) -----------------------------
+// --- History view -----------------------------------------------------------
 
 async function loadSessions(): Promise<void> {
   const token = await getToken();
@@ -457,21 +457,33 @@ async function loadSessions(): Promise<void> {
 }
 
 function renderSessions(list: SessionSummary[]): void {
-  sessions = list;
-  contextHistoryEl.replaceChildren();
-  for (const s of list.slice(0, 6)) {
-    const tag = document.createElement("button");
-    tag.type = "button";
-    tag.className = "history__tag";
-    if (state.session?.sessionId === s.sessionId) tag.classList.add("history__tag--active");
-    const label = s.title?.trim() || s.sessionId.slice(0, 8);
-    tag.textContent = `↑ ${label}`;
-    tag.title = s.title ?? s.sessionId;
-    tag.addEventListener("click", () => void openSession(s));
-    contextHistoryEl.appendChild(tag);
+  historyEl.replaceChildren();
+  if (list.length === 0) {
+    const empty = el("div", "history__empty");
+    empty.textContent = connected ? "No sessions yet." : "Connect the bridge to see history.";
+    historyEl.append(empty);
+    return;
   }
-  // History lives in the context bar; make sure it's shown when sessions exist.
-  if (list.length > 0) contextEl.hidden = false;
+  for (const s of list) {
+    const item = el("button", "history__item");
+    item.type = "button";
+    if (state.session?.sessionId === s.sessionId) item.classList.add("history__item--active");
+    const title = el("div", "history__title");
+    title.textContent = s.title?.trim() || "Untitled session";
+    const meta = el("div", "history__meta");
+    meta.append(document.createTextNode(relativeTime(s.lastActive || s.createdAt)));
+    if (s.terminal) {
+      const badge = el("span", "history__badge");
+      badge.textContent = "· live";
+      meta.append(badge);
+    }
+    item.append(title, meta);
+    item.addEventListener("click", () => {
+      tab = "agent";
+      void openSession(s);
+    });
+    historyEl.append(item);
+  }
 }
 
 async function openSession(summary: SessionSummary): Promise<void> {
@@ -515,15 +527,13 @@ function closeStream(): void {
 
 // --- context ----------------------------------------------------------------
 
-// Example prompts for the empty state — two generic, one seeded from the host.
-function renderEmptyChips(host: string): void {
-  const prompts = ["Summarize this page", "Extract the main content"];
-  prompts.push(host ? `What can I do on ${host}?` : "Find and fill a form");
+// Example prompts for the empty state — one tap fills the composer.
+function renderEmptyChips(): void {
+  const prompts = ["Summarize this page", "Extract the key details", "What can I do here?"];
   emptyChipsEl.replaceChildren();
   for (const text of prompts) {
-    const chip = document.createElement("button");
+    const chip = el("button", "chip");
     chip.type = "button";
-    chip.className = "chip";
     chip.textContent = text;
     chip.addEventListener("click", () => {
       messageEl.value = text;
@@ -531,46 +541,45 @@ function renderEmptyChips(host: string): void {
       syncSendState();
       messageEl.focus();
     });
-    emptyChipsEl.appendChild(chip);
+    emptyChipsEl.append(chip);
   }
 }
 
 async function refreshContext(): Promise<void> {
   try {
-    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-    const title = tab?.title ?? "";
+    const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    const title = activeTab?.title ?? "";
     let hostStr = "";
     try {
-      hostStr = tab?.url ? new URL(tab.url).host : "";
+      hostStr = activeTab?.url ? new URL(activeTab.url).host : "";
     } catch {
       /* non-http url */
     }
-    renderEmptyChips(hostStr);
-    if (!hostStr && !title && sessions.length === 0) {
+    if (!hostStr && !title) {
       contextEl.hidden = true;
       return;
     }
     contextEl.hidden = false;
     contextLabel.textContent = hostStr && title ? `${hostStr} · ${title}` : hostStr || title;
     contextLabel.title = title || hostStr;
-    const fav = tab?.favIconUrl;
+    const fav = activeTab?.favIconUrl;
     contextFav.style.backgroundImage =
       typeof fav === "string" && (fav.startsWith("http") || fav.startsWith("data:"))
         ? `url("${fav}")`
         : "";
   } catch {
-    if (sessions.length === 0) contextEl.hidden = true;
+    contextEl.hidden = true;
   }
 }
 
 async function capturePageMeta(): Promise<PageMeta> {
-  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-  const url = tab?.url ?? "";
-  const title = tab?.title ?? "";
-  if (tab?.id === undefined) return { url, title };
+  const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  const url = activeTab?.url ?? "";
+  const title = activeTab?.title ?? "";
+  if (activeTab?.id === undefined) return { url, title };
   try {
     const [injected] = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
+      target: { tabId: activeTab.id },
       func: grabPageMeta,
     });
     const r = injected?.result as
@@ -750,6 +759,7 @@ async function takeoverTerminal(): Promise<void> {
 function newSession(): void {
   closeStream();
   closeTerminal();
+  tab = "agent";
   state = initialChatState();
   render();
   messageEl.focus();
@@ -778,6 +788,8 @@ messageEl.addEventListener("keydown", (e) => {
     void sendMessage();
   }
 });
+tabAgentBtn.addEventListener("click", () => setTab("agent"));
+tabHistoryBtn.addEventListener("click", () => setTab("history"));
 newSessionBtn.addEventListener("click", newSession);
 termStatusNewBtn.addEventListener("click", newSession);
 termCloseBtn.addEventListener("click", () => void setView("chat"));
@@ -798,8 +810,7 @@ chrome.tabs.onUpdated.addListener((_id, info) => {
   if (info.url !== undefined || info.title !== undefined) void refreshContext();
 });
 
-renderEngine();
-renderEmptyChips("");
+renderEmptyChips();
 render();
 void loadTheme();
 void refreshConnection();
