@@ -23,6 +23,7 @@ import {
   type SessionSummary,
 } from "../lib/chat-client.js";
 import { formatAction, type ActionIcon } from "../lib/chat-format.js";
+import { renderMarkdown } from "../lib/markdown.js";
 import type { EmbeddedTerminal } from "../lib/pty-terminal.js";
 
 const $ = <T extends HTMLElement>(id: string): T => {
@@ -38,20 +39,27 @@ const termMirrorBtn = $<HTMLButtonElement>("term-mirror");
 const termTakeoverBtn = $<HTMLButtonElement>("term-takeover");
 const themeToggleBtn = $<HTMLButtonElement>("theme-toggle");
 const disconnectedEl = $<HTMLDivElement>("disconnected");
-const agentsEl = $<HTMLDivElement>("agents");
-const sessionsEl = $<HTMLDivElement>("sessions");
+const engineEl = $<HTMLDivElement>("engine");
 const streamEl = $<HTMLDivElement>("stream");
 const emptyEl = $<HTMLDivElement>("empty");
+const emptyChipsEl = $<HTMLDivElement>("empty-chips");
 const contextEl = $<HTMLDivElement>("context");
 const contextFav = $<HTMLSpanElement>("context-fav");
 const contextLabel = $<HTMLSpanElement>("context-label");
 const contextLive = $<HTMLSpanElement>("context-live");
+const contextHistoryEl = $<HTMLDivElement>("context-history");
 const composerForm = $<HTMLFormElement>("composer");
 const messageEl = $<HTMLTextAreaElement>("message");
 const sendBtn = $<HTMLButtonElement>("send");
-const composerHint = $<HTMLDivElement>("composer-hint");
+const termStatusEl = $<HTMLDivElement>("term-status");
+const termStatusNewBtn = $<HTMLButtonElement>("term-status-new");
 const panelEl = $<HTMLDivElement>("panel");
 const termHost = $<HTMLDivElement>("terminal-host");
+const termTitleEl = $<HTMLSpanElement>("terminal-title");
+const termCloseBtn = $<HTMLButtonElement>("term-close");
+
+// Recent sessions, kept so the empty/header re-renders don't re-fetch.
+let sessions: SessionSummary[] = [];
 
 let selectedAgent: string = DEFAULT_AGENT_ID;
 let connected = false;
@@ -112,37 +120,35 @@ darkMq.addEventListener("change", () => {
   if (themePref === "system") applyTheme();
 });
 
-// --- agent picker -----------------------------------------------------------
+// --- engine selector (header; pre-session only) -----------------------------
 
-function renderAgents(): void {
-  agentsEl.replaceChildren();
+// The engine is chosen before a chat starts; once a session is live its agent
+// is fixed, so render() hides this. Labels are shortened ("Claude Code" →
+// "Claude") to fit the segmented control in a narrow header.
+function renderEngine(): void {
+  engineEl.replaceChildren();
   for (const a of AGENTS) {
     const chip = document.createElement("button");
     chip.type = "button";
-    chip.className = "agent-chip";
+    chip.className = "engine__chip";
     chip.setAttribute("role", "radio");
     chip.dataset["agent"] = a.id;
-    chip.append(a.label);
-    if (a.note) {
-      const note = document.createElement("span");
-      note.className = "agent-note";
-      note.textContent = a.note;
-      chip.appendChild(note);
-    }
+    chip.textContent = a.label.split(" ")[0] ?? a.label;
+    chip.title = a.note ? `${a.label} — ${a.note}` : a.label;
     if (a.caps.chat) chip.addEventListener("click", () => selectAgent(a.id));
     else chip.disabled = true;
-    agentsEl.appendChild(chip);
+    engineEl.appendChild(chip);
   }
-  syncAgentSelection();
+  syncEngineSelection();
 }
 
 function selectAgent(id: string): void {
   selectedAgent = id;
-  syncAgentSelection();
+  syncEngineSelection();
 }
 
-function syncAgentSelection(): void {
-  for (const chip of agentsEl.querySelectorAll<HTMLButtonElement>(".agent-chip")) {
+function syncEngineSelection(): void {
+  for (const chip of engineEl.querySelectorAll<HTMLButtonElement>(".engine__chip")) {
     chip.setAttribute("aria-checked", String(chip.dataset["agent"] === selectedAgent));
   }
 }
@@ -206,24 +212,6 @@ function agentName(): string {
   return AGENTS.find((a) => a.id === id)?.label ?? "Agent";
 }
 
-// Append text with bare URLs linkified — text nodes + <a> only, never innerHTML.
-function renderRich(container: HTMLElement, text: string): void {
-  const urlRe = /(https?:\/\/[^\s<]+)/g;
-  let last = 0;
-  let m: RegExpExecArray | null;
-  while ((m = urlRe.exec(text)) !== null) {
-    if (m.index > last) container.append(text.slice(last, m.index));
-    const a = el("a");
-    a.href = m[0];
-    a.textContent = m[0];
-    a.target = "_blank";
-    a.rel = "noreferrer noopener";
-    container.append(a);
-    last = m.index + m[0].length;
-  }
-  if (last < text.length) container.append(text.slice(last));
-}
-
 interface Group {
   kind: "user" | "agent" | "system";
   blocks: ChatBlock[];
@@ -247,21 +235,14 @@ function asRecord(v: unknown): Record<string, unknown> {
   return v !== null && typeof v === "object" ? (v as Record<string, unknown>) : {};
 }
 
-function buildDetail(
-  use: Extract<ChatBlock, { kind: "tool_use" }>,
-  result?: Extract<ChatBlock, { kind: "tool_result" }>,
-): string {
-  const parts: string[] = [];
+function argsText(use: Extract<ChatBlock, { kind: "tool_use" }>): string {
   const input = asRecord(use.input);
-  if (Object.keys(input).length > 0) {
-    try {
-      parts.push(JSON.stringify(input, null, 2).slice(0, 600));
-    } catch {
-      /* unserialisable input — skip */
-    }
+  if (Object.keys(input).length === 0) return "";
+  try {
+    return JSON.stringify(input, null, 2).slice(0, 600);
+  } catch {
+    return "";
   }
-  if (result && result.preview.trim()) parts.push(result.preview.trim().slice(0, 1200));
-  return parts.join("\n\n");
 }
 
 function renderAction(
@@ -271,6 +252,12 @@ function renderAction(
   const view = formatAction(use);
   const phase = result ? (result.ok ? "ok" : "err") : "run";
   const li = el("li", `action action--${phase}`);
+
+  // Leading status marker — the execution-trace "✓ / ✗ / running" column.
+  const status = el("span", "action__status");
+  if (phase === "run") status.append(el("span", "action__spinner"));
+  else status.textContent = phase === "ok" ? "✓" : "✗";
+  li.append(status);
 
   const icon = el("span", "action__icon");
   icon.append(actionIcon(view.icon));
@@ -283,28 +270,42 @@ function renderAction(
   if (view.target) {
     const tgt = el("span", "action__target");
     tgt.textContent = view.target;
+    tgt.title = view.target;
     main.append(tgt);
   }
+  li.append(main);
+
+  const trail = el("span", "action__trail");
   if (view.risky) {
     const r = el("span", "action__risky");
     r.textContent = "⚠";
     r.title = "Risky action";
-    main.append(r);
+    trail.append(r);
   }
-  li.append(main);
+  li.append(trail);
 
-  const st = el("span", "action__state");
-  if (phase === "run") st.append(el("span", "action__spinner"));
-  else st.textContent = phase === "ok" ? "✓" : "✗";
-  li.append(st);
-
-  const detailText = buildDetail(use, result);
-  if (detailText) {
+  // Expandable detail: input args (neutral block) + result/error (red on fail).
+  const args = argsText(use);
+  const preview = result?.preview.trim() ?? "";
+  if (args || preview) {
     li.classList.add("is-expandable");
     li.setAttribute("role", "button");
     li.tabIndex = 0;
+    const chevron = el("span", "action__chevron");
+    chevron.textContent = "▸";
+    trail.append(chevron);
+
     const detail = el("div", "action__detail");
-    detail.textContent = detailText;
+    if (args) {
+      const pre = el("pre", "action__args");
+      pre.textContent = args;
+      detail.append(pre);
+    }
+    if (preview) {
+      const block = el("div", phase === "err" ? "action__error" : "action__args");
+      block.textContent = preview.slice(0, 1200);
+      detail.append(block);
+    }
     detail.hidden = phase !== "err"; // errors auto-expand
     li.setAttribute("aria-expanded", String(!detail.hidden));
     detail.addEventListener("click", (e) => e.stopPropagation());
@@ -348,6 +349,12 @@ function renderAgentTurn(blocks: ChatBlock[], isLast: boolean): HTMLElement {
   glyph.textContent = "◇";
   who.append(glyph, document.createTextNode(agentName()));
   head.append(who);
+  const working = isLast && state.status === "thinking" && !state.ejected;
+  if (working) {
+    const chip = el("span", "status-chip status-chip--working");
+    chip.textContent = "working…";
+    head.append(chip);
+  }
   turn.append(head);
 
   const body = el("div", "turn__body");
@@ -363,11 +370,17 @@ function renderAgentTurn(blocks: ChatBlock[], isLast: boolean): HTMLElement {
     return ul;
   };
 
+  // A hairline rule when prose follows a run of actions (trace → output).
+  const ruleIfAfterActions = (): void => {
+    if (body.lastElementChild?.classList.contains("actions")) body.append(el("hr", "turn__rule"));
+  };
+
   for (const b of blocks) {
     if (b.kind === "text") {
       if (!b.text.trim()) continue;
+      ruleIfAfterActions();
       const t = el("div", "block-text");
-      renderRich(t, b.text);
+      renderMarkdown(t, b.text);
       body.append(t);
     } else if (b.kind === "thinking") {
       const t = el("div", "block-thinking");
@@ -378,20 +391,20 @@ function renderAgentTurn(blocks: ChatBlock[], isLast: boolean): HTMLElement {
       actionsList().append(renderAction(b, results.get(b.id)));
     } else if (!consumed.has(b.id)) {
       const li = el("li", `action action--${b.ok ? "ok" : "err"}`);
+      const status = el("span", "action__status");
+      status.textContent = b.ok ? "✓" : "✗";
       const icon = el("span", "action__icon");
       icon.append(actionIcon("dot"));
       const main = el("span", "action__main");
       const verb = el("span", "action__verb");
       verb.textContent = "result";
       main.append(verb);
-      const st = el("span", "action__state");
-      st.textContent = b.ok ? "✓" : "✗";
-      li.append(icon, main, st);
+      li.append(status, icon, main, el("span", "action__trail"));
       actionsList().append(li);
     }
   }
 
-  if (isLast && state.status === "thinking" && !state.ejected && body.childElementCount === 0) {
+  if (working && body.childElementCount === 0) {
     const think = el("div", "thinking");
     think.append(el("div", "thinking__bar"), document.createTextNode("working…"));
     body.append(think);
@@ -429,8 +442,15 @@ function render(): void {
   // Context bar — pulse the live dot while a session can drive the tab.
   contextLive.hidden = !(hasSession && connected && !state.ejected);
 
-  // Header controls + composer.
+  // Status dot — solid when connected, pinging while it's working / live.
+  const busy =
+    connected && (state.status === "thinking" || state.status === "starting" || state.ejected);
+  statusDot.className = `dot ${connected ? "dot--on" : "dot--off"}${busy ? " dot--busy" : ""}`;
+
+  // Header — engine selector pre-session; session title + controls once live.
+  engineEl.hidden = hasSession;
   headTitle.textContent = state.session?.title?.trim() || "BrowserOps";
+  termTitleEl.textContent = `${state.session?.title?.trim() || "session"} · ● live`;
   termMirrorBtn.hidden = !hasSession || !connected || !state.terminalCapable;
   termTakeoverBtn.hidden = !hasSession || !connected || state.ejected;
   newSessionBtn.hidden = !hasMessages && !hasSession;
@@ -449,7 +469,7 @@ function pushSystem(text: string): void {
   render();
 }
 
-// --- sessions strip ---------------------------------------------------------
+// --- recent sessions (context-bar history tags) -----------------------------
 
 async function loadSessions(): Promise<void> {
   const token = await getToken();
@@ -457,20 +477,22 @@ async function loadSessions(): Promise<void> {
   renderSessions(await chatSessions(token));
 }
 
-function renderSessions(sessions: SessionSummary[]): void {
-  sessionsEl.replaceChildren();
-  const recent = sessions.slice(0, 8);
-  sessionsEl.hidden = recent.length === 0;
-  for (const s of recent) {
-    const chip = document.createElement("button");
-    chip.type = "button";
-    chip.className = "session-chip";
-    if (state.session?.sessionId === s.sessionId) chip.classList.add("session-chip--active");
-    chip.textContent = s.title?.trim() || s.sessionId.slice(0, 8);
-    chip.title = s.title ?? s.sessionId;
-    chip.addEventListener("click", () => void openSession(s));
-    sessionsEl.appendChild(chip);
+function renderSessions(list: SessionSummary[]): void {
+  sessions = list;
+  contextHistoryEl.replaceChildren();
+  for (const s of list.slice(0, 6)) {
+    const tag = document.createElement("button");
+    tag.type = "button";
+    tag.className = "history__tag";
+    if (state.session?.sessionId === s.sessionId) tag.classList.add("history__tag--active");
+    const label = s.title?.trim() || s.sessionId.slice(0, 8);
+    tag.textContent = `↑ ${label}`;
+    tag.title = s.title ?? s.sessionId;
+    tag.addEventListener("click", () => void openSession(s));
+    contextHistoryEl.appendChild(tag);
   }
+  // History lives in the context bar; make sure it's shown when sessions exist.
+  if (list.length > 0) contextEl.hidden = false;
 }
 
 async function openSession(summary: SessionSummary): Promise<void> {
@@ -514,6 +536,26 @@ function closeStream(): void {
 
 // --- context ----------------------------------------------------------------
 
+// Example prompts for the empty state — two generic, one seeded from the host.
+function renderEmptyChips(host: string): void {
+  const prompts = ["Summarize this page", "Extract the main content"];
+  prompts.push(host ? `What can I do on ${host}?` : "Find and fill a form");
+  emptyChipsEl.replaceChildren();
+  for (const text of prompts) {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "chip";
+    chip.textContent = text;
+    chip.addEventListener("click", () => {
+      messageEl.value = text;
+      autoGrow();
+      syncSendState();
+      messageEl.focus();
+    });
+    emptyChipsEl.appendChild(chip);
+  }
+}
+
 async function refreshContext(): Promise<void> {
   try {
     const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
@@ -524,7 +566,8 @@ async function refreshContext(): Promise<void> {
     } catch {
       /* non-http url */
     }
-    if (!hostStr && !title) {
+    renderEmptyChips(hostStr);
+    if (!hostStr && !title && sessions.length === 0) {
       contextEl.hidden = true;
       return;
     }
@@ -537,7 +580,7 @@ async function refreshContext(): Promise<void> {
         ? `url("${fav}")`
         : "";
   } catch {
-    contextEl.hidden = true;
+    if (sessions.length === 0) contextEl.hidden = true;
   }
 }
 
@@ -565,23 +608,25 @@ async function capturePageMeta(): Promise<PageMeta> {
 // --- connection + composer state -------------------------------------------
 
 function syncComposer(): void {
-  const canSend = connected && !state.ejected;
-  messageEl.disabled = !canSend;
-  sendBtn.disabled = !canSend;
-  messageEl.placeholder = !connected
-    ? "Connect the bridge to start…"
-    : state.ejected
-      ? "Read-only — controlled in your terminal"
-      : "Message…";
-  composerHint.textContent = state.ejected
-    ? "● Live in your terminal — read-only here"
-    : "⏎ send · ⇧⏎ newline";
-  composerHint.classList.toggle("composer__hint--ejected", state.ejected);
+  // Read-only when ejected: swap the composer for the terminal status bar.
+  composerForm.hidden = state.ejected;
+  termStatusEl.hidden = !state.ejected;
+
+  messageEl.disabled = !connected || state.ejected;
+  messageEl.placeholder = connected
+    ? "Type a command or ask a follow-up…"
+    : "Connect the bridge to start…";
+  syncSendState();
+}
+
+function syncSendState(): void {
+  const hasText = messageEl.value.trim().length > 0;
+  composerForm.classList.toggle("has-text", hasText);
+  sendBtn.disabled = !(connected && !state.ejected && hasText);
 }
 
 function renderConnection(isConnected: boolean): void {
   connected = isConnected;
-  statusDot.className = `dot ${isConnected ? "dot--on" : "dot--off"}`;
   statusDot.title = isConnected ? "Connected" : "Disconnected";
   statusDot.setAttribute("aria-label", isConnected ? "Connected" : "Disconnected");
   render();
@@ -696,7 +741,10 @@ function closeTerminal(): void {
 }
 
 function syncTerminalBtn(): void {
-  termMirrorBtn.textContent = view === "terminal" ? "✕ Close terminal" : "▤ Terminal";
+  const open = view === "terminal";
+  termMirrorBtn.textContent = open ? "✕" : "▤";
+  termMirrorBtn.title = open ? "Close terminal" : "Open the live terminal";
+  termMirrorBtn.setAttribute("aria-label", termMirrorBtn.title);
 }
 
 // ⤢ Take over: eject the session into your own external terminal (claude
@@ -740,7 +788,10 @@ composerForm.addEventListener("submit", (e) => {
   e.preventDefault();
   void sendMessage();
 });
-messageEl.addEventListener("input", autoGrow);
+messageEl.addEventListener("input", () => {
+  autoGrow();
+  syncSendState();
+});
 messageEl.addEventListener("keydown", (e) => {
   // Enter sends; Shift+Enter inserts a newline.
   if (e.key === "Enter" && !e.shiftKey) {
@@ -749,6 +800,8 @@ messageEl.addEventListener("keydown", (e) => {
   }
 });
 newSessionBtn.addEventListener("click", newSession);
+termStatusNewBtn.addEventListener("click", newSession);
+termCloseBtn.addEventListener("click", () => void setView("chat"));
 termMirrorBtn.addEventListener("click", () => {
   void setView(view === "terminal" ? "chat" : "terminal");
 });
@@ -766,7 +819,8 @@ chrome.tabs.onUpdated.addListener((_id, info) => {
   if (info.url !== undefined || info.title !== undefined) void refreshContext();
 });
 
-renderAgents();
+renderEngine();
+renderEmptyChips("");
 render();
 void loadTheme();
 void refreshConnection();

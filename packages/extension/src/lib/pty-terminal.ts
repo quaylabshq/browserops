@@ -30,7 +30,8 @@ export function mountTerminal(opts: {
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     cursorBlink: true,
     convertEol: false,
-    theme: { background: "#19181b", foreground: "#e6e6e6" },
+    // Match the .terminal chrome tokens (--color-term-bg / --color-term-text).
+    theme: { background: "#1a191d", foreground: "#f3f3f5" },
   });
   const fit = new FitAddon();
   term.loadAddon(fit);

@@ -9,34 +9,83 @@
     <div id="panel" class="panel">
       <header class="head">
         <div class="head__id">
-          <span class="head__mark" aria-hidden="true"></span>
+          <span
+            id="status-dot"
+            class="dot dot--off"
+            role="status"
+            title="Disconnected"
+            aria-label="Disconnected"
+          >
+            <span class="dot__core"></span>
+          </span>
           <span id="head-title" class="head__title">BrowserOps</span>
         </div>
         <div class="head__actions">
-          <button id="new-session" class="icon-btn" type="button" hidden title="New chat" aria-label="New chat">↻</button>
-          <button id="term-mirror" class="icon-btn" type="button" hidden title="Open the live terminal" aria-label="Open terminal">▤</button>
-          <button id="term-takeover" class="icon-btn" type="button" hidden title="Take over in your terminal" aria-label="Take over in your terminal">⤢</button>
-          <button id="theme-toggle" class="icon-btn" type="button" title="Theme: Auto" aria-label="Theme: Auto">◐</button>
-          <span id="status-dot" class="dot dot--off" role="status" title="Disconnected" aria-label="Disconnected"></span>
+          <!-- Engine selector — pre-session only; the agent is fixed once a chat starts. -->
+          <div id="engine" class="engine" role="radiogroup" aria-label="Agent" hidden></div>
+          <button
+            id="new-session"
+            class="icon-btn"
+            type="button"
+            hidden
+            title="New chat"
+            aria-label="New chat"
+          >
+            ↻
+          </button>
+          <button
+            id="term-mirror"
+            class="icon-btn"
+            type="button"
+            hidden
+            title="Open the live terminal"
+            aria-label="Open terminal"
+          >
+            ▤
+          </button>
+          <button
+            id="term-takeover"
+            class="icon-btn"
+            type="button"
+            hidden
+            title="Take over in your terminal"
+            aria-label="Take over in your terminal"
+          >
+            ⤢
+          </button>
+          <button
+            id="theme-toggle"
+            class="icon-btn"
+            type="button"
+            title="Theme: Auto"
+            aria-label="Theme: Auto"
+          >
+            ◐
+          </button>
         </div>
       </header>
 
-      <!-- The page the agent can see and drive — BrowserOps' identity. -->
+      <!-- The page the agent can see and drive — plus recent sessions to resume. -->
       <div id="context" class="context" hidden>
         <span id="context-fav" class="context__fav" aria-hidden="true"></span>
         <span id="context-label" class="context__label"></span>
-        <span id="context-live" class="context__live" title="Agent can act on this tab" hidden></span>
+        <span
+          id="context-live"
+          class="context__live"
+          title="Agent can act on this tab"
+          hidden
+        ></span>
+        <div id="context-history" class="context__history" aria-label="Recent sessions"></div>
       </div>
-
-      <div id="agents" class="agents" role="radiogroup" aria-label="Agent"></div>
-
-      <div id="sessions" class="sessions" aria-label="Recent sessions" hidden></div>
 
       <div id="stream" class="stream" aria-live="polite" aria-label="Conversation">
         <div id="empty" class="empty">
           <span class="empty__mark" aria-hidden="true"></span>
-          <p class="empty__lead">Chat with an agent that can see and drive this tab.</p>
-          <p class="empty__sub">Replies stream here; the agent acts on the page you’re viewing.</p>
+          <p class="empty__lead">Chat with an agent that sees and drives this tab.</p>
+          <p class="empty__sub">
+            Ask in plain language — it navigates, clicks, types, and reads the page for you.
+          </p>
+          <div id="empty-chips" class="empty__chips"></div>
         </div>
         <div id="disconnected" class="state" hidden>
           <p class="state__title">Bridge not connected</p>
@@ -44,24 +93,71 @@
         </div>
       </div>
 
-      <!-- Full-window terminal view; shown only when .panel.view-terminal is set. -->
+      <!-- Full-window terminal view (macOS chrome); shown only with .panel.view-terminal. -->
       <div id="terminal-pane" class="terminal-pane">
-        <div id="terminal-host" class="terminal-host"></div>
+        <div class="terminal">
+          <div class="terminal__bar">
+            <span class="terminal__dots">
+              <button
+                id="term-close"
+                class="terminal__dot terminal__dot--red"
+                type="button"
+                title="Back to chat"
+                aria-label="Back to chat"
+              ></button>
+              <span class="terminal__dot terminal__dot--yellow"></span>
+              <span class="terminal__dot terminal__dot--green"></span>
+            </span>
+            <span id="terminal-title" class="terminal__title">session</span>
+          </div>
+          <div id="terminal-host" class="terminal-host"></div>
+        </div>
       </div>
 
+      <!-- Write mode — the typing experience. -->
       <form id="composer" class="composer">
         <div class="composer__box">
+          <span class="composer__glyph" aria-hidden="true">
+            <svg
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="M4 5.5 6.5 8 4 10.5" />
+              <path d="M8.5 10.5H12" />
+            </svg>
+          </span>
           <textarea
             id="message"
             class="composer__input"
             rows="1"
-            placeholder="Message…"
+            placeholder="Type a command or ask a follow-up…"
             aria-label="Message"
           ></textarea>
-          <button id="send" class="composer__send" type="submit" aria-label="Send">▸</button>
+          <button id="send" class="composer__send" type="submit" aria-label="Send">
+            <span class="composer__send-label">Enter </span
+            ><span class="composer__kbd" aria-hidden="true">↵</span>
+          </button>
         </div>
         <div id="composer-hint" class="composer__hint">⏎ send · ⇧⏎ newline</div>
       </form>
+
+      <!-- Read-only mode — live in an external terminal; replaces the composer. -->
+      <div id="term-status" class="term-status" hidden>
+        <div class="term-status__line">
+          <span class="term-status__home">~</span>
+          <span class="term-status__caret">❯</span>
+          <span class="term-status__msg">listening via terminal</span>
+          <span class="term-status__cursor" aria-hidden="true"></span>
+        </div>
+        <div class="term-status__meta">
+          <span class="term-status__mode">Read-Only Mode</span>
+          <button id="term-status-new" class="term-status__new" type="button">New chat</button>
+        </div>
+      </div>
     </div>
     <script type="module" src="./index.ts"></script>
   </body>
