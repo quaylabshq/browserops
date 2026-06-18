@@ -22,7 +22,7 @@ import {
   type PageMeta,
   type SessionSummary,
 } from "../lib/chat-client.js";
-import { formatAction, type ActionIcon } from "../lib/chat-format.js";
+import { formatAction } from "../lib/chat-format.js";
 import { renderMarkdown } from "../lib/markdown.js";
 import type { EmbeddedTerminal } from "../lib/pty-terminal.js";
 
@@ -164,52 +164,11 @@ function el<K extends keyof HTMLElementTagNameMap>(
   return node;
 }
 
-// Compact 14px stroke icons keyed by action category. Paths are static
-// constants, so innerHTML carries no user data.
-const ICON_PATHS: Record<ActionIcon, string> = {
-  navigate: '<path d="M3 8h9"/><path d="M8 4l4 4-4 4"/>',
-  back: '<path d="M13 8H4"/><path d="M8 4 4 8l4 4"/>',
-  forward: '<path d="M3 8h9"/><path d="M8 4l4 4-4 4"/>',
-  tab: '<rect x="2.5" y="3.5" width="11" height="9" rx="1.5"/><path d="M2.5 6.2h11"/>',
-  click:
-    '<circle cx="8" cy="8" r="4.3"/><circle cx="8" cy="8" r="1.3" fill="currentColor" stroke="none"/>',
-  hover: '<path d="M5 4l7 3.2-3 1-1 3z"/>',
-  type: '<rect x="2.5" y="4.5" width="11" height="7" rx="1.5"/><path d="M5.2 9.2h5.6"/>',
-  press: '<path d="M12 5v2.2a1.8 1.8 0 0 1-1.8 1.8H4"/><path d="M6.4 6.6 4 9l2.4 2.4"/>',
-  read: '<path d="M1.6 8S4 3.8 8 3.8 14.4 8 14.4 8 12 12.2 8 12.2 1.6 8 1.6 8Z"/><circle cx="8" cy="8" r="1.7"/>',
-  camera:
-    '<path d="M2.6 5.6h2l1-1.5h2.8l1 1.5h2a1 1 0 0 1 1 1v4.8a1 1 0 0 1-1 1H2.6a1 1 0 0 1-1-1V6.6a1 1 0 0 1 1-1Z"/><circle cx="8" cy="8.4" r="2"/>',
-  scroll: '<path d="M8 3.2v9.6"/><path d="M5.2 6 8 3.2 10.8 6"/><path d="M5.2 10 8 12.8 10.8 10"/>',
-  wait: '<circle cx="8" cy="8" r="5.4"/><path d="M8 5v3l2 1.4"/>',
-  code: '<path d="M6 5 3 8l3 3"/><path d="M10 5l3 3-3 3"/>',
-  procedure: '<path d="M5.6 4.4 11.6 8l-6 3.6z"/>',
-  search: '<circle cx="7" cy="7" r="3.6"/><path d="M9.8 9.8 13 13"/>',
-  locate: '<circle cx="8" cy="8" r="2.4"/><path d="M8 2v2.2M8 11.8V14M2 8h2.2M11.8 8H14"/>',
-  dot: '<circle cx="8" cy="8" r="2.1" fill="currentColor" stroke="none"/>',
-};
-
-function actionIcon(key: ActionIcon): SVGSVGElement {
-  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.setAttribute("viewBox", "0 0 16 16");
-  svg.setAttribute("fill", "none");
-  svg.setAttribute("stroke", "currentColor");
-  svg.setAttribute("stroke-width", "1.5");
-  svg.setAttribute("stroke-linecap", "round");
-  svg.setAttribute("stroke-linejoin", "round");
-  svg.innerHTML = ICON_PATHS[key] ?? ICON_PATHS.dot;
-  return svg;
-}
-
 function textOf(blocks: ChatBlock[]): string {
   return blocks
     .flatMap((b) => (b.kind === "text" ? [b.text] : []))
     .join("\n")
     .trim();
-}
-
-function agentName(): string {
-  const id = state.session?.agent ?? selectedAgent;
-  return AGENTS.find((a) => a.id === id)?.label ?? "Agent";
 }
 
 interface Group {
@@ -258,10 +217,6 @@ function renderAction(
   if (phase === "run") status.append(el("span", "action__spinner"));
   else status.textContent = phase === "ok" ? "✓" : "✗";
   li.append(status);
-
-  const icon = el("span", "action__icon");
-  icon.append(actionIcon(view.icon));
-  li.append(icon);
 
   const main = el("span", "action__main");
   const verb = el("span", "action__verb");
@@ -327,12 +282,30 @@ function renderAction(
 
 function renderUserTurn(blocks: ChatBlock[]): HTMLElement {
   const turn = el("div", "turn turn--user");
-  const who = el("span", "turn__who");
-  who.textContent = "You";
-  const body = el("div", "turn__body");
-  body.textContent = textOf(blocks);
-  turn.append(who, body);
+  const prompt = el("span", "uprompt");
+  prompt.textContent = "❯";
+  const text = el("span", "utext");
+  text.textContent = textOf(blocks);
+  turn.append(prompt, text);
   return turn;
+}
+
+function sectionLabel(text: string): HTMLElement {
+  const label = el("div", "section-label");
+  label.textContent = text;
+  return label;
+}
+
+function renderOrphanResult(b: Extract<ChatBlock, { kind: "tool_result" }>): HTMLLIElement {
+  const li = el("li", `action action--${b.ok ? "ok" : "err"}`);
+  const status = el("span", "action__status");
+  status.textContent = b.ok ? "✓" : "✗";
+  const main = el("span", "action__main");
+  const verb = el("span", "action__verb");
+  verb.textContent = "result";
+  main.append(verb);
+  li.append(status, main, el("span", "action__trail"));
+  return li;
 }
 
 function renderSystemNote(blocks: ChatBlock[]): HTMLElement {
@@ -341,76 +314,65 @@ function renderSystemNote(blocks: ChatBlock[]): HTMLElement {
   return note;
 }
 
+// An agent response renders as two sections — EXECUTION TRACE (the browser
+// actions) then EXTRACTED OUTPUT (the prose) — mirroring the design language.
+// Interleaved tool/text blocks are regrouped: all actions, then all prose.
 function renderAgentTurn(blocks: ChatBlock[], isLast: boolean): HTMLElement {
   const turn = el("div", "turn turn--agent");
-  const head = el("div", "turn__head");
-  const who = el("span", "turn__who");
-  const glyph = el("span", "turn__glyph");
-  glyph.textContent = "◇";
-  who.append(glyph, document.createTextNode(agentName()));
-  head.append(who);
   const working = isLast && state.status === "thinking" && !state.ejected;
-  if (working) {
-    const chip = el("span", "status-chip status-chip--working");
-    chip.textContent = "working…";
-    head.append(chip);
-  }
-  turn.append(head);
 
-  const body = el("div", "turn__body");
   const results = new Map<string, Extract<ChatBlock, { kind: "tool_result" }>>();
   for (const b of blocks) if (b.kind === "tool_result") results.set(b.id, b);
   const consumed = new Set<string>();
 
-  const actionsList = (): HTMLUListElement => {
-    const last = body.lastElementChild;
-    if (last instanceof HTMLUListElement && last.classList.contains("actions")) return last;
-    const ul = el("ul", "actions");
-    body.append(ul);
-    return ul;
-  };
-
-  // A hairline rule when prose follows a run of actions (trace → output).
-  const ruleIfAfterActions = (): void => {
-    if (body.lastElementChild?.classList.contains("actions")) body.append(el("hr", "turn__rule"));
-  };
-
+  const actions: HTMLLIElement[] = [];
   for (const b of blocks) {
-    if (b.kind === "text") {
-      if (!b.text.trim()) continue;
-      ruleIfAfterActions();
-      const t = el("div", "block-text");
-      renderMarkdown(t, b.text);
-      body.append(t);
-    } else if (b.kind === "thinking") {
-      const t = el("div", "block-thinking");
-      t.textContent = b.text;
-      body.append(t);
-    } else if (b.kind === "tool_use") {
+    if (b.kind === "tool_use") {
       if (results.has(b.id)) consumed.add(b.id);
-      actionsList().append(renderAction(b, results.get(b.id)));
-    } else if (!consumed.has(b.id)) {
-      const li = el("li", `action action--${b.ok ? "ok" : "err"}`);
-      const status = el("span", "action__status");
-      status.textContent = b.ok ? "✓" : "✗";
-      const icon = el("span", "action__icon");
-      icon.append(actionIcon("dot"));
-      const main = el("span", "action__main");
-      const verb = el("span", "action__verb");
-      verb.textContent = "result";
-      main.append(verb);
-      li.append(status, icon, main, el("span", "action__trail"));
-      actionsList().append(li);
+      actions.push(renderAction(b, results.get(b.id)));
+    } else if (b.kind === "tool_result" && !consumed.has(b.id)) {
+      actions.push(renderOrphanResult(b));
     }
   }
 
-  if (working && body.childElementCount === 0) {
-    const think = el("div", "thinking");
-    think.append(el("div", "thinking__bar"), document.createTextNode("working…"));
-    body.append(think);
+  const thinkingText = blocks
+    .flatMap((b) => (b.kind === "thinking" ? [b.text] : []))
+    .join("\n")
+    .trim();
+  const replyText = textOf(blocks);
+
+  // EXECUTION TRACE
+  if (actions.length > 0) {
+    turn.append(sectionLabel("Execution Trace"));
+    const ul = el("ul", "actions");
+    for (const a of actions) ul.append(a);
+    turn.append(ul);
   }
 
-  turn.append(body);
+  if (thinkingText) {
+    const t = el("div", "block-thinking");
+    t.textContent = thinkingText;
+    turn.append(t);
+  }
+
+  // EXTRACTED OUTPUT — labelled only when it follows a trace, else clean prose.
+  if (replyText) {
+    if (actions.length > 0) {
+      turn.append(el("hr", "turn__rule"));
+      turn.append(sectionLabel("Extracted Output"));
+    }
+    const out = el("div", "block-text");
+    renderMarkdown(out, replyText);
+    turn.append(out);
+  }
+
+  // First-token wait — a shimmer when nothing has streamed in yet.
+  if (working && actions.length === 0 && !replyText && !thinkingText) {
+    const think = el("div", "thinking");
+    think.append(el("div", "thinking__bar"), document.createTextNode("working…"));
+    turn.append(think);
+  }
+
   return turn;
 }
 
@@ -428,13 +390,28 @@ function render(): void {
   }
   panelEl.classList.toggle("view-terminal", view === "terminal");
 
-  // Rebuild the activity stream from grouped turns.
-  for (const node of streamEl.querySelectorAll(".turn, .sysnote")) node.remove();
-  const groups = groupMessages(state.messages);
-  groups.forEach((g, i) => streamEl.appendChild(renderGroup(g, i === groups.length - 1)));
-
   const hasMessages = state.messages.length > 0;
   const hasSession = state.session !== undefined;
+
+  // Rebuild the stream. The first user instruction is the header title (below),
+  // so it isn't repeated as a prompt line; later instructions render as ❯.
+  for (const node of streamEl.querySelectorAll(".turn, .sysnote")) node.remove();
+  const groups = groupMessages(state.messages);
+  let rendered = 0;
+  groups.forEach((g, i) => {
+    if (i === 0 && g.kind === "user") return;
+    streamEl.appendChild(renderGroup(g, i === groups.length - 1));
+    rendered += 1;
+  });
+  // Awaiting the first reply (only the header instruction exists) — show a shimmer.
+  if (rendered === 0 && hasSession && connected && state.status !== "idle" && !state.ejected) {
+    const wrap = el("div", "turn turn--agent");
+    const think = el("div", "thinking");
+    think.append(el("div", "thinking__bar"), document.createTextNode("working…"));
+    wrap.append(think);
+    streamEl.appendChild(wrap);
+  }
+
   emptyEl.hidden = !connected || hasMessages;
   disconnectedEl.hidden = connected || hasMessages;
   streamEl.scrollTop = streamEl.scrollHeight;
@@ -447,9 +424,11 @@ function render(): void {
     connected && (state.status === "thinking" || state.status === "starting" || state.ejected);
   statusDot.className = `dot ${connected ? "dot--on" : "dot--off"}${busy ? " dot--busy" : ""}`;
 
-  // Header — engine selector pre-session; session title + controls once live.
+  // Header — the first instruction is the title (the task); engine pre-session.
+  const firstUser = state.messages.find((m) => m.role === "user");
+  const task = firstUser ? textOf(firstUser.blocks).replace(/\s+/g, " ").trim() : "";
   engineEl.hidden = hasSession;
-  headTitle.textContent = state.session?.title?.trim() || "BrowserOps";
+  headTitle.textContent = task || state.session?.title?.trim() || "BrowserOps";
   termTitleEl.textContent = `${state.session?.title?.trim() || "session"} · ● live`;
   termMirrorBtn.hidden = !hasSession || !connected || !state.terminalCapable;
   termTakeoverBtn.hidden = !hasSession || !connected || state.ejected;
