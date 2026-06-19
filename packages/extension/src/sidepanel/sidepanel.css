@@ -272,14 +272,18 @@ body {
   box-shadow: 0 0 0 3px var(--accent-tint);
 }
 
-/* ── Context bar — the tab the agent drives + recent sessions ────────────── */
+/* ── Context bar — the driven tab, styled like a Safari address field ────── */
 .context {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 7px 14px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface-2);
+  justify-content: center;
+  gap: 7px;
+  margin: 9px 12px 11px;
+  padding: 6px 30px;
+  border-radius: 9px;
+  background: var(--surface-3);
+  box-shadow: inset 0 0 0 1px var(--border);
   font-size: 12px;
   min-width: 0;
 }
@@ -287,27 +291,31 @@ body {
   display: none;
 }
 .context__fav {
-  width: 13px;
-  height: 13px;
+  width: 14px;
+  height: 14px;
   border-radius: 3px;
   flex-shrink: 0;
   background: var(--fill) center / contain no-repeat;
 }
 .context__label {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-width: 0;
   font-family: var(--font-mono);
   font-size: 11.5px;
-  color: var(--text-muted);
+  color: var(--text-body);
+  text-align: center;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .context__live {
+  position: absolute;
+  right: 11px;
+  top: 50%;
   width: 6px;
   height: 6px;
+  margin-top: -3px;
   border-radius: 999px;
-  flex-shrink: 0;
   background: var(--ok);
   animation: bo-pulse 1.6s ease-in-out infinite;
 }
