@@ -7,7 +7,14 @@
  * cold from the index after a daemon restart) and routes to the owning driver.
  * Adding an agent = registering its driver here; nothing else changes.
  */
-import type { AgentId, ChatMessage, ChatPageContext, SessionRef } from "@browserops/shared";
+import {
+  DEFAULT_CHAT_SESSION_CAPABILITIES,
+  type AgentId,
+  type ChatMessage,
+  type ChatPageContext,
+  type ChatSessionCapabilities,
+  type SessionRef,
+} from "@browserops/shared";
 import type { Logger } from "../logger.js";
 import { isTerminalAttachable } from "./driver.js";
 import type {
@@ -17,9 +24,9 @@ import type {
   TerminalHandle,
   Unsubscribe,
 } from "./driver.js";
-import { ClaudeDriver } from "./claude/driver.js";
 import { EngineError, engineErrorCode } from "./errors.js";
 import { SessionIndex, type SessionMeta } from "./sessions.js";
+import { formatMessagesForPrompt } from "./transcript.js";
 
 export interface StartRequest {
   agent: AgentId;
@@ -27,6 +34,8 @@ export interface StartRequest {
   instruction?: string;
   cwd?: string;
   safeMode?: boolean;
+  migratedFrom?: string;
+  migrationSourceAgent?: AgentId;
 }
 
 export interface ChatEngineDeps {
@@ -59,8 +68,6 @@ export class ChatEngine {
       for (const [id, driver] of Object.entries(provided)) {
         if (driver) this.drivers.set(id as AgentId, driver);
       }
-    } else {
-      this.drivers.set("claude", new ClaudeDriver(deps.logger ? { logger: deps.logger } : {}));
     }
     for (const [id, driver] of Object.entries(deps.fallbacks ?? {})) {
       if (driver) this.fallbacks.set(id as AgentId, driver);
@@ -76,6 +83,10 @@ export class ChatEngine {
       ...(req.instruction !== undefined ? { instruction: req.instruction } : {}),
       ...(req.cwd !== undefined ? { cwd: req.cwd } : {}),
       ...(req.safeMode !== undefined ? { safeMode: req.safeMode } : {}),
+      ...(req.migratedFrom !== undefined ? { migratedFrom: req.migratedFrom } : {}),
+      ...(req.migrationSourceAgent !== undefined
+        ? { migrationSourceAgent: req.migrationSourceAgent }
+        : {}),
     };
     const primary = this.driverFor(req.agent);
     let owner = primary;
@@ -117,6 +128,29 @@ export class ChatEngine {
   async history(sessionId: string): Promise<ChatMessage[]> {
     const ref = await this.resolveRef(sessionId);
     return this.driverForSession(sessionId, ref.agent).history(ref);
+  }
+
+  async migrate(sessionId: string, targetAgent: AgentId): Promise<SessionRef> {
+    const source = await this.resolveRef(sessionId);
+    this.driverFor(targetAgent);
+    const messages = await this.history(sessionId);
+    const transcript = formatMessagesForPrompt(messages);
+    const sourceLabel = `${source.agent}:${source.sessionId}`;
+    const instruction = [
+      `Continue this BrowserOps session migrated from ${sourceLabel}.`,
+      "Use the browserops MCP tools when the user asks you to act in Chrome.",
+      transcript
+        ? "\nPrior normalized transcript:\n" + transcript
+        : "\nNo prior transcript was found.",
+    ].join("\n");
+    return this.start({
+      agent: targetAgent,
+      page: { url: "", title: `Migrated from ${source.agent}` },
+      instruction,
+      cwd: source.cwd,
+      migratedFrom: source.sessionId,
+      migrationSourceAgent: source.agent,
+    });
   }
 
   /** Tear a session down completely (kill the process, end the stream). */
@@ -164,9 +198,32 @@ export class ChatEngine {
   terminalCapable(sessionId: string): boolean {
     const ref = this.refs.get(sessionId);
     if (!ref) return false;
-    const driver = this.driverForSession(sessionId, ref.agent);
-    if (!isTerminalAttachable(driver)) return false;
-    return driver.terminalLive ? driver.terminalLive(ref) : true;
+    return this.capabilitiesForRef(ref).embeddedTerminal;
+  }
+
+  async capabilities(sessionId: string): Promise<ChatSessionCapabilities> {
+    const ref = await this.resolveRef(sessionId);
+    return this.capabilitiesForRef(ref);
+  }
+
+  capabilitiesForSession(ref: SessionRef): ChatSessionCapabilities {
+    return this.capabilitiesForRef(ref);
+  }
+
+  private capabilitiesForRef(ref: SessionRef): ChatSessionCapabilities {
+    const driver = this.driverForSession(ref.sessionId, ref.agent);
+    const fromDriver = driver.capabilities?.(ref);
+    if (fromDriver) return { ...DEFAULT_CHAT_SESSION_CAPABILITIES, ...fromDriver };
+    const embeddedTerminal = isTerminalAttachable(driver)
+      ? driver.terminalLive
+        ? driver.terminalLive(ref)
+        : true
+      : false;
+    return {
+      ...DEFAULT_CHAT_SESSION_CAPABILITIES,
+      embeddedTerminal,
+      externalTakeover: embeddedTerminal,
+    };
   }
 
   listSessions(): Promise<SessionMeta[]> {
@@ -203,9 +260,14 @@ export class ChatEngine {
     const ref: SessionRef = {
       agent: meta.agent,
       sessionId: meta.sessionId,
+      ...(meta.nativeSessionId !== undefined ? { nativeSessionId: meta.nativeSessionId } : {}),
       cwd: meta.cwd,
       createdAt: meta.createdAt,
       ...(meta.title !== undefined ? { title: meta.title } : {}),
+      ...(meta.migratedFrom !== undefined ? { migratedFrom: meta.migratedFrom } : {}),
+      ...(meta.migrationSourceAgent !== undefined
+        ? { migrationSourceAgent: meta.migrationSourceAgent }
+        : {}),
     };
     this.refs.set(sessionId, ref);
     return ref;

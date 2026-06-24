@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ChatEvent, ChatMessage, SessionRef } from "@browserops/shared";
+import type { AgentId, ChatEvent, ChatMessage, SessionRef } from "@browserops/shared";
 import type {
   AgentDriver,
   ChatEventListener,
@@ -16,7 +16,7 @@ import { ChatEngine } from "./manager.js";
 import { SessionIndex } from "./sessions.js";
 
 class FakeDriver implements AgentDriver {
-  readonly id = "claude" as const;
+  readonly id: AgentId;
   started: StartOpts[] = [];
   sent: { id: string; text: string }[] = [];
   stopped: string[] = [];
@@ -24,16 +24,24 @@ class FakeDriver implements AgentDriver {
   private seq = 0;
   private readonly listeners = new Map<string, Set<ChatEventListener>>();
 
+  constructor(id: AgentId = "claude") {
+    this.id = id;
+  }
+
   async start(opts: StartOpts): Promise<SessionRef> {
     this.started.push(opts);
     const sessionId = `s${++this.seq}`;
     this.listeners.set(sessionId, new Set());
     return {
-      agent: "claude",
+      agent: this.id,
       sessionId,
       cwd: opts.cwd ?? "/w",
       createdAt: 7,
       ...(opts.instruction !== undefined ? { title: opts.instruction } : {}),
+      ...(opts.migratedFrom !== undefined ? { migratedFrom: opts.migratedFrom } : {}),
+      ...(opts.migrationSourceAgent !== undefined
+        ? { migrationSourceAgent: opts.migrationSourceAgent }
+        : {}),
     };
   }
   async send(ref: SessionRef, text: string): Promise<void> {
@@ -193,6 +201,45 @@ describe("ChatEngine", () => {
     const e2 = new ChatEngine({ drivers: { claude: headless }, index, now: () => 1 });
     const ref2 = await e2.start({ agent: "claude", page: { url: "x" } });
     expect(e2.terminalCapable(ref2.sessionId)).toBe(false);
+  });
+
+  it("reports session capabilities from the owning driver", async () => {
+    const term = new FakeTerminalDriver();
+    const e = new ChatEngine({ drivers: { claude: term }, index, now: () => 1 });
+    const ref = await e.start({ agent: "claude", page: { url: "x" } });
+    expect(await e.capabilities(ref.sessionId)).toMatchObject({
+      embeddedTerminal: true,
+      externalTakeover: true,
+      migrationSource: true,
+      migrationTarget: true,
+    });
+    term.live = false;
+    expect(await e.capabilities(ref.sessionId)).toMatchObject({
+      embeddedTerminal: false,
+      externalTakeover: false,
+    });
+  });
+
+  it("migrates via normalized history into a new target-agent session", async () => {
+    const source = new FakeDriver("claude");
+    source.historyResult = [
+      { id: "u", role: "user", blocks: [{ kind: "text", text: "summarize this" }] },
+      { id: "a", role: "assistant", blocks: [{ kind: "text", text: "done" }] },
+    ];
+    const target = new FakeDriver("codex");
+    const e = new ChatEngine({
+      drivers: { claude: source, codex: target },
+      index,
+      now: () => 1,
+    });
+    const ref = await e.start({ agent: "claude", page: { url: "x" } });
+    const migrated = await e.migrate(ref.sessionId, "codex");
+    expect(migrated.agent).toBe("codex");
+    expect(migrated.migratedFrom).toBe(ref.sessionId);
+    expect(migrated.migrationSourceAgent).toBe("claude");
+    expect(target.started[0]?.instruction).toContain("Prior normalized transcript");
+    expect(target.started[0]?.instruction).toContain("user: summarize this");
+    expect(target.started[0]?.instruction).toContain("assistant: done");
   });
 
   it("resolves a cold session from the index after a restart", async () => {

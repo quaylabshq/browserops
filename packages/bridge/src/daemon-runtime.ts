@@ -27,8 +27,7 @@ import { join } from "node:path";
 import { WSBridge, type ChatService } from "./ws-server.js";
 import { launchAgent, openSessionTerminal } from "./launch-agent.js";
 import { ChatEngine } from "./engine/manager.js";
-import { ClaudeDriver } from "./engine/claude/driver.js";
-import { ClaudePtyDriver } from "./engine/claude/terminal-driver.js";
+import { createChatEngineDrivers } from "./engine/factory.js";
 import { chatDir } from "./paths.js";
 import { ensureIndex } from "./procedures/index-builder.js";
 import { proceduresRoot } from "./procedures/paths.js";
@@ -121,13 +120,11 @@ export async function bootDaemonRuntime(opts: BootDaemonRuntimeOptions): Promise
   // or the headless `--print` path. Terminal degrades to headless when node-pty
   // can't load — the engine catches `pty_unavailable` from the driver's start().
   const chatTransport = await loadChatTransport();
-  const headlessDriver = new ClaudeDriver({ logger });
+  const driverSet = createChatEngineDrivers({ chatTransport, logger });
   const chatEngine = new ChatEngine({
     logger,
-    drivers: {
-      claude: chatTransport === "terminal" ? new ClaudePtyDriver({ logger }) : headlessDriver,
-    },
-    ...(chatTransport === "terminal" ? { fallbacks: { claude: headlessDriver } } : {}),
+    drivers: driverSet.drivers,
+    fallbacks: driverSet.fallbacks,
   });
   await logger.write({ dir: "system", event: "chat_transport", transport: chatTransport });
   const chatService: ChatService = {
@@ -141,9 +138,15 @@ export async function bootDaemonRuntime(opts: BootDaemonRuntimeOptions): Promise
     subscribe: (sessionId, listener) => chatEngine.subscribe(sessionId, listener),
     history: (sessionId) => chatEngine.history(sessionId),
     listSessions: () => chatEngine.listSessions(),
+    capabilities: (sessionId) => chatEngine.capabilities(sessionId),
+    migrate: (sessionId, targetAgent) => chatEngine.migrate(sessionId, targetAgent),
     terminal: async (sessionId, mode) => {
       const meta = await chatEngine.getSession(sessionId);
       if (!meta) return { ok: false, error: "unknown_session" };
+      const caps = await chatEngine.capabilities(sessionId);
+      if (mode === "takeover" && !caps.externalTakeover) {
+        return { ok: false, error: "pty_unavailable" };
+      }
       // Takeover hands the session to an interactive terminal, so the engine
       // must let go first — one writer at a time. eject() prefers the driver's
       // relinquish (the pty transport keeps a live read-only transcript mirror);

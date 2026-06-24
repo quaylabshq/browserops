@@ -15,12 +15,14 @@
 import { promises as fs } from "node:fs";
 import { randomUUID as nodeRandomUUID } from "node:crypto";
 import { join } from "node:path";
-import type {
-  AgentId,
-  ChatEvent,
-  ChatMessage,
-  ChatPageContext,
-  SessionRef,
+import {
+  DEFAULT_CHAT_SESSION_CAPABILITIES,
+  type AgentId,
+  type ChatEvent,
+  type ChatMessage,
+  type ChatPageContext,
+  type ChatSessionCapabilities,
+  type SessionRef,
 } from "@browserops/shared";
 import { buildPrompt, buildSystemPrompt } from "../../launch-agent.js";
 import { chatDir as defaultChatDir, workspaceDir } from "../../paths.js";
@@ -31,6 +33,7 @@ import { resolveClaudeBin, resolveLoginEnv } from "./bin.js";
 import { appendMirror, mirrorEventLine, mirrorHeader, mirrorUserLine } from "./mirror.js";
 import { runClaudeTurn, type SpawnLike } from "./runtime.js";
 import { loadHistory } from "./transcript.js";
+import { appendBrowserTranscriptMessage, readBrowserTranscript } from "../transcript.js";
 
 const EVENT_BUFFER_CAP = 4000;
 
@@ -103,6 +106,10 @@ export class ClaudeDriver implements AgentDriver {
       cwd,
       createdAt: this.now(),
       ...(title ? { title } : {}),
+      ...(opts.migratedFrom !== undefined ? { migratedFrom: opts.migratedFrom } : {}),
+      ...(opts.migrationSourceAgent !== undefined
+        ? { migrationSourceAgent: opts.migrationSourceAgent }
+        : {}),
     };
     const state = this.makeState(ref, opts.safeMode ?? false, true);
     this.sessions.set(sessionId, state);
@@ -136,11 +143,12 @@ export class ClaudeDriver implements AgentDriver {
     };
   }
 
-  history(ref: SessionRef): Promise<ChatMessage[]> {
-    return loadHistory(ref.sessionId, {
+  async history(ref: SessionRef): Promise<ChatMessage[]> {
+    const native = await loadHistory(ref.sessionId, {
       cwd: ref.cwd,
       ...(this.projectsRoot ? { projectsRoot: this.projectsRoot } : {}),
     });
+    return native.length > 0 ? native : readBrowserTranscript(ref.sessionId, this.chatDir);
   }
 
   async stop(ref: SessionRef): Promise<void> {
@@ -149,6 +157,13 @@ export class ClaudeDriver implements AgentDriver {
     state.ejected = true;
     state.abort?.abort();
     this.dispatch(state, { type: "status", state: "ejected" });
+  }
+
+  capabilities(_ref: SessionRef): ChatSessionCapabilities {
+    return {
+      ...DEFAULT_CHAT_SESSION_CAPABILITIES,
+      externalTakeover: true,
+    };
   }
 
   // --- internals ------------------------------------------------------------
@@ -259,6 +274,9 @@ export class ClaudeDriver implements AgentDriver {
     if (state.events.length > EVENT_BUFFER_CAP) state.events.shift();
     const line = mirrorEventLine(event);
     if (line) void appendMirror(state.mirrorPath, line);
+    if (event.type === "message") {
+      void appendBrowserTranscriptMessage(state.ref.sessionId, event.message, this.chatDir);
+    }
     for (const listener of state.listeners) {
       try {
         listener(event);

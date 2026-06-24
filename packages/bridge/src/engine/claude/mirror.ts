@@ -29,7 +29,7 @@ function previewInput(input: unknown): string {
 export function mirrorHeader(sessionId: string): string {
   return [
     "═══════════════════════════════════════════════",
-    " BrowserOps · Claude session (read-only mirror)",
+    " BrowserOps · chat session (read-only mirror)",
     ` ${sessionId}`,
     " Chat from the side panel; this view follows along.",
     "═══════════════════════════════════════════════",
@@ -61,7 +61,13 @@ export function mirrorEventLine(event: ChatEvent): string | null {
     for (const b of m.blocks) {
       switch (b.kind) {
         case "text":
-          lines.push(m.role === "assistant" ? `\n◆ claude:\n${b.text}` : b.text);
+          lines.push(
+            m.role === "assistant"
+              ? `\n◆ assistant:\n${b.text}`
+              : m.role === "user"
+                ? `\n▸ you:\n${b.text}`
+                : b.text,
+          );
           break;
         case "thinking":
           lines.push(`  (thinking) ${oneLine(b.text)}`);

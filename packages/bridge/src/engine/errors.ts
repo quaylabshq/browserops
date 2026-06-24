@@ -6,6 +6,7 @@ export type EngineErrorCode =
   | "unknown_session"
   | "agent_unavailable"
   | "session_ejected"
+  | "agent_not_found"
   | "claude_not_found"
   /** The terminal transport was required but node-pty could not be loaded/spawned. */
   | "pty_unavailable";
