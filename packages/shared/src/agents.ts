@@ -10,9 +10,9 @@
  *    `/launch`, and the chat engine's "take over in terminal" eject).
  *  - `caps.chat`   — can be driven by the in-panel bidirectional chat engine.
  *
- * Adding a new agent is a registry entry here + a per-agent launch spec and a
- * chat driver in the bridge. Disabled agents render as "coming soon" and are
- * refused server-side with `agent_disabled`.
+ * Adding a new agent is a registry entry here plus whichever per-agent launch
+ * specs / chat drivers are available in the bridge. Disabled agents render as
+ * "coming soon" and are refused server-side with `agent_disabled`.
  */
 
 export type AgentId = "claude" | "codex" | "cursor";
@@ -41,16 +41,14 @@ export const AGENTS: readonly AgentInfo[] = [
   {
     id: "codex",
     label: "Codex",
-    enabled: false,
-    note: "coming soon",
-    caps: { launch: false, chat: false },
+    enabled: true,
+    caps: { launch: false, chat: true },
   },
   {
     id: "cursor",
     label: "Cursor",
-    enabled: false,
-    note: "coming soon",
-    caps: { launch: false, chat: false },
+    enabled: true,
+    caps: { launch: false, chat: true },
   },
 ];
 

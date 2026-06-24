@@ -2,10 +2,10 @@ import { describe, it, expect } from "vitest";
 import { AGENTS, DEFAULT_AGENT_ID, canChatAgent, getAgent, isLaunchableAgent } from "./agents.js";
 
 describe("agent registry", () => {
-  it("ships claude enabled and codex/cursor disabled", () => {
+  it("ships claude, codex, and cursor enabled for chat", () => {
     expect(getAgent("claude")?.enabled).toBe(true);
-    expect(getAgent("codex")?.enabled).toBe(false);
-    expect(getAgent("cursor")?.enabled).toBe(false);
+    expect(getAgent("codex")?.enabled).toBe(true);
+    expect(getAgent("cursor")?.enabled).toBe(true);
   });
 
   it("every agent declares both capabilities", () => {
@@ -15,15 +15,16 @@ describe("agent registry", () => {
     }
   });
 
-  it("claude can both launch and chat; the others can do neither yet", () => {
+  it("claude can launch + chat; codex/cursor are chat-only in the extension", () => {
     expect(getAgent("claude")?.caps).toEqual({ launch: true, chat: true });
-    expect(getAgent("codex")?.caps).toEqual({ launch: false, chat: false });
-    expect(getAgent("cursor")?.caps).toEqual({ launch: false, chat: false });
+    expect(getAgent("codex")?.caps).toEqual({ launch: false, chat: true });
+    expect(getAgent("cursor")?.caps).toEqual({ launch: false, chat: true });
   });
 
   it("canChatAgent is true only for known + chat-capable ids", () => {
     expect(canChatAgent("claude")).toBe(true);
-    expect(canChatAgent("codex")).toBe(false);
+    expect(canChatAgent("codex")).toBe(true);
+    expect(canChatAgent("cursor")).toBe(true);
     expect(canChatAgent("ghost")).toBe(false);
     expect(canChatAgent("")).toBe(false);
   });
