@@ -12,6 +12,7 @@ import type {
   ChatEvent,
   ChatMessage,
   ChatPageContext,
+  ChatSessionCapabilities,
   SessionRef,
 } from "@browserops/shared";
 
@@ -27,6 +28,8 @@ export interface StartOpts {
   cwd?: string;
   /** When true, omit auto-approve / danger flags. */
   safeMode?: boolean;
+  migratedFrom?: string;
+  migrationSourceAgent?: AgentId;
 }
 
 export interface AgentDriver {
@@ -51,6 +54,9 @@ export interface AgentDriver {
 
   /** Tear the session down completely (kill the process, end the stream). */
   stop(ref: SessionRef): Promise<void>;
+
+  /** Per-session capabilities exposed to the side panel. */
+  capabilities?(ref: SessionRef): ChatSessionCapabilities;
 
   /**
    * Hand the session to an external terminal (the takeover eject): the driver

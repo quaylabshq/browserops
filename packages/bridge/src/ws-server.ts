@@ -15,12 +15,15 @@ import {
   PROTOCOL_VERSION,
   SUPPORTED_PROTOCOL_VERSIONS,
   CloseCode,
+  canChatAgent,
+  type AgentId,
   type ErrorCode,
   type HelloAck,
   type Request as WireRequest,
   type Response as WireResponse,
   type ChatEvent,
   type ChatMessage,
+  type ChatSessionCapabilities,
   type SessionRef,
   type TerminalMode,
   isHello,
@@ -56,6 +59,7 @@ export interface ChatStartParams {
 
 export interface ChatSessionSummary extends SessionRef {
   lastActive: number;
+  capabilities?: ChatSessionCapabilities;
 }
 
 export type ChatTerminalOutcome = { ok: true } | { ok: false; error: string };
@@ -73,6 +77,8 @@ export interface ChatService {
   subscribe(sessionId: string, listener: (event: ChatEvent) => void): Promise<() => void>;
   history(sessionId: string): Promise<ChatMessage[]>;
   listSessions(): Promise<ChatSessionSummary[]>;
+  capabilities(sessionId: string): Promise<ChatSessionCapabilities>;
+  migrate(sessionId: string, targetAgent: AgentId): Promise<SessionRef>;
   /** Open a read-only terminal mirror, or eject the session into a terminal. */
   terminal(sessionId: string, mode: TerminalMode): Promise<ChatTerminalOutcome>;
   /** Bind a live raw-terminal handle for the embedded xterm pane (via /chat/pty). */
@@ -435,7 +441,12 @@ export class WSBridge {
       return;
     }
 
-    if (urlPath === "/chat/new" || urlPath === "/chat/send" || urlPath === "/chat/terminal") {
+    if (
+      urlPath === "/chat/new" ||
+      urlPath === "/chat/send" ||
+      urlPath === "/chat/terminal" ||
+      urlPath === "/chat/migrate"
+    ) {
       void this.handleChatPost(req, res, origin, urlPath);
       return;
     }
@@ -680,6 +691,7 @@ export class WSBridge {
         return 409;
       case "agent_unavailable":
         return 422;
+      case "agent_not_found":
       case "claude_not_found":
         return 502;
       case "pty_unavailable":
@@ -777,10 +789,12 @@ export class WSBridge {
           agent: params.agent,
           session: ref.sessionId,
         });
+        const capabilities = await this.chat.capabilities(ref.sessionId);
         this.endJson(res, 200, {
           ok: true,
           session: ref,
-          terminal: this.chat.terminalCapable(ref.sessionId),
+          capabilities,
+          terminal: capabilities.embeddedTerminal,
         });
         return;
       }
@@ -794,6 +808,28 @@ export class WSBridge {
         }
         await this.chat.send(sessionId, text);
         this.endJson(res, 200, { ok: true });
+        return;
+      }
+
+      if (path === "/chat/migrate") {
+        const sessionId = capField(body["session_id"], 100);
+        const targetAgent = capField(body["target_agent"], 32);
+        if (!sessionId || !targetAgent) {
+          this.endJson(res, 400, { ok: false, error: "bad_request" });
+          return;
+        }
+        if (!canChatAgent(targetAgent)) {
+          this.endJson(res, 422, { ok: false, error: "agent_unavailable" });
+          return;
+        }
+        const ref = await this.chat.migrate(sessionId, targetAgent);
+        const capabilities = await this.chat.capabilities(ref.sessionId);
+        this.endJson(res, 200, {
+          ok: true,
+          session: ref,
+          capabilities,
+          terminal: capabilities.embeddedTerminal,
+        });
         return;
       }
 
@@ -839,10 +875,16 @@ export class WSBridge {
     try {
       if (path === "/chat/sessions") {
         const chat = this.chat;
-        const sessions = (await chat.listSessions()).map((s) => ({
-          ...s,
-          terminal: chat.terminalCapable(s.sessionId),
-        }));
+        const sessions = await Promise.all(
+          (await chat.listSessions()).map(async (s) => {
+            const capabilities = s.capabilities ?? (await chat.capabilities(s.sessionId));
+            return {
+              ...s,
+              capabilities,
+              terminal: capabilities.embeddedTerminal,
+            };
+          }),
+        );
         this.endJson(res, 200, { ok: true, sessions });
         return;
       }

@@ -23,12 +23,14 @@ import { promises as fs } from "node:fs";
 import { randomUUID as nodeRandomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type {
-  AgentId,
-  ChatEvent,
-  ChatMessage,
-  ChatPageContext,
-  SessionRef,
+import {
+  DEFAULT_CHAT_SESSION_CAPABILITIES,
+  type AgentId,
+  type ChatEvent,
+  type ChatMessage,
+  type ChatPageContext,
+  type ChatSessionCapabilities,
+  type SessionRef,
 } from "@browserops/shared";
 import { buildPrompt, buildSystemPrompt } from "../../launch-agent.js";
 import { workspaceDir } from "../../paths.js";
@@ -42,6 +44,7 @@ import type {
   Unsubscribe,
 } from "../driver.js";
 import { EngineError } from "../errors.js";
+import { appendBrowserTranscriptMessage, readBrowserTranscript } from "../transcript.js";
 import { resolveClaudeBin, resolveLoginEnv } from "./bin.js";
 import {
   PtySession,
@@ -146,6 +149,10 @@ export class ClaudePtyDriver implements AgentDriver, TerminalAttachable {
       cwd,
       createdAt: this.now(),
       ...(title ? { title } : {}),
+      ...(opts.migratedFrom !== undefined ? { migratedFrom: opts.migratedFrom } : {}),
+      ...(opts.migrationSourceAgent !== undefined
+        ? { migrationSourceAgent: opts.migrationSourceAgent }
+        : {}),
     };
     await this.ensureWorkspace(cwd);
 
@@ -213,11 +220,12 @@ export class ClaudePtyDriver implements AgentDriver, TerminalAttachable {
     };
   }
 
-  history(ref: SessionRef): Promise<ChatMessage[]> {
-    return loadHistory(ref.sessionId, {
+  async history(ref: SessionRef): Promise<ChatMessage[]> {
+    const native = await loadHistory(ref.sessionId, {
       cwd: ref.cwd,
       ...(this.projectsRoot ? { projectsRoot: this.projectsRoot } : {}),
     });
+    return native.length > 0 ? native : readBrowserTranscript(ref.sessionId);
   }
 
   async stop(ref: SessionRef): Promise<void> {
@@ -259,6 +267,15 @@ export class ClaudePtyDriver implements AgentDriver, TerminalAttachable {
   terminalLive(ref: SessionRef): boolean {
     const state = this.sessions.get(ref.sessionId);
     return !!state && !!state.session && !state.stopped && !state.ejected;
+  }
+
+  capabilities(ref: SessionRef): ChatSessionCapabilities {
+    const live = this.terminalLive(ref);
+    return {
+      ...DEFAULT_CHAT_SESSION_CAPABILITIES,
+      embeddedTerminal: live,
+      externalTakeover: live,
+    };
   }
 
   // --- internals ------------------------------------------------------------
@@ -370,6 +387,9 @@ export class ClaudePtyDriver implements AgentDriver, TerminalAttachable {
   private dispatch(state: PtyState, event: ChatEvent): void {
     state.events.push(event);
     if (state.events.length > EVENT_BUFFER_CAP) state.events.shift();
+    if (event.type === "message") {
+      void appendBrowserTranscriptMessage(state.ref.sessionId, event.message);
+    }
     for (const listener of state.listeners) {
       try {
         listener(event);

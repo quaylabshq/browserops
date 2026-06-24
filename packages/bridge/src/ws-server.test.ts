@@ -710,6 +710,27 @@ describe("WSBridge /chat/*", () => {
       async listSessions() {
         return sessions;
       },
+      async capabilities(id) {
+        return {
+          embeddedTerminal: id !== "noterm",
+          externalTakeover: id !== "noterm",
+          migrationSource: true,
+          migrationTarget: true,
+        };
+      },
+      async migrate(id, targetAgent) {
+        if (id === "missing") throw new EngineError("unknown_session");
+        const ref: SessionRef = {
+          agent: targetAgent,
+          sessionId: "s2",
+          cwd: "/w",
+          createdAt: 2,
+          migratedFrom: id,
+          migrationSourceAgent: "claude",
+        };
+        sessions.unshift({ ...ref, lastActive: 2 });
+        return ref;
+      },
       async terminal(id, mode) {
         terminals.push({ id, mode });
         return { ok: true };
@@ -788,11 +809,13 @@ describe("WSBridge /chat/*", () => {
       const body = (await res.json()) as {
         ok: boolean;
         session: SessionRef & { title?: string };
+        capabilities?: { embeddedTerminal: boolean };
         terminal?: boolean;
       };
       expect(body.ok).toBe(true);
       expect(body.session.sessionId).toBe("s1");
       expect(body.session.title).toBe("hello");
+      expect(body.capabilities?.embeddedTerminal).toBe(true);
       expect(body.terminal).toBe(true); // s1 has a live pty → embedded-terminal toggle offered
     } finally {
       await fixture.bridge.stop();
@@ -913,8 +936,15 @@ describe("WSBridge /chat/*", () => {
       await postChat(fixture.port, "/chat/new", { token: VALID_TOKEN, url: "x" });
       const res = await getChat(fixture.port, `/chat/sessions?token=${VALID_TOKEN}`);
       expect(res.status).toBe(200);
-      const body = (await res.json()) as { sessions: { sessionId: string; terminal?: boolean }[] };
+      const body = (await res.json()) as {
+        sessions: {
+          sessionId: string;
+          terminal?: boolean;
+          capabilities?: { embeddedTerminal: boolean };
+        }[];
+      };
       expect(body.sessions.map((s) => s.sessionId)).toEqual(["s1"]);
+      expect(body.sessions[0]?.capabilities?.embeddedTerminal).toBe(true);
       expect(body.sessions[0]?.terminal).toBe(true); // capability surfaced per session
       expect((await getChat(fixture.port, `/chat/sessions?token=wrong`)).status).toBe(401);
     } finally {
@@ -935,6 +965,48 @@ describe("WSBridge /chat/*", () => {
         (await getChat(fixture.port, `/chat/history?token=${VALID_TOKEN}&session_id=missing`))
           .status,
       ).toBe(404);
+    } finally {
+      await fixture.bridge.stop();
+    }
+  });
+
+  it("POST /chat/migrate creates a target-agent session", async () => {
+    const f = fakeChat();
+    const fixture = await startBridge({ pinnedExtensionId: PIN, chat: f.chat });
+    try {
+      const res = await postChat(fixture.port, "/chat/migrate", {
+        token: VALID_TOKEN,
+        session_id: "s1",
+        target_agent: "codex",
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        ok: boolean;
+        session: SessionRef;
+        capabilities?: { migrationSource: boolean };
+      };
+      expect(body.ok).toBe(true);
+      expect(body.session.agent).toBe("codex");
+      expect(body.session.migratedFrom).toBe("s1");
+      expect(body.capabilities?.migrationSource).toBe(true);
+      expect(
+        (
+          await postChat(fixture.port, "/chat/migrate", {
+            token: VALID_TOKEN,
+            session_id: "missing",
+            target_agent: "codex",
+          })
+        ).status,
+      ).toBe(404);
+      expect(
+        (
+          await postChat(fixture.port, "/chat/migrate", {
+            token: VALID_TOKEN,
+            session_id: "s1",
+            target_agent: "ghost",
+          })
+        ).status,
+      ).toBe(422);
     } finally {
       await fixture.bridge.stop();
     }

@@ -15,7 +15,7 @@ describe("mirror formatting", () => {
         type: "message",
         message: { id: "m", role: "assistant", blocks: [{ kind: "text", text: "on it" }] },
       }),
-    ).toContain("claude");
+    ).toContain("assistant");
 
     expect(
       mirrorEventLine({
