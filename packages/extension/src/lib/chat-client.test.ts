@@ -78,14 +78,23 @@ describe("reduceChat", () => {
     expect(s.messages.map((m) => m.id)).toEqual(["u-ext"]);
   });
 
-  it("tracks status, latches ejected, and drops terminalCapable on eject", () => {
-    let s = { ...initialChatState(), terminalCapable: true };
+  it("tracks status, latches ejected, and drops terminal capabilities on eject", () => {
+    let s = {
+      ...initialChatState(),
+      capabilities: {
+        embeddedTerminal: true,
+        externalTakeover: true,
+        migrationSource: true,
+        migrationTarget: true,
+      },
+    };
     s = reduceChat(s, { type: "status", state: "thinking" });
     expect(s.status).toBe("thinking");
-    expect(s.terminalCapable).toBe(true); // still live
+    expect(s.capabilities.embeddedTerminal).toBe(true); // still live
     s = reduceChat(s, { type: "status", state: "ejected" });
     expect(s.ejected).toBe(true);
-    expect(s.terminalCapable).toBe(false); // pty handed to the external terminal
+    expect(s.capabilities.embeddedTerminal).toBe(false); // pty handed to the external terminal
+    expect(s.capabilities.externalTakeover).toBe(false);
     s = reduceChat(s, { type: "status", state: "idle" });
     expect(s.status).toBe("idle");
     expect(s.ejected).toBe(true); // latched
