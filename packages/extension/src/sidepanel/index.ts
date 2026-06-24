@@ -51,6 +51,20 @@ let view: "chat" | "terminal" = "chat";
 let tokenCache: string | null = null;
 let systemSeq = 0;
 
+function sessionCaps(value: {
+  capabilities?: ChatState["capabilities"];
+  terminal?: boolean;
+}): ChatState["capabilities"] {
+  return (
+    value.capabilities ?? {
+      embeddedTerminal: value.terminal === true,
+      externalTakeover: value.terminal === true,
+      migrationSource: true,
+      migrationTarget: true,
+    }
+  );
+}
+
 // --- token ------------------------------------------------------------------
 
 async function getToken(): Promise<string | null> {
@@ -126,7 +140,10 @@ function renderBlocks(parent: HTMLElement, message: ChatMessage): void {
 function render(): void {
   // Terminal view falls back to chat if the session lost its pty (eject,
   // disconnect, or a new/cold session that has none).
-  if (view === "terminal" && (!connected || !state.session || !state.terminalCapable)) {
+  if (
+    view === "terminal" &&
+    (!connected || !state.session || !state.capabilities.embeddedTerminal)
+  ) {
     closeTerminal();
   }
   panelEl.classList.toggle("view-terminal", view === "terminal");
@@ -156,8 +173,9 @@ function render(): void {
   // Header controls + composer.
   const hasSession = state.session !== undefined;
   // Embedded-terminal toggle: only when this live session has a pty to attach.
-  termMirrorBtn.hidden = !hasSession || !connected || !state.terminalCapable;
-  termTakeoverBtn.hidden = !hasSession || !connected || state.ejected;
+  termMirrorBtn.hidden = !hasSession || !connected || !state.capabilities.embeddedTerminal;
+  termTakeoverBtn.hidden =
+    !hasSession || !connected || state.ejected || !state.capabilities.externalTakeover;
   newSessionBtn.hidden = state.messages.length === 0 && !hasSession;
   syncTerminalBtn();
   syncComposer();
@@ -204,7 +222,7 @@ async function openSession(summary: SessionSummary): Promise<void> {
   closeStream();
   closeTerminal();
   state = reduceChat(initialChatState(), { type: "session", ref: summary });
-  state = { ...state, terminalCapable: summary.terminal === true };
+  state = { ...state, capabilities: sessionCaps(summary) };
   render();
   const history = await chatHistory(token, summary.sessionId);
   state = { ...state, messages: history };
@@ -333,7 +351,7 @@ async function sendMessage(): Promise<void> {
       return;
     }
     state = reduceChat(state, { type: "session", ref: res.session });
-    state = { ...state, terminalCapable: res.terminal === true };
+    state = { ...state, capabilities: sessionCaps(res) };
     openStream(token, res.session.sessionId);
     render();
     await loadSessions();
@@ -376,7 +394,7 @@ async function setView(next: "chat" | "terminal"): Promise<void> {
     render();
     return;
   }
-  if (!state.session || !state.terminalCapable || !connected) return;
+  if (!state.session || !state.capabilities.embeddedTerminal || !connected) return;
   const token = await getToken();
   if (!token) {
     pushSystem("Run setup first (no token).");
