@@ -48,13 +48,33 @@ export interface ChatMessage {
 /** A started conversation, addressable by its native session id. */
 export interface SessionRef {
   agent: AgentId;
-  /** Native session id (Claude uuid; later Codex / Cursor ids). */
+  /** BrowserOps session id, usually also the native agent id when the CLI allows that. */
   sessionId: string;
+  /** Native agent session id when it differs from BrowserOps' stable id. */
+  nativeSessionId?: string;
   /** Working dir the agent ran in — needed to locate Claude's transcript. */
   cwd: string;
   title?: string;
   createdAt: number;
+  /** Source BrowserOps session id when this session was migrated from another agent. */
+  migratedFrom?: string;
+  /** Source agent for a migrated session. */
+  migrationSourceAgent?: AgentId;
 }
+
+export interface ChatSessionCapabilities {
+  embeddedTerminal: boolean;
+  externalTakeover: boolean;
+  migrationSource: boolean;
+  migrationTarget: boolean;
+}
+
+export const DEFAULT_CHAT_SESSION_CAPABILITIES: ChatSessionCapabilities = {
+  embeddedTerminal: false,
+  externalTakeover: false,
+  migrationSource: true,
+  migrationTarget: true,
+};
 
 export type ChatStatusState = "starting" | "thinking" | "idle" | "ejected" | "error";
 

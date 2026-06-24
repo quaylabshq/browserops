@@ -94,6 +94,8 @@ export {
   type ChatBlock,
   type ChatMessage,
   type SessionRef,
+  type ChatSessionCapabilities,
+  DEFAULT_CHAT_SESSION_CAPABILITIES,
   type ChatStatusState,
   type ChatEvent,
   type ChatPageContext,
