@@ -118,7 +118,10 @@
           <p class="copy__sub">The bridge already handed its one-time token to another extension, and this one isn't paired. Restart the bridge to mint a fresh code, then reload this page.</p>
         </div>
         <div class="extras">
-          <div class="cmd"><code>browserops restart</code></div>
+          <div class="cmd">
+            <code id="restart-cmd">browserops restart</code>
+            <button id="copy-restart" type="button" class="btn btn--ghost">Copy</button>
+          </div>
           <div class="card__actions" style="justify-content: center;">
             <button id="open-options-2" type="button" class="btn btn--ghost">Open options</button>
           </div>
