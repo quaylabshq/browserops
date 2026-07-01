@@ -157,6 +157,11 @@ async function completePair(pair: PairResponse): Promise<void> {
     /* ignore */
   }
   show("paired");
+  // Hand the freshly-paired user off to the welcome page after a beat so they
+  // see the "Paired" confirmation and the check animation first.
+  window.setTimeout(() => {
+    window.location.href = "https://browserops.ai/welcome";
+  }, 5000);
 }
 
 retryBtn.addEventListener("click", () => {
