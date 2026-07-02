@@ -77,6 +77,13 @@ async function main(): Promise<void> {
     .catch(() => null);
   const common = buildCommonProps({ bridgeVersion: VERSION });
   let totalSessions = 0;
+  // Coalesce root.session_started / root.session_ended to at most one pair
+  // per daemon lifetime. Every shim connection still gets full per-session
+  // bookkeeping (tab groups, rate limits, logger writes) — only the PostHog
+  // event volume is capped so shim churn (Cursor MCP restarts, host reloads)
+  // doesn't drown the signal.
+  let firstSessionAtMs: number | null = null;
+  let firstSessionClient: { name: string; version: string } | null = null;
 
   captureEvent(
     telemetry,
@@ -126,15 +133,22 @@ async function main(): Promise<void> {
         color: s.color,
       });
       totalSessions += 1;
-      captureEvent(
-        telemetry,
-        "root.session_started",
-        {
-          client_name: s.client_info.name || "unknown",
-          client_version: s.client_info.version || "",
-        },
-        common,
-      );
+      if (firstSessionAtMs === null) {
+        firstSessionAtMs = Date.now();
+        firstSessionClient = {
+          name: s.client_info.name || "unknown",
+          version: s.client_info.version || "",
+        };
+        captureEvent(
+          telemetry,
+          "root.session_started",
+          {
+            client_name: firstSessionClient.name,
+            client_version: firstSessionClient.version,
+          },
+          common,
+        );
+      }
       broadcast("session_started", {
         session_id: s.id,
         name: s.name,
@@ -221,15 +235,6 @@ async function main(): Promise<void> {
             // resets each tab's Chrome group; the subsequent
             // session_ended cleans up the now-empty group.
             runtime.tabs.releaseAll(session.id);
-            captureEvent(
-              telemetry,
-              "root.session_ended",
-              {
-                client_name: session.client_info.name || "unknown",
-                duration_ms: Date.now() - session.created_at_ms,
-              },
-              common,
-            );
             sessions.destroy(session.id);
             void runtime.logger.write({
               dir: "system",
@@ -252,6 +257,17 @@ async function main(): Promise<void> {
   const shutdown = (reason: string): void => {
     void (async () => {
       await runtime.logger.write({ dir: "system", event: "daemon_shutdown", reason });
+      if (firstSessionAtMs !== null && firstSessionClient !== null) {
+        captureEvent(
+          telemetry,
+          "root.session_ended",
+          {
+            client_name: firstSessionClient.name,
+            duration_ms: Date.now() - firstSessionAtMs,
+          },
+          common,
+        );
+      }
       captureEvent(
         telemetry,
         "root.daemon_shutdown",
