@@ -44,7 +44,7 @@ export const FEATURE_METADATA: Record<FeatureName, FeatureMetadata> = {
     description:
       "Cross-agent lore store at ~/browserops/lore/. Save/search/get/delete named markdown entries via MCP — visible to every MCP client (Cursor, Zed, Claude Code, custom SDK). Lets agents teach each other lessons that outlive a single session.",
     stability: "experimental",
-    default: false,
+    default: true,
   },
 };
 
