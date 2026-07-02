@@ -7,7 +7,6 @@ const $ = <T extends HTMLElement>(id: string): T => {
 };
 
 const killBtn = $<HTMLButtonElement>("kill");
-const optionsBtn = $<HTMLButtonElement>("options");
 const statusPill = $<HTMLSpanElement>("status");
 const yoloBox = $<HTMLInputElement>("yolo");
 const setupPane = $<HTMLDivElement>("setup");
@@ -48,7 +47,7 @@ function renderStatus(connected: boolean): void {
   } else {
     statusPill.textContent = "Disconnected";
     statusPill.classList.add("pill--off");
-    killBtn.textContent = "Connect";
+    killBtn.textContent = "Reconnect";
     killBtn.classList.remove("btn--danger");
   }
   killBtn.disabled = false;
@@ -177,10 +176,6 @@ copyInstallBtn.addEventListener("click", () => {
       sel?.removeAllRanges();
       sel?.addRange(range);
     });
-});
-
-optionsBtn.addEventListener("click", () => {
-  void chrome.runtime.openOptionsPage();
 });
 
 runSetupBtn.addEventListener("click", () => {

@@ -22,6 +22,8 @@ const openOptionsBtn = $<HTMLButtonElement>("open-options");
 const openOptionsBtn2 = $<HTMLButtonElement>("open-options-2");
 const copyInstallBtn = $<HTMLButtonElement>("copy-install");
 const installCmd = $<HTMLElement>("install-cmd");
+const copyRestartBtn = $<HTMLButtonElement>("copy-restart");
+const restartCmd = $<HTMLElement>("restart-cmd");
 const alreadyStatus = $<HTMLSpanElement>("already-status");
 
 type View = "loading" | "ready" | "error" | "paired" | "already" | "consumed";
@@ -157,6 +159,11 @@ async function completePair(pair: PairResponse): Promise<void> {
     /* ignore */
   }
   show("paired");
+  // Hand the freshly-paired user off to the welcome page after a beat so they
+  // see the "Paired" confirmation and the check animation first.
+  window.setTimeout(() => {
+    window.location.href = "https://www.browserops.ai/welcome";
+  }, 5000);
 }
 
 retryBtn.addEventListener("click", () => {
@@ -172,25 +179,32 @@ function openOptions(): void {
 openOptionsBtn.addEventListener("click", openOptions);
 openOptionsBtn2.addEventListener("click", openOptions);
 
-let copyResetTimer: ReturnType<typeof setTimeout> | null = null;
-copyInstallBtn.addEventListener("click", () => {
-  void navigator.clipboard
-    .writeText(installCmd.textContent ?? "")
-    .then(() => {
-      copyInstallBtn.textContent = "Copied";
-      if (copyResetTimer !== null) clearTimeout(copyResetTimer);
-      copyResetTimer = setTimeout(() => {
-        copyInstallBtn.textContent = "Copy";
-      }, 1500);
-    })
-    .catch(() => {
-      const range = document.createRange();
-      range.selectNodeContents(installCmd);
-      const sel = window.getSelection();
-      sel?.removeAllRanges();
-      sel?.addRange(range);
-    });
-});
+// Copy-to-clipboard for a command chip: writes the source element's text and
+// flips the button label to "Copied" for 1.5s, falling back to selecting the
+// text if the clipboard write is denied.
+function wireCopy(btn: HTMLButtonElement, src: HTMLElement): void {
+  let resetTimer: ReturnType<typeof setTimeout> | null = null;
+  btn.addEventListener("click", () => {
+    void navigator.clipboard
+      .writeText(src.textContent ?? "")
+      .then(() => {
+        btn.textContent = "Copied";
+        if (resetTimer !== null) clearTimeout(resetTimer);
+        resetTimer = setTimeout(() => {
+          btn.textContent = "Copy";
+        }, 1500);
+      })
+      .catch(() => {
+        const range = document.createRange();
+        range.selectNodeContents(src);
+        const sel = window.getSelection();
+        sel?.removeAllRanges();
+        sel?.addRange(range);
+      });
+  });
+}
+wireCopy(copyInstallBtn, installCmd);
+wireCopy(copyRestartBtn, restartCmd);
 
 // Boot. If this extension is already paired and connected, skip the /pair
 // round-trip (which would just return 410) and go straight to the "already
