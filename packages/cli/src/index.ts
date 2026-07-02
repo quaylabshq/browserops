@@ -33,6 +33,7 @@ import { runConfig } from "./commands/config.js";
 import { runFeature } from "./commands/feature.js";
 import { runIdentify } from "./commands/identify.js";
 import { runSyncCommand } from "./commands/sync.js";
+import { runResetExtensionPin } from "./commands/reset-extension-pin.js";
 import { runClaudeLauncher } from "./launchers/claude.js";
 import { runCursorLauncher } from "./launchers/cursor.js";
 import { runCodexLauncher } from "./launchers/codex.js";
@@ -57,6 +58,7 @@ const KNOWN_SUBCOMMANDS = new Set([
   "feature",
   "sync",
   "identify",
+  "reset-extension-pin",
 ]);
 
 const cli = cac("browserops");
@@ -151,6 +153,16 @@ cli
   .option("--clear", "Remove the previously set email")
   .action((opts: { email?: string; clear?: boolean }) => runIdentify(opts));
 
+cli
+  .command(
+    "reset-extension-pin",
+    "Clear ~/.browserops/extension_id so a new Chrome extension can pair",
+  )
+  .option("--no-restart", "Leave the daemon stopped after clearing the pin")
+  .action((opts: { restart?: boolean }) =>
+    runResetExtensionPin({ noRestart: opts.restart === false }),
+  );
+
 // Top-level launcher flags. cac surfaces these as --claude, --cursor, --codex
 // on the root command (i.e. `browserops --claude "task"`).
 cli
@@ -190,6 +202,7 @@ async function main(): Promise<void> {
     sync: "cli.sync_ran",
     "install-rules": "cli.install_rules_ran",
     "install-skill": "cli.install_skill_ran",
+    "reset-extension-pin": "cli.reset_extension_pin_ran",
   };
   const HANDLER_EMITTED = new Set([
     "init",

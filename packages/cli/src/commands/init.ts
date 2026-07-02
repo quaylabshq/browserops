@@ -3,6 +3,7 @@ import prompts from "prompts";
 import { DEFAULT_WS_PORT, ENV } from "@browserops/shared";
 import { ensureDaemonRunning, isDaemonAlive, resolveShimBin } from "../lib/daemon.js";
 import { STATE_DIR, extensionIdPath } from "../lib/paths.js";
+import { clearPinnedExtensionId } from "../lib/pin.js";
 import { ok, info, warn, err, header, c, dim } from "../lib/ui.js";
 import { detectClients, INSTALLERS, type ClientId, type ClientInfo } from "../installers/index.js";
 import {
@@ -88,13 +89,10 @@ export async function runInit(opts: InitOpts = {}): Promise<void> {
   // refused with "extension_pinned".
   if (opts.repair && !opts.dryRun) {
     try {
-      await fs.unlink(extensionIdPath());
-      ok(`cleared pinned extension id (${extensionIdPath()})`);
+      const cleared = await clearPinnedExtensionId();
+      if (cleared) ok(`cleared pinned extension id (${extensionIdPath()})`);
     } catch (e) {
-      // ENOENT = no pin existed; that's the normal first-run state.
-      if (!(e instanceof Error) || (e as NodeJS.ErrnoException).code !== "ENOENT") {
-        warn(`could not clear pinned extension id: ${e instanceof Error ? e.message : String(e)}`);
-      }
+      warn(`could not clear pinned extension id: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 
