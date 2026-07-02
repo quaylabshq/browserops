@@ -65,7 +65,6 @@ const cli = cac("browserops");
 
 cli
   .command("init", "First-run wizard: token, daemon, MCP-client install, Chrome extension pair")
-  .option("--yes", "Non-interactive: accept all defaults")
   .option("--no-mcp", "Skip MCP-client install")
   .option("--no-skill", "Skip Claude skill install")
   .option(
