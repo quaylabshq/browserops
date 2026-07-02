@@ -22,6 +22,14 @@ export function header(msg: string): void {
   process.stdout.write(`\n${pc.bold(msg)}\n`);
 }
 
+export function arrow(msg: string): void {
+  process.stdout.write(`${pc.cyan("→")} ${msg}\n`);
+}
+
+export function wait(msg: string): void {
+  process.stdout.write(`${pc.dim("⋯")} ${msg}\n`);
+}
+
 export function dim(s: string): string {
   return pc.dim(s);
 }
