@@ -7,6 +7,7 @@ import { getSafeMode, getFeatureStates } from "../lib/config.js";
 import { STATE_DIR, tokenPath } from "../lib/paths.js";
 import { DEFAULT_WS_PORT, ENV } from "@browserops/shared";
 import { ok, err, warn } from "../lib/ui.js";
+import { detectPinMismatch, shortId, shortOrigin } from "../lib/pin.js";
 
 interface Check {
   ok: boolean;
@@ -43,6 +44,7 @@ async function runAllChecks(): Promise<Check[]> {
     socketCheck,
     postureCheck,
     featuresCheck,
+    pinCheck,
     ...clientChecks
   ] = await Promise.all([
     checkNode(),
@@ -52,6 +54,7 @@ async function runAllChecks(): Promise<Check[]> {
     checkSocket(),
     checkPermissionPosture(),
     checkFeatures(),
+    checkExtensionPin(),
     ...checkClients(),
   ]);
 
@@ -63,8 +66,43 @@ async function runAllChecks(): Promise<Check[]> {
     socketCheck,
     postureCheck,
     featuresCheck,
+    pinCheck,
     ...clientChecks,
   ];
+}
+
+/**
+ * Fails when the log shows a run of pin-rejection events with no
+ * successful hello. That's the "silent 403" trap — bridge is up, port
+ * is open, but the extension currently loaded in Chrome has a
+ * different chrome-extension:// ID than the one pinned in
+ * ~/.browserops/extension_id. Recovery is `browserops
+ * reset-extension-pin`.
+ */
+async function checkExtensionPin(): Promise<Check> {
+  const signal = await detectPinMismatch();
+  if (!signal) {
+    return {
+      ok: true,
+      informational: true,
+      label: "Extension pin: no log available",
+    };
+  }
+  if (!signal.mismatch) {
+    const pinned = signal.pinnedId ? shortId(signal.pinnedId) : "(unpinned)";
+    return {
+      ok: true,
+      label: `Extension pin ${pinned}`,
+    };
+  }
+  const rejected = signal.rejectedOrigins.map(shortOrigin).join(", ") || "(unknown origin)";
+  return {
+    ok: false,
+    label: "Extension pin mismatch",
+    detail:
+      `pinned=${shortId(signal.pinnedId)} rejected=${rejected} (×${signal.rejectCount}) — ` +
+      `run \`browserops reset-extension-pin\``,
+  };
 }
 
 async function checkFeatures(): Promise<Check> {
