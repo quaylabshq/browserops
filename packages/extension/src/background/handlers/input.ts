@@ -311,6 +311,24 @@ async function cdpType(cdp: CdpManager, chromeId: number, text: string): Promise
   await cdp.send(chromeId, "Input.insertText", { text });
 }
 
+async function detectActiveTypeMode(chromeId: number): Promise<TypeMode> {
+  const active = await execInTab(
+    chromeId,
+    (() => {
+      const el = document.activeElement as HTMLElement | null;
+      if (el === null) return { mode: "paste" as const };
+      const looksContentEditable =
+        el.isContentEditable ||
+        el.matches(
+          '[contenteditable="true"], [contenteditable=""], .ql-editor, [data-slate-editor="true"], .ProseMirror, .public-DraftEditor-content',
+        );
+      return { mode: looksContentEditable ? ("keystroke" as const) : ("paste" as const) };
+    }) as () => { mode: TypeMode },
+    [] as const,
+  );
+  return active.mode;
+}
+
 /**
  * US-layout character -> (code, shift, vkCode). Built once; covers the
  * ASCII printables we can dispatch as real keystrokes. Used by
@@ -2587,15 +2605,20 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
       const chromeId = resolveChromeId(tabIdMap, params.tab_id);
       const { result: handlerResult, effect } = await captureEffect(chromeId, async () => {
         // Ref-less typing path (browser-harness-style type_text): inject into
-        // document.activeElement via Input.insertText. The agent is expected
-        // to have called browser_click_at first to focus the target. Skips
-        // the selector lookup, the focus-click, and the clear step — none of
-        // which mean anything without a ref. Useful when no a11y refs are
-        // available (e.g. screenshot-first profiles with browser_read /
-        // browser_quick_read disabled).
+        // document.activeElement after the caller has already focused it.
+        // Auto mode picks keystroke for active contenteditable editors and
+        // paste otherwise. This path skips selector lookup, focus-click, and
+        // clear handling because those do not mean anything without a ref.
+        // Useful when no a11y refs are available (e.g. screenshot-first
+        // profiles with browser_read / browser_quick_read disabled).
         if (params.ref === undefined) {
+          const mode = params.mode ?? (await detectActiveTypeMode(chromeId));
           if (cdp.isPersistent(chromeId)) {
-            await cdpType(cdp, chromeId, params.text);
+            if (mode === "paste") {
+              await cdpType(cdp, chromeId, params.text);
+            } else {
+              await cdpTypeKeystroke(cdp, chromeId, params.text);
+            }
             if (params.submit === true) {
               await cdpPress(cdp, chromeId, "Enter", {
                 ctrl: false,
@@ -2626,7 +2649,7 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
               [params.text] as const,
             );
           }
-          const r: { typed: number; mode: TypeMode } = { typed: params.text.length, mode: "paste" };
+          const r: { typed: number; mode: TypeMode } = { typed: params.text.length, mode };
           return r;
         }
 
