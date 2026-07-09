@@ -287,7 +287,18 @@ export async function runProcedure(ctx: RunProcedureContext): Promise<ExecuteOut
   // needs_assist / verify-failed). Health updates are best-effort — a
   // disk write failure does not fail the run.
   const nowIso = new Date().toISOString();
-  let healthAccum: HealthDef = emptyHealth(nowIso);
+  let healthAccum: HealthDef =
+    procedure.meta?.health !== undefined
+      ? {
+          updated: nowIso,
+          steps: Object.fromEntries(
+            Object.entries(procedure.meta.health.steps).map(([stepId, health]) => [
+              stepId,
+              { ...health },
+            ]),
+          ),
+        }
+      : emptyHealth(nowIso);
 
   for (let i = ctx.start_at; i < procedure.steps.length; i++) {
     const step = procedure.steps[i]!;
@@ -409,7 +420,12 @@ export async function runProcedure(ctx: RunProcedureContext): Promise<ExecuteOut
   // Top-level verify
   let verifyPassed: boolean | undefined;
   if (procedure.verify !== undefined) {
-    const verify = await pollExpect(procedure.verify, () => captureObservation(ctx, undefined));
+    const substitutedVerify = substituteVars(
+      procedure.verify,
+      inputs,
+      ctx.binds,
+    ) as ProcedureDef["verify"];
+    const verify = await pollExpect(substitutedVerify, () => captureObservation(ctx, undefined));
     verifyPassed = verify.matched;
     if (!verify.matched) {
       await flushHealth(procedure.name, healthAccum);
@@ -513,6 +529,18 @@ async function tryStepOnce(
           },
         };
       }
+      if (typeof first.ref !== "number" || !Number.isInteger(first.ref) || first.ref < 1) {
+        return {
+          ok: false,
+          attempts: 1,
+          divergence: {
+            step_id: step.id,
+            step_index: index,
+            reason: `browser_locate returned invalid ref: ${String(first.ref)}`,
+            locator: substituted,
+          },
+        };
+      }
       resolvedRef = first.ref;
       resolution = {
         matched_ref: first.ref,
@@ -589,8 +617,9 @@ async function tryStepOnce(
 
   // Expect polling
   if (step.expect !== undefined) {
-    const needsText = expectNeedsText(step.expect);
-    const polled = await pollExpect(step.expect, async () => {
+    const substitutedExpect = substituteVars(step.expect, inputs, ctx.binds) as StepDef["expect"];
+    const needsText = expectNeedsText(substitutedExpect);
+    const polled = await pollExpect(substitutedExpect, async () => {
       const obs: Observation = buildObservation(toolResult) ?? {};
       // text_visible / text_invisible inspect rendered page text, which the
       // tool result does not carry. Fetch it live, re-reading each poll so
@@ -611,7 +640,7 @@ async function tryStepOnce(
           step_index: index,
           reason: `expect failed: ${polled.reason ?? "no reason"}`,
           observed: polled.observed,
-          expected: step.expect,
+          expected: substitutedExpect,
           locator: resolvedLocator,
         },
       };

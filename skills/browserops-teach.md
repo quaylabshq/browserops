@@ -8,9 +8,11 @@ description: Author a browserops procedure autonomously — one user prompt in, 
 One human message in, one message out. Everything in between is autonomous.
 
 The goal is to produce a working, verified, **trusted** procedure in the
-browserops procedures store with the minimum tool calls and tokens. No demo
-recording. No mid-flight check-ins with the user. The agent's own context
-is the session.
+browserops procedures store with the minimum tool calls and tokens. If that
+is impossible in the current runtime/site state, produce a **useful draft**:
+saved YAML, a precise failure classification, a minimal repro, and the next
+unblocking action. No demo recording. No mid-flight check-ins with the user.
+The agent's own context is the session.
 
 Procedures are deterministic-first: each step targets an element via a
 semantic Locator descriptor (re-resolved against the live a11y tree every
@@ -47,9 +49,11 @@ Four checks. Run in order; short-circuit at the first that resolves.
 
 ### The three hard gates
 
-1. **Cross-user side effects with no safe self-test path.** Real recipients,
-   real visibility, no way to dry-run by sending to yourself. Posting
-   publicly, DM-ing strangers, inviting users, calendar invites to others.
+1. **Cross-user side effects with no safe self-test path or exact
+   authorization.** Default verification uses safe dummy fixtures/accounts.
+   Real recipients, real visibility, posting publicly, DM-ing strangers,
+   inviting users, or calendar invites to others require either a safe dummy
+   path or explicit user authorization for the exact real target/action.
 2. **Money or account-level irreversibility.** Payments, transfers,
    deletions, plan changes, downgrades, anything that costs money or
    removes data.
@@ -58,14 +62,17 @@ Four checks. Run in order; short-circuit at the first that resolves.
    nothing else.
 
 For named-recipient flows like "save a procedure to DM Pratham on Slack":
-no gate fires. Pratham is named, the user already knows we'll send to him.
+author the recipient as an input, but verify against a safe dummy whenever
+possible. Only send to Pratham during training if the user explicitly
+authorizes that exact real-recipient verification.
 
 ---
 
 ## 2. Per-app safe-dummy registry (verification inputs)
 
 When destructive inputs need a verification value, default to
-**send-to-self** for messaging surfaces.
+**send-to-self** for messaging surfaces. If no safe dummy exists, ask one
+focused authorization question before touching the real account/recipient.
 
 | App       | Safe dummy when goal is ambiguous                                    |
 | --------- | -------------------------------------------------------------------- |
@@ -78,6 +85,11 @@ When destructive inputs need a verification value, default to
 | Twitter/X | **Draft only.** Never publish autonomously.                          |
 | GitHub    | Comment on a private repo / draft PR / draft issue                   |
 | Calendar  | Event with only yourself as attendee                                 |
+
+Real-account verification is allowed only when the user has authorized the
+exact target, action, and payload class. Even then, prefer a private draft,
+self-DM, private repo, private page, or reversible fixture when the app
+supports one.
 
 ---
 
@@ -186,20 +198,33 @@ When destructive inputs need a verification value, default to
        through with.inputs — procedures_execute ignores a top-level
        tab_id on a procedure_call step.
 
+   Save the first runnable YAML as a DRAFT before execution:
+   procedures_save({ name, yaml, overwrite: true }). Every teach run must
+   leave behind a reusable artefact, even when promotion is blocked.
+
 4. Verify INCREMENTALLY, not all-at-once. Don't author 10 steps and only
    discover at the final run that step 1 was broken. Climb a ladder and
    stop at the first rung that fails — each rung localizes the fault to a
    different layer:
      a. Resolve every locator: browser_locate({tab_id, locator}) for each
         authored locator. A miss here = bad descriptor (re-propose) OR a
-        runtime prime bug (see §9) — not a deep logic problem.
+        runtime prime bug (see §9) — not a deep logic problem. If
+        browser_propose_locator emitted a descriptor that browser_locate
+        cannot resolve against the same fresh snapshot, suspect proposer /
+        resolver parity before editing the flow.
      b. Dry-run the ENTRY step live (the navigate→wait→open sequence) and
         read the effect. Confirm the composer/modal actually opened
         (new_dialog present, non-zero a11y_delta) BEFORE trusting the tail.
-     c. Full run: procedures_execute({strict: true}). strict is mandatory
-        during authoring — it refuses every LLM fallback, so a clean run
-        means the locators + expect predicates are good without help. Use
-        the safe dummies from step 2 for destructive inputs.
+     c. Exploratory recovery run: procedures_execute({strict: false}) may
+        be used to get a needs_assist envelope and test procedures_resume
+        patches. Use this to discover a different approach (insert a
+        dismiss step, swap locator, change params, add readiness wait).
+        If a resume patch works, edit the YAML so the fix is deterministic.
+        Assisted runs NEVER count toward trusted promotion.
+     d. Full strict run: procedures_execute({strict: true}). strict is
+        mandatory before promotion — it refuses every LLM fallback, so a
+        clean run means the locators + expect predicates are good without
+        help. Use the safe dummies from step 2 for destructive inputs.
 
 5. Build a goal-grounded predicate OUTSIDE the procedure to confirm
    success. The runtime's verify{} block is the spec; the agent's external
@@ -250,15 +275,43 @@ When destructive inputs need a verification value, default to
    worked last week may not be unique anymore), re-verify, then bump.
    Do NOT report success — surface the demote_reason in the final report.
 
-8. On fail: classify BEFORE you re-edit. Map the divergence with the §9
-   table first — if it points at the runtime ("no ref-cache snapshot", a
-   url "" on a navigate that clearly moved, a text predicate that can never
-   match the text you can see), it is NOT an authoring problem and editing
-   the YAML will loop forever; surface the runtime fault instead. If it's
-   genuinely your YAML, edit and re-run from the ladder (step 4), up to ~3
-   self-correction attempts. If still blocked after 3, write a structured
-   failure note to lore and tell the user what blocked you. Do not ask
-   them to demonstrate; if they want to, they will offer.
+8. On fail: classify BEFORE you re-edit. Re-running the same idea is not a
+   self-correction. Each retry must change strategy class:
+     a. readiness/timing — add or adjust wait/timeout/polling.
+     b. locator — fresh read, browser_propose_locator, browser_locate
+        parity check, tighter regex/negative anchor.
+     c. entry/action primitive — route vs click vs keyboard vs safe JS.
+     d. assisted recovery — non-strict execute + procedures_resume patch,
+        then bake the successful patch into deterministic YAML.
+     e. predicate — tighten weak expect/verify or fix external predicate.
+     f. runtime invariant — direct tools prove the step works, but the
+        executor/proposer/observer violates its contract.
+
+   For `do: type` failures, change the input strategy instead of retrying
+   the same clear/type call. If a fresh navigation or reset guarantees an
+   empty field, omit `clear_mode` and assert the typed value. If clearing is
+   required, try a different class: `clear_mode: value`, explicit
+   focus/click before type, `mode: keystroke` for canvas/key-gated editors
+   such as Sheets, or safe JS only when the UI is not addressable. A
+   second-field type that corrupts the first field is a focus/clear
+   sequencing failure, not a bad locator.
+
+   Map the divergence with the §9 table first. If the same failure survives
+   two different strategy classes AND direct tools prove the descriptor or
+   primitive works, stop editing YAML and classify a runtime wall. Do not
+   "try three times" and quit; either try a genuinely different approach or
+   produce the blocked artefacts below.
+
+   Blocked artefact protocol:
+     - Save/overwrite the latest YAML as draft.
+     - Write lore with: procedure name, app, failure fingerprint, exact
+       divergence, strategies attempted, locators verified, side effects
+       performed (or none), and next unblocking action.
+     - Prepare a minimal repro using the procedure failure template shape:
+       YAML, procedures_execute result, meta.health, target site, notable UI.
+     - Report the draft status, why it is not trusted, and the precise
+       resume condition (runtime fix, safer fixture, auth, or UI signal).
+   Do not ask the user to demonstrate; if they want to, they will offer.
 
 9. Update lore with what you learned about the app — role/name pairs
    that worked, tier-1 attrs that disambiguated, the working network
@@ -272,7 +325,7 @@ When destructive inputs need a verification value, default to
 
 ## 4. The final report
 
-One message back to the user. Tight format:
+One message back to the user. Tight format for success:
 
 ```
 ✓ Saved procedure: <name> (status: trusted)
@@ -280,6 +333,17 @@ One message back to the user. Tight format:
   Tested with: <safe dummy summary>
   Cost: <tool calls, wall time>
   Notes: <caveats / lore updates / next-time hints>
+```
+
+Tight format for a blocked but useful draft:
+
+```
+○ Saved procedure: <name> (status: draft, not trusted)
+  Blocked at: <step_id> — <failure class>
+  Verified: <locators / direct tools / safe side effects>
+  Tried: <strategy classes, not raw attempt count>
+  Repro: <YAML path + execute divergence + meta.health/lore name>
+  Next: <runtime fix / fixture / authorization / UI signal needed>
 ```
 
 Anything that _would have been_ a mid-flight question lands here as a
@@ -343,6 +407,8 @@ For a flow against a known SaaS app with priors in lore:
 - N `browser_propose_locator` (one per control you'll touch)
 - 1 entry-step actionability dry-run (browser_click/navigate, read effect)
 - 1 `procedures_save` (draft)
+- 0-2 exploratory `procedures_execute({strict:false})` / `procedures_resume`
+  cycles when a genuinely different recovery strategy is needed
 - ≥3 `procedures_execute({strict: true})` — the reconfirm streak (step 6),
   each paired with an external-API predicate call
 - 1 `procedures_save({overwrite: true, bump_success: true})` to promote
@@ -350,10 +416,9 @@ For a flow against a known SaaS app with priors in lore:
 
 For a 5-step flow that's <22 tool calls on a known app (the reconfirm
 streak is the bulk of it — and it is not optional). More than 32 is the
-signal that priors are missing, the proposer kept returning fragile
-descriptors (the UI lacks stable signals), the verify predicate isn't
-tight, or the reconfirm streak keeps resetting (a marginal locator —
-tighten it rather than re-running).
+signal to stop repeating and switch strategy class: priors are missing, the
+proposer kept returning fragile descriptors, the verify predicate isn't
+tight, the entry primitive is wrong, or the reconfirm streak keeps resetting.
 
 For a brand-new app with no lore: budget ~25-35 calls (explore +
 author + verify + save + lore write). After 2-3 successful runs against
@@ -415,15 +480,17 @@ with no extra call.
 Map a strict-run divergence to the layer that actually failed BEFORE you
 touch the YAML — re-editing locators won't fix a runtime fault:
 
-| Divergence reason                                   | Likely cause          | Action                                                                                        |
-| --------------------------------------------------- | --------------------- | --------------------------------------------------------------------------------------------- |
-| "no ref-cache snapshot for this tab"                | runtime auto-prime    | Not your locator — surface the prime bug.                                                     |
-| url "" on a navigate that clearly moved             | runtime observation   | URL not captured for this tool — use an effect predicate or report.                           |
-| text_visible "<text you can see>" not found         | timing / wrong string | Text is fetched live now — it isn't there yet (add a `do: wait`) or your string/regex is off. |
-| "locator matched no elements" (descriptor looks ok) | timing / not loaded   | Add a `do: wait` for the control before the step.                                             |
-| "locator matched no elements" (descriptor wrong)    | bad locator           | Re-propose on a fresh snapshot; prefer tier-1.                                                |
-| "no new dialog matched ..." after a real open       | wrong dialog name     | Loosen the new_dialog regex / drop to `new_dialog: true`.                                     |
-| expect passed but external predicate failed         | weak expect           | Tighten expect; the run was a false positive.                                                 |
+| Divergence reason                                   | Likely cause                      | Action                                                                                               |
+| --------------------------------------------------- | --------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| "no ref-cache snapshot for this tab"                | runtime auto-prime                | Not your locator — surface the prime bug.                                                            |
+| dispatch failed "ref must be a positive integer"    | runtime locate/dispatch invariant | Directly compare browser_locate output to the executor's dispatched params; produce a minimal repro. |
+| proposer descriptor misses in browser_locate        | proposer/resolver parity          | Use role/name fallback only as a temporary draft fix; file the parity repro.                         |
+| url "" on a navigate that clearly moved             | runtime observation               | URL not captured for this tool — use an effect predicate or report.                                  |
+| text_visible "<text you can see>" not found         | timing / wrong string             | Text is fetched live now — it isn't there yet (add a `do: wait`) or your string/regex is off.        |
+| "locator matched no elements" (descriptor looks ok) | timing / not loaded               | Add a `do: wait` for the control before the step.                                                    |
+| "locator matched no elements" (descriptor wrong)    | bad locator                       | Re-propose on a fresh snapshot; prefer tier-1.                                                       |
+| "no new dialog matched ..." after a real open       | wrong dialog name                 | Loosen the new_dialog regex / drop to `new_dialog: true`.                                            |
+| expect passed but external predicate failed         | weak expect                       | Tighten expect; the run was a false positive.                                                        |
 
 Rule of thumb: if the same step fails the same way across two edits AND the
 descriptor visibly resolves on the page, suspect the runtime, not your YAML.
