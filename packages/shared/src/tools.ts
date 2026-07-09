@@ -1140,12 +1140,12 @@ const typeTool: ToolDef = {
       ref: {
         ...refSchema,
         description:
-          "Optional. If omitted, text is inserted into document.activeElement via Input.insertText — call browser_click_at first to focus the target field. When provided, the handler clicks the ref to focus it and then types.",
+          "Optional. If omitted, text is inserted into document.activeElement — call browser_click_at first to focus the target field. Auto mode picks 'keystroke' for active contenteditable editors and 'paste' otherwise. When provided, the handler clicks the ref to focus it and then types.",
       },
       text: { type: "string", maxLength: 32768 },
       mode: {
         description:
-          "Dispatch mode. Omit for auto: 'paste' for most targets, 'keystroke' when the ref's selector matches a known canvas editor (e.g. Google Sheets cell). Force 'keystroke' when you need per-character keydown events (autocompletes, validators). Force 'paste' to skip key events entirely.",
+          "Dispatch mode. Omit for auto: 'paste' for most targets, 'keystroke' when the ref's selector matches a known canvas editor (e.g. Google Sheets cell), or when ref is omitted and the active element is a contenteditable editor. Force 'keystroke' when you need per-character keydown events (autocompletes, validators). Force 'paste' to skip key events entirely.",
         enum: ["keystroke", "paste"] as const,
       },
       submit: { type: "boolean", default: false },
