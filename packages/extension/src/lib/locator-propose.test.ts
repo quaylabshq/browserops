@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { RefEntry } from "../background/ref-cache.js";
 import { proposeLocator, type ProposalCandidate } from "./locator-propose.js";
+import { resolveLocator } from "./locator-resolver.js";
 
 /**
  * The uniqueness scorer is the algorithm that takes a target element and
@@ -19,12 +20,7 @@ import { proposeLocator, type ProposalCandidate } from "./locator-propose.js";
  *      candidate and a warning.
  */
 
-function entry(
-  ref: number,
-  role: string,
-  name: string,
-  attrs?: Record<string, string>,
-): RefEntry {
+function entry(ref: number, role: string, name: string, attrs?: Record<string, string>): RefEntry {
   const base: RefEntry = { ref, role, name, selector: `#ref-${ref}` };
   if (attrs) base.attrs = attrs;
   return base;
@@ -52,6 +48,25 @@ describe("proposeLocator — happy path", () => {
     expect(result.unique).toBe(true);
     expect(result.tier).toBe(1);
     expect(result.locator).toEqual({ data_testid: "send-now" });
+    expect(resolveLocator(snapshot, result.locator).map((m) => m.ref)).toEqual([1]);
+  });
+
+  it("emits data_testid locators that resolve across data-test and data-qa aliases", () => {
+    const dataTestSnapshot: RefEntry[] = [
+      entry(1, "button", "Send", { "data-test": "send-now" }),
+      entry(2, "button", "Send", { "data-test": "send-later" }),
+    ];
+    const dataTestResult = proposeLocator(dataTestSnapshot, 1);
+    expect(dataTestResult.locator).toEqual({ data_testid: "send-now" });
+    expect(resolveLocator(dataTestSnapshot, dataTestResult.locator).map((m) => m.ref)).toEqual([1]);
+
+    const dataQaSnapshot: RefEntry[] = [
+      entry(1, "button", "Send", { "data-qa": "send-now" }),
+      entry(2, "button", "Send", { "data-qa": "send-later" }),
+    ];
+    const dataQaResult = proposeLocator(dataQaSnapshot, 1);
+    expect(dataQaResult.locator).toEqual({ data_testid: "send-now" });
+    expect(resolveLocator(dataQaSnapshot, dataQaResult.locator).map((m) => m.ref)).toEqual([1]);
   });
 
   it("returns role+href when href identifies a link uniquely", () => {
@@ -93,10 +108,7 @@ describe("proposeLocator — composition when single field is not unique", () =>
 
 describe("proposeLocator — degraded paths", () => {
   it("emits nth as the last resort with fragile=true", () => {
-    const snapshot: RefEntry[] = [
-      entry(1, "button", "Send"),
-      entry(2, "button", "Send"),
-    ];
+    const snapshot: RefEntry[] = [entry(1, "button", "Send"), entry(2, "button", "Send")];
     const result = proposeLocator(snapshot, 2);
     expect(result.unique).toBe(true);
     expect(result.tier).toBe(3);
@@ -105,10 +117,7 @@ describe("proposeLocator — degraded paths", () => {
   });
 
   it("returns unique=false when even nth cannot distinguish (target absent)", () => {
-    const snapshot: RefEntry[] = [
-      entry(1, "button", "Send"),
-      entry(2, "button", "Send"),
-    ];
+    const snapshot: RefEntry[] = [entry(1, "button", "Send"), entry(2, "button", "Send")];
     const result = proposeLocator(snapshot, 99);
     expect(result.unique).toBe(false);
     expect(result.warnings.length).toBeGreaterThan(0);

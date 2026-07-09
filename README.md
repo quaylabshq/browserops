@@ -78,7 +78,7 @@ browserops feature disable <name>      # opt out
 
 **Heads-up on first sync after upgrading:** the next `browserops sync` (or `browserops upgrade`) installs the `browserops-teach` skill at `~/.claude/skills/browserops-teach/SKILL.md` for the first time on machines that were on an earlier package version — earlier releases shipped the skill in the repo but not in the published CLI bundle, so it was never installable. Existing `~/.claude/skills/browserops/SKILL.md` is refreshed in place, with a timestamped `.bak` if any local edits were detected.
 
-`procedures` ships as an **experimental** feature — off by default. With it off, your agent gets the always-on `browser_*` tools and nothing else: minimum token overhead for users who only want basic browser automation. Opt in with `browserops feature enable procedures` and run `browserops restart` so the daemon broadcasts the new feature set to the extension. Once on, the agent gets the procedure-store tools (`procedures_search`, `_get`, `_save`, `_delete`, `_execute`) and the `browserops-teach` skill that authors new procedures autonomously.
+`procedures` ships as an **experimental** feature — off by default. With it off, your agent gets the always-on `browser_*` tools and nothing else: minimum token overhead for users who only want basic browser automation. Opt in with `browserops feature enable procedures` and run `browserops restart` so the daemon broadcasts the new feature set to the extension. Once on, the agent gets the procedure-store tools (`procedures_search`, `_get`, `_save`, `_delete`, `_execute`, `_resume`) and the `browserops-teach` skill that authors new procedures autonomously.
 
 ### Per-project rules (optional)
 
@@ -266,9 +266,9 @@ For element addressing, `browser_observe` is the cheapest path for general state
 
 ## Procedures
 
-> **Experimental — off by default.** Enable with `browserops feature enable procedures` (then `browserops restart`), or pick it during `browserops init`. With this feature off, the five `procedures_*` tools are hidden from your agent's catalogue and the in-process index isn't built — minimal token overhead for users who only want browser automation.
+> **Experimental — off by default.** Enable with `browserops feature enable procedures` (then `browserops restart`), or pick it during `browserops init`. With this feature off, the six `procedures_*` tools are hidden from your agent's catalogue and the in-process index isn't built — minimal token overhead for users who only want browser automation.
 
-Procedures are named, parameterised, reusable action graphs the agent can discover and replay without re-planning from a screenshot every time. They live in `~/browserops/procedures/` (user-visible, not hidden) and are surfaced through five MCP tools: `procedures_search`, `procedures_get`, `procedures_save`, `procedures_delete`, `procedures_execute`.
+Procedures are named, parameterised, reusable action graphs the agent can discover and replay without re-planning from a screenshot every time. They live in `~/browserops/procedures/` (user-visible, not hidden) and are surfaced through six MCP tools: `procedures_search`, `procedures_get`, `procedures_save`, `procedures_delete`, `procedures_execute`, `procedures_resume`.
 
 The store ships empty — there are no bundled "default" procedures. New ones are authored on-demand by the **`browserops-teach`** skill (autonomous) or by hand via `procedures_save`. Past sessions accumulate via `bump_success: true`, so the store grows as the user uses it; nothing is shipped in the box.
 
@@ -280,15 +280,17 @@ The procedure schema and search ranking live in `packages/shared/src/procedures.
 
 ### Authoring new procedures: the `browserops-teach` skill
 
-When the agent decides nothing trusted covers a flow, it invokes the **`browserops-teach`** skill (at `~/.claude/skills/browserops-teach/SKILL.md`, mirrored to `skills/browserops-teach.md`). The skill is autonomous-by-default: one user prompt in, one message out. It pre-flight checks for an existing procedure, reads lore for app priors, probes the live page directly with `browser_*` tools, drafts the YAML in-context, verifies via `procedures_execute` against a goal-grounded predicate, then saves with `bump_success: true` on a clean run.
+When the agent decides nothing trusted covers a flow, it invokes the **`browserops-teach`** skill (at `~/.claude/skills/browserops-teach/SKILL.md`, mirrored to `skills/browserops-teach.md`). The skill is autonomous-by-default: one user prompt in, one message out. It pre-flight checks for an existing procedure, reads lore for app priors, probes the live page directly with `browser_*` tools, saves a runnable draft, uses non-strict `procedures_execute` / `procedures_resume` only to discover deterministic fixes, then promotes with `bump_success: true` after a clean strict verification streak and an external goal-grounded predicate.
 
 The agent asks at most one clarifying question, only when a hard safety gate fires:
 
-1. **Cross-user side effects with no safe self-test path** (real recipients, real visibility).
+1. **Cross-user side effects with no safe self-test path or exact authorization** (real recipients, real visibility).
 2. **Money or account-level irreversibility** (payments, transfers, deletions, plan changes).
 3. **Goal genuinely unparseable AND no app context in tabs/lore.**
 
-For typical messaging goals like _"DM Pratham on Slack"_ none of these gates fire — the agent goes silent immediately and reports once when done.
+For typical messaging goals like _"DM Pratham on Slack"_, the recipient is authored as an input but verification uses a safe dummy whenever possible. The agent only sends to Pratham during training if the user explicitly authorized that exact real-recipient verification.
+
+If a procedure cannot be promoted, teach still leaves a useful draft: saved YAML, a failure classification, the `procedures_execute` divergence, `meta.health`, lore with what was learned, and the precise next unblocking action. Repeated failures are handled by switching strategy class — readiness/timing, locator, entry primitive, assisted recovery, predicate, then runtime invariant — rather than retrying the same edit a fixed number of times.
 
 This replaces the older two-stage `teach` (manual demo recorder) + `autoteach` (iterative replay-and-optimize loop) machinery, which has been removed. With autonomous-by-default, the agent watches its own `browser_*` calls and authors the YAML in its own context — no separate keystroke recorder, no bridge-side replay loop, no transient session storage.
 
@@ -296,10 +298,12 @@ Authoring checklist (still applies when authoring procedures by hand):
 
 - Search first. If an existing procedure already covers the flow, reuse it instead of writing a parallel version.
 - Write leaves around real UI states. Each leaf should represent one stable transition.
-- Test every leaf on the live site before composing it. Do not save unverified procedures (or save them as drafts and only `bump_success` after verification).
+- Save the first runnable YAML as a draft before executing it, so a blocked teach run leaves a resumable artefact.
+- Test every leaf on the live site before composing it. Do not promote unverified procedures; only `bump_success` after strict verification succeeds.
 - Use only schema-supported fields from `packages/shared/src/procedures.ts`.
 - Bind outputs only when the leaf returns those exact fields, and verify the bindings against the real result.
 - Prefer explicit waits and success criteria over implicit assumptions.
+- Use non-strict execute/resume as an authoring aid only; bake any successful patch into YAML and rerun strict before promotion.
 - If the UI changes, fix the leaf first, then update the composite.
 
 ## Lore (cross-agent)
