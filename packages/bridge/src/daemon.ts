@@ -32,7 +32,7 @@ import {
   type PostHogHttpClient,
 } from "./telemetry/index.js";
 
-const VERSION = "0.0.11";
+const VERSION = "0.0.12";
 const TELEMETRY_DRAIN_MS = 1_500;
 
 interface ActiveSession {
