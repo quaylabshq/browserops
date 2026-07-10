@@ -544,6 +544,107 @@ function injectedElementCenter(selector: string): { x: number; y: number } | nul
   return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
 }
 
+function injectedFocusElement(selector: string): boolean {
+  const root = document.querySelector(selector) as HTMLElement | null;
+  if (root === null) return false;
+  const el = root.matches(
+    'input, textarea, select, [contenteditable="true"], [contenteditable=""], .ql-editor, [data-slate-editor="true"], .ProseMirror, .public-DraftEditor-content',
+  )
+    ? root
+    : (root.querySelector<HTMLElement>(
+        'input, textarea, select, [contenteditable="true"], [contenteditable=""], .ql-editor, [data-slate-editor="true"], .ProseMirror, .public-DraftEditor-content',
+      ) ?? root);
+  try {
+    el.focus();
+    return document.activeElement === el || el.contains(document.activeElement);
+  } catch {
+    return false;
+  }
+}
+
+function injectedReadFieldContent(selector: string): {
+  found: boolean;
+  content: string;
+  is_contenteditable: boolean;
+  active: boolean;
+} {
+  const root = document.querySelector(selector) as (HTMLElement & { value?: string }) | null;
+  if (root === null) {
+    return { found: false, content: "", is_contenteditable: false, active: false };
+  }
+  const rootProto = Object.getPrototypeOf(root) as object | null;
+  const rootHasValueSetter =
+    rootProto !== null && Object.getOwnPropertyDescriptor(rootProto, "value")?.set !== undefined;
+  const inner =
+    root.isContentEditable || rootHasValueSetter
+      ? null
+      : root.querySelector<HTMLElement & { value?: string }>(
+          'input, textarea, select, [contenteditable="true"], [contenteditable=""], .ql-editor, [data-slate-editor="true"], .ProseMirror, .public-DraftEditor-content',
+        );
+  const el = (inner ?? root) as HTMLElement & { value?: string };
+  const content = el.isContentEditable ? (el.textContent ?? "") : (el.value ?? "");
+  const active = document.activeElement === el || el.contains(document.activeElement);
+  return { found: true, content, is_contenteditable: el.isContentEditable, active };
+}
+
+function injectedSetFieldText(
+  selector: string,
+  text: string,
+): { found: boolean; content: string; is_contenteditable: boolean } {
+  const root = document.querySelector(selector) as (HTMLElement & { value?: string }) | null;
+  if (root === null) return { found: false, content: "", is_contenteditable: false };
+  const rootProto = Object.getPrototypeOf(root) as object | null;
+  const rootHasValueSetter =
+    rootProto !== null && Object.getOwnPropertyDescriptor(rootProto, "value")?.set !== undefined;
+  const inner =
+    root.isContentEditable || rootHasValueSetter
+      ? null
+      : root.querySelector<HTMLElement & { value?: string }>(
+          'input, textarea, select, [contenteditable="true"], [contenteditable=""], .ql-editor, [data-slate-editor="true"], .ProseMirror, .public-DraftEditor-content',
+        );
+  const el = (inner ?? root) as HTMLElement & { value?: string };
+  try {
+    el.focus();
+  } catch {
+    /* ignore */
+  }
+
+  if (el.isContentEditable) {
+    const sel = window.getSelection();
+    if (sel !== null) {
+      const range = document.createRange();
+      range.selectNodeContents(el as Node);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+    document.execCommand("insertText", false, text);
+    if ((el.textContent ?? "") !== text) {
+      el.textContent = text;
+      el.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    return { found: true, content: el.textContent ?? "", is_contenteditable: true };
+  }
+
+  const proto = Object.getPrototypeOf(el as object) as object | null;
+  const setter =
+    proto === null
+      ? undefined
+      : (Object.getOwnPropertyDescriptor(proto, "value")?.set as ((v: string) => void) | undefined);
+  if (setter !== undefined) setter.call(el, text);
+  else el.value = text;
+  el.dispatchEvent(
+    new InputEvent("input", {
+      data: text,
+      inputType: "insertText",
+      bubbles: true,
+      composed: true,
+    }),
+  );
+  el.dispatchEvent(new Event("change", { bubbles: true }));
+  return { found: true, content: el.value ?? "", is_contenteditable: false };
+}
+
 // ---------------------------------------------------------------------------
 // Injected functions. These execute in the page's MAIN world and cannot
 // close over module scope — every input arrives through `args`.
@@ -706,7 +807,7 @@ function injectedClearField(
     root.isContentEditable || rootHasValueSetter
       ? null
       : root.querySelector<HTMLElement & { value?: string }>(
-          '[contenteditable="true"], [contenteditable=""], .ql-editor, [data-slate-editor="true"], .ProseMirror, .public-DraftEditor-content',
+          'input, textarea, select, [contenteditable="true"], [contenteditable=""], .ql-editor, [data-slate-editor="true"], .ProseMirror, .public-DraftEditor-content',
         );
   const el = (inner ?? root) as HTMLElement & { value?: string };
   try {
@@ -805,7 +906,7 @@ function injectedTypePaste(
     root.isContentEditable || rootHasValueSetter
       ? null
       : root.querySelector<HTMLElement & { value?: string; form?: HTMLFormElement }>(
-          '[contenteditable="true"], [contenteditable=""], .ql-editor, [data-slate-editor="true"], .ProseMirror, .public-DraftEditor-content',
+          'input, textarea, select, [contenteditable="true"], [contenteditable=""], .ql-editor, [data-slate-editor="true"], .ProseMirror, .public-DraftEditor-content',
         );
   const el = (inner ?? root) as HTMLElement & { value?: string; form?: HTMLFormElement };
   el.focus();
@@ -880,7 +981,7 @@ function injectedTypeKeystroke(
       root.isContentEditable || rootHasValueSetter
         ? null
         : root.querySelector<HTMLElement & { value?: string; form?: HTMLFormElement }>(
-            '[contenteditable="true"], [contenteditable=""], .ql-editor, [data-slate-editor="true"], .ProseMirror, .public-DraftEditor-content',
+            'input, textarea, select, [contenteditable="true"], [contenteditable=""], .ql-editor, [data-slate-editor="true"], .ProseMirror, .public-DraftEditor-content',
           );
     const el = (inner ?? root) as HTMLElement & { value?: string; form?: HTMLFormElement };
     el.focus();
@@ -1009,7 +1110,7 @@ function injectedTypeClipboard(
     root.isContentEditable || rootHasValueSetter
       ? null
       : root.querySelector<HTMLElement & { value?: string; form?: HTMLFormElement }>(
-          '[contenteditable="true"], [contenteditable=""], .ql-editor, [data-slate-editor="true"], .ProseMirror, .public-DraftEditor-content',
+          'input, textarea, select, [contenteditable="true"], [contenteditable=""], .ql-editor, [data-slate-editor="true"], .ProseMirror, .public-DraftEditor-content',
         );
   const el = (inner ?? root) as HTMLElement & { value?: string; form?: HTMLFormElement };
   el.focus();
@@ -2680,60 +2781,158 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
         const mode: TypeMode =
           params.mode !== undefined ? params.mode : looksCanvasEditor ? "keystroke" : "paste";
 
-        // Persistent CDP path: trusted type via Input.insertText.
-        if (cdp.isPersistent(chromeId)) {
-          if (clearMode !== undefined) {
-            const selectAllMod = isMacPlatform()
-              ? { ctrl: false, alt: false, shift: false, meta: true }
-              : { ctrl: true, alt: false, shift: false, meta: false };
-            await cdpPress(cdp, chromeId, "a", selectAllMod);
-            await cdpPress(cdp, chromeId, "Backspace", {
-              ctrl: false,
-              alt: false,
-              shift: false,
-              meta: false,
-            });
-            cleared = true;
+        type TypeResult = {
+          typed: number;
+          mode: TypeMode;
+          cleared?: boolean;
+          escalated_to_cdp?: true;
+        };
+
+        const dispatchCdpTrusted = async (escalated: boolean): Promise<TypeResult> => {
+          // Click the element to focus it, then clear/type/read on that exact
+          // target. The read-back catches focus races where Input.insertText
+          // lands short or in the previously focused field.
+          const center = await execInTab(chromeId, injectedElementCenter, [selector] as const);
+          if (center === null) {
+            throw codedError(
+              "REF_STALE",
+              `ref ${params.ref} no longer resolves in tab ${params.tab_id}`,
+            );
           }
-          const dispatch = async () => {
-            // Click the element to focus it, then insert text.
-            const center = await execInTab(chromeId, injectedElementCenter, [selector] as const);
-            if (center === null) {
+          await cdpClick(cdp, chromeId, center.x, center.y, "left", {
+            ctrl: false,
+            alt: false,
+            shift: false,
+            meta: false,
+          });
+          await execInTab(chromeId, injectedFocusElement, [selector] as const);
+
+          let cdpCleared: boolean | undefined;
+          if (clearMode !== undefined) {
+            const clearRes = await execInTab(chromeId, injectedClearField, [
+              selector,
+              clearMode,
+            ] as const);
+            if (clearRes.found === false) {
               throw codedError(
                 "REF_STALE",
                 `ref ${params.ref} no longer resolves in tab ${params.tab_id}`,
               );
             }
-            await cdpClick(cdp, chromeId, center.x, center.y, "left", {
+            cdpCleared = clearRes.cleared;
+          }
+
+          let readBack:
+            | {
+                found: boolean;
+                content: string;
+                is_contenteditable: boolean;
+                active: boolean;
+              }
+            | undefined;
+          if (clearMode !== undefined && mode === "paste") {
+            // Replacement semantics are stricter than plain typing. On
+            // focused form controls, JS-clearing followed by CDP insertText
+            // can leave Chrome's internal edit buffer stale, causing the old
+            // value to reappear with the new text appended. Use the native
+            // setter for the final value instead.
+            const written = await execInTab(chromeId, injectedSetFieldText, [
+              selector,
+              params.text,
+            ] as const);
+            if (written.found === false) {
+              throw codedError(
+                "REF_STALE",
+                `ref ${params.ref} no longer resolves in tab ${params.tab_id}`,
+              );
+            }
+            readBack = {
+              found: true,
+              content: written.content,
+              is_contenteditable: written.is_contenteditable,
+              active: true,
+            };
+          } else if (mode === "paste") {
+            // Bulk-assign via Input.insertText — fast for long strings,
+            // sufficient for normal textboxes and contenteditable.
+            await cdpType(cdp, chromeId, params.text);
+          } else {
+            // Per-char dispatchKeyEvent — necessary for canvas grids and
+            // keydown-gated editors (Sheets cells, Docs, Figma).
+            await cdpTypeKeystroke(cdp, chromeId, params.text);
+          }
+
+          const matchesExpected = (content: string): boolean => {
+            if (clearMode !== undefined) return content === params.text;
+            return params.text.length === 0 || content.includes(params.text);
+          };
+
+          readBack ??= await execInTab(chromeId, injectedReadFieldContent, [selector] as const);
+          if (readBack.found === false) {
+            throw codedError(
+              "REF_STALE",
+              `ref ${params.ref} no longer resolves in tab ${params.tab_id}`,
+            );
+          }
+          if (!matchesExpected(readBack.content)) {
+            const repaired = await execInTab(chromeId, injectedSetFieldText, [
+              selector,
+              clearMode !== undefined ? params.text : params.text,
+            ] as const);
+            if (repaired.found === false) {
+              throw codedError(
+                "REF_STALE",
+                `ref ${params.ref} no longer resolves in tab ${params.tab_id}`,
+              );
+            }
+            readBack = {
+              found: true,
+              content: repaired.content,
+              is_contenteditable: repaired.is_contenteditable,
+              active: true,
+            };
+          }
+          if (!matchesExpected(readBack.content)) {
+            throw codedError(
+              "WRITE_NOT_REFLECTED",
+              `typed ${params.text.length} characters via CDP but target content is ${JSON.stringify(readBack.content)}`,
+              {
+                next_action:
+                  "target-specific CDP typing and setter repair both failed — re-read the element and fall back to browser_execute_js for this control",
+                diagnostic: {
+                  ref: params.ref,
+                  tab_id: params.tab_id,
+                  selector,
+                  role: ref.role,
+                  mode,
+                  clear_mode: clearMode,
+                  expected_text: params.text,
+                  observed_content: readBack.content,
+                  active_after_type: readBack.active,
+                  is_contenteditable: readBack.is_contenteditable,
+                  escalated_to_cdp: escalated,
+                },
+              },
+            );
+          }
+
+          if (submit) {
+            await cdpPress(cdp, chromeId, "Enter", {
               ctrl: false,
               alt: false,
               shift: false,
               meta: false,
             });
-            if (mode === "paste") {
-              // Bulk-assign via Input.insertText — fast for long strings,
-              // sufficient for normal textboxes and contenteditable.
-              await cdpType(cdp, chromeId, params.text);
-            } else {
-              // Per-char dispatchKeyEvent — necessary for canvas grids and
-              // keydown-gated editors (Sheets cells, Docs, Figma).
-              await cdpTypeKeystroke(cdp, chromeId, params.text);
-            }
-            if (submit) {
-              await cdpPress(cdp, chromeId, "Enter", {
-                ctrl: false,
-                alt: false,
-                shift: false,
-                meta: false,
-              });
-            }
-            const r: { typed: number; mode: TypeMode; cleared?: boolean } = {
-              typed: params.text.length,
-              mode,
-            };
-            if (cleared !== undefined) r.cleared = cleared;
-            return r;
-          };
+          }
+          const r: TypeResult = { typed: params.text.length, mode };
+          if (cdpCleared !== undefined) r.cleared = cdpCleared;
+          if (escalated) r.escalated_to_cdp = true;
+          return r;
+        };
+
+        // Persistent CDP path: trusted type via Input.insertText.
+        if (cdp.isPersistent(chromeId)) {
+          const dispatch = async () => dispatchCdpTrusted(false);
           if (observeEffects) {
             const { result, effect } = await withEffectObservation(
               { chromeTabId: chromeId, windowMs: 300, networkTracker: network },
@@ -2759,13 +2958,6 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
           }
           cleared = clearRes.cleared;
         }
-
-        type TypeResult = {
-          typed: number;
-          mode: TypeMode;
-          cleared?: boolean;
-          escalated_to_cdp?: true;
-        };
 
         const dispatchSynthetic = async (): Promise<TypeResult> => {
           let res: { found: boolean; typed: number; reflected: number; content_verified?: boolean };
@@ -2903,45 +3095,7 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
                 },
               );
             }
-            const center = await execInTab(chromeId, injectedElementCenter, [selector] as const);
-            if (center === null) {
-              throw codedError(
-                "REF_STALE",
-                `ref ${params.ref} no longer resolves in tab ${params.tab_id}`,
-                {
-                  next_action:
-                    "element ref went stale during CDP escalation — call browser_quick_read again",
-                  diagnostic: {
-                    ref: params.ref,
-                    tab_id: params.tab_id,
-                    selector,
-                    stage: "type_cdp_rescue",
-                  },
-                },
-              );
-            }
-            await cdpClick(cdp, chromeId, center.x, center.y, "left", {
-              ctrl: false,
-              alt: false,
-              shift: false,
-              meta: false,
-            });
-            await cdpType(cdp, chromeId, params.text);
-            if (submit) {
-              await cdpPress(cdp, chromeId, "Enter", {
-                ctrl: false,
-                alt: false,
-                shift: false,
-                meta: false,
-              });
-            }
-            const out: TypeResult = {
-              typed: params.text.length,
-              mode,
-              escalated_to_cdp: true,
-            };
-            if (cleared !== undefined) out.cleared = cleared;
-            return out;
+            return dispatchCdpTrusted(true);
           }
         };
 

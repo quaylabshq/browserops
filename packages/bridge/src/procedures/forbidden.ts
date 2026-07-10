@@ -6,11 +6,7 @@
  * Centralised here so the resume path cannot bypass author-declared
  * safety bars.
  */
-import type {
-  ForbiddenDef,
-  Locator,
-  StepDef,
-} from "@browserops/shared";
+import type { ForbiddenDef, Locator, StepDef } from "@browserops/shared";
 import { matchString } from "./match-string.js";
 
 export interface ForbiddenCheckInput {
@@ -77,10 +73,11 @@ export function checkForbidden(
  *   - If `denied.role` is set and matches the candidate.role substring
  *     case-insensitively (or candidate.role is absent), proceed; else
  *     no overlap.
- *   - If `denied.name` is set, check candidate.name against denied.name
- *     using the same regex/substring rules the resolver uses. If the
- *     candidate's name pattern would match the denied pattern, refuse.
- *   - has_text / has_text_not are checked the same way.
+ *   - If a denied name-like field is set, check candidate name-like fields
+ *     against it using the same regex/substring rules the resolver uses.
+ *     If the candidate has no comparable text, keep the conservative
+ *     refusal because we cannot rule out overlap structurally.
+ *   - has_text is checked the same way.
  */
 function locatorOverlaps(denied: Locator, candidate: Locator): boolean {
   if (denied.role !== undefined && denied.role !== "") {
@@ -92,17 +89,29 @@ function locatorOverlaps(denied: Locator, candidate: Locator): boolean {
     }
   }
 
-  // name overlap
-  if (denied.name !== undefined && denied.name !== "") {
-    if (candidate.name !== undefined && candidate.name !== "") {
-      const overlap = patternsOverlap(denied.name, candidate.name);
+  // name-like overlap
+  const deniedNames = candidateNameLikePatterns(denied);
+  if (deniedNames.length > 0) {
+    const candidateNames = candidateNameLikePatterns(candidate);
+    if (candidateNames.length > 0) {
+      const overlap = deniedNames.some((deniedName) =>
+        candidateNames.some((name) => patternsOverlap(deniedName, name)),
+      );
       if (!overlap) return false;
     }
-    // If candidate has no name field, we can't rule out overlap — assume
-    // it might match and refuse.
+    // If candidate has no comparable text field, we can't rule out overlap
+    // — assume it might match and refuse.
   }
 
   return true;
+}
+
+function candidateNameLikePatterns(candidate: Locator): string[] {
+  const names: string[] = [];
+  for (const value of [candidate.name, candidate.aria_label, candidate.has_text]) {
+    if (typeof value === "string" && value !== "") names.push(value);
+  }
+  return names;
 }
 
 /**
