@@ -4,6 +4,7 @@ import {
   appendUserMessage,
   buildNewBody,
   chatBase,
+  collectToolActivity,
   initialChatState,
   ptyInputFrame,
   ptyResizeFrame,
@@ -107,6 +108,49 @@ describe("reduceChat", () => {
       { type: "end", reason: "x" },
     );
     expect(s.status).toBe("idle");
+  });
+});
+
+describe("collectToolActivity", () => {
+  it("collapses tool use and result into one completed browser action", () => {
+    const activity = collectToolActivity([
+      {
+        id: "call",
+        role: "assistant",
+        blocks: [
+          { kind: "tool_use", id: "tool-1", name: "browser_observe", input: { tab_id: "t1" } },
+        ],
+      },
+      {
+        id: "result",
+        role: "tool",
+        blocks: [{ kind: "tool_result", id: "tool-1", ok: true, preview: "Page inspected" }],
+      },
+    ]);
+    expect(activity).toMatchObject({ active: false, completed: 1 });
+    expect(activity.items).toEqual([
+      expect.objectContaining({
+        id: "tool-1",
+        label: "Inspecting the page",
+        active: false,
+        ok: true,
+        result: "Page inspected",
+      }),
+    ]);
+  });
+
+  it("keeps an incomplete call live for the animated activity banner", () => {
+    const activity = collectToolActivity([
+      {
+        id: "call",
+        role: "assistant",
+        blocks: [
+          { kind: "tool_use", id: "tool-2", name: "browser_type", input: { text: "hello" } },
+        ],
+      },
+    ]);
+    expect(activity).toMatchObject({ active: true, completed: 0 });
+    expect(activity.latest).toMatchObject({ label: "Typing", active: true });
   });
 });
 

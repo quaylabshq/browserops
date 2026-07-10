@@ -2,6 +2,7 @@ import {
   HeadlessProcessDriver,
   type BuildArgsInput,
   type HeadlessProcessDriverDeps,
+  type NormalizeContext,
   type NormalizedLine,
   type ProcessDriverState,
 } from "../process-driver.js";
@@ -42,7 +43,7 @@ export class CodexDriver extends HeadlessProcessDriver {
     return buildCodexArgs({ ...input, legacyFullAuto: this.legacyFullAuto });
   }
 
-  protected normalizeLine(raw: unknown): NormalizedLine {
+  protected normalizeLine(raw: unknown, _context: NormalizeContext): NormalizedLine {
     return codexLineToEvents(raw);
   }
 

@@ -93,7 +93,7 @@ function nativeSessionId(o: Record<string, unknown>): string | undefined {
   return undefined;
 }
 
-export function cursorLineToEvents(raw: unknown): NormalizedLine {
+export function cursorLineToEvents(raw: unknown, turnId?: string): NormalizedLine {
   const o = asObject(raw);
   if (!o) return { events: [] };
   const type = asString(o["type"]);
@@ -104,11 +104,12 @@ export function cursorLineToEvents(raw: unknown): NormalizedLine {
   if (type === "assistant") {
     const text = textFromEvent(o);
     if (text.trim()) {
+      const partial = o["timestamp_ms"] !== undefined;
       const message: ChatMessage = {
-        id: eventId(o, "cursor-assistant"),
+        id: partial && turnId ? `${turnId}-assistant` : eventId(o, "cursor-assistant"),
         role: "assistant",
         blocks: [{ kind: "text", text }],
-        ...(o["timestamp_ms"] !== undefined ? { partial: true } : {}),
+        ...(partial ? { partial: true } : {}),
       };
       events.push({ type: "message", message });
     }
@@ -139,7 +140,7 @@ export function cursorLineToEvents(raw: unknown): NormalizedLine {
       events.push({
         type: "message",
         message: {
-          id: eventId(o, "cursor-result"),
+          id: turnId ? `${turnId}-assistant` : eventId(o, "cursor-result"),
           role: "assistant",
           blocks: [{ kind: "text", text }],
         },

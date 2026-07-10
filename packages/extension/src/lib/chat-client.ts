@@ -77,6 +77,102 @@ export interface ChatState {
   capabilities: ChatSessionCapabilities;
 }
 
+export interface ToolActivityItem {
+  id: string;
+  name: string;
+  label: string;
+  input?: string;
+  result?: string;
+  ok?: boolean;
+  active: boolean;
+}
+
+export interface ToolActivity {
+  items: ToolActivityItem[];
+  active: boolean;
+  completed: number;
+  latest?: ToolActivityItem;
+}
+
+function compactToolValue(value: unknown, cap = 360): string {
+  let text: string;
+  if (typeof value === "string") text = value;
+  else {
+    try {
+      text = JSON.stringify(value);
+    } catch {
+      text = String(value);
+    }
+  }
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.length > cap ? flat.slice(0, cap) + "…" : flat;
+}
+
+export function friendlyToolLabel(name: string): string {
+  const clean = name.replace(/^mcp__browserops(?:__|_)?/, "").replace(/^browser_/, "");
+  const labels: Record<string, string> = {
+    observe: "Inspecting the page",
+    read: "Reading page details",
+    quick_read: "Finding page controls",
+    navigate: "Navigating",
+    click: "Clicking a control",
+    click_at: "Clicking the page",
+    click_by_text: "Selecting text",
+    type: "Typing",
+    press: "Using the keyboard",
+    hover: "Inspecting a menu",
+    screenshot: "Capturing the page",
+    execute_js: "Running a page action",
+  };
+  return labels[clean] ?? clean.replace(/[_-]+/g, " ").replace(/^./, (c) => c.toUpperCase());
+}
+
+/** Collapse provider-specific tool blocks into one panel-level activity feed. */
+export function collectToolActivity(messages: readonly ChatMessage[]): ToolActivity {
+  const items: ToolActivityItem[] = [];
+  const byId = new Map<string, ToolActivityItem>();
+  for (const message of messages) {
+    for (const block of message.blocks) {
+      if (block.kind === "tool_use") {
+        const item: ToolActivityItem = {
+          id: block.id,
+          name: block.name,
+          label: friendlyToolLabel(block.name),
+          input: compactToolValue(block.input),
+          active: true,
+        };
+        items.push(item);
+        byId.set(block.id, item);
+      } else if (block.kind === "tool_result") {
+        const item = byId.get(block.id);
+        if (item) {
+          item.active = false;
+          item.ok = block.ok;
+          item.result = compactToolValue(block.preview);
+        } else {
+          const orphan: ToolActivityItem = {
+            id: block.id,
+            name: "browser_action",
+            label: "Browser action",
+            result: compactToolValue(block.preview),
+            ok: block.ok,
+            active: false,
+          };
+          items.push(orphan);
+          byId.set(block.id, orphan);
+        }
+      }
+    }
+  }
+  const activeItems = items.filter((item) => item.active);
+  return {
+    items,
+    active: activeItems.length > 0,
+    completed: items.length - activeItems.length,
+    latest: activeItems.at(-1) ?? items.at(-1),
+  };
+}
+
 export function initialChatState(): ChatState {
   return {
     messages: [],

@@ -18,6 +18,7 @@ import {
   chatSessions,
   chatTerminal,
   chatUpdateSettings,
+  collectToolActivity,
   grabPageMeta,
   initialChatState,
   reduceChat,
@@ -77,6 +78,8 @@ let tokenCache: string | null = null;
 let systemSeq = 0;
 let savedChatSettings: ChatSettings | undefined;
 let agentAvailabilityById = new Map<string, boolean>();
+let toolActivityExpanded = false;
+let toolActivitySessionId: string | undefined;
 
 function sessionCaps(value: {
   capabilities?: ChatState["capabilities"];
@@ -160,24 +163,111 @@ function oneLine(text: string, cap = 140): string {
   return flat.length > cap ? flat.slice(0, cap) + "…" : flat;
 }
 
-function renderBlocks(parent: HTMLElement, message: ChatMessage): void {
+function renderBlocks(parent: HTMLElement, message: ChatMessage): boolean {
+  let rendered = false;
   for (const b of message.blocks) {
+    // Tool activity is rendered once, below the conversation, rather than as
+    // a chain of raw provider events interleaved with assistant prose.
+    if (b.kind === "tool_use" || b.kind === "tool_result") continue;
     const el = document.createElement("div");
     if (b.kind === "text") {
       el.className = "block-text";
       el.textContent = b.text;
+      rendered = true;
     } else if (b.kind === "thinking") {
       el.className = "block-thinking";
       el.textContent = b.text;
-    } else if (b.kind === "tool_use") {
-      el.className = "tool-chip";
-      el.textContent = `▸ ${b.name}`;
-    } else {
-      el.className = `tool-chip tool-chip--${b.ok ? "ok" : "err"}`;
-      el.textContent = `${b.ok ? "✓" : "✗"} ${oneLine(b.preview)}`;
+      rendered = true;
     }
     parent.appendChild(el);
   }
+  return rendered;
+}
+
+function renderToolActivity(): HTMLElement | undefined {
+  const activity = collectToolActivity(state.messages);
+  if (activity.items.length === 0) return undefined;
+  const sessionId = state.session?.sessionId;
+  if (sessionId !== toolActivitySessionId) {
+    toolActivitySessionId = sessionId;
+    toolActivityExpanded = false;
+  }
+
+  const working = activity.active || (state.status === "thinking" && !state.ejected);
+  const latest = activity.latest;
+  const banner = document.createElement("section");
+  banner.className = `tool-activity${working ? " tool-activity--working" : ""}`;
+
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "tool-activity-toggle";
+  toggle.setAttribute("aria-expanded", String(toolActivityExpanded));
+  toggle.title = toolActivityExpanded ? "Hide browser activity" : "Show browser activity";
+  toggle.addEventListener("click", () => {
+    toolActivityExpanded = !toolActivityExpanded;
+    render();
+  });
+
+  const indicator = document.createElement("span");
+  indicator.className = "tool-activity-indicator";
+  indicator.setAttribute("aria-hidden", "true");
+  toggle.appendChild(indicator);
+
+  const copy = document.createElement("span");
+  copy.className = "tool-activity-copy";
+  const title = document.createElement("strong");
+  title.textContent = working
+    ? (latest?.label ?? "Working in the browser")
+    : `${activity.completed} browser action${activity.completed === 1 ? "" : "s"} completed`;
+  const detail = document.createElement("span");
+  detail.textContent = working
+    ? `${activity.items.length} action${activity.items.length === 1 ? "" : "s"} in this response · live`
+    : "Select to review actions";
+  copy.append(title, detail);
+  toggle.appendChild(copy);
+
+  const count = document.createElement("span");
+  count.className = "tool-activity-count";
+  count.textContent = `${toolActivityExpanded ? "−" : "+"} ${activity.items.length}`;
+  toggle.appendChild(count);
+  banner.appendChild(toggle);
+
+  if (toolActivityExpanded) {
+    const details = document.createElement("div");
+    details.className = "tool-activity-details";
+    for (const item of activity.items) {
+      const row = document.createElement("article");
+      row.className = `tool-activity-item${item.active ? " tool-activity-item--active" : ""}`;
+      const heading = document.createElement("div");
+      heading.className = "tool-activity-item-head";
+      const label = document.createElement("strong");
+      label.textContent = item.label;
+      const outcome = document.createElement("span");
+      outcome.textContent = item.active
+        ? "Running"
+        : item.ok === false
+          ? "Needs attention"
+          : "Done";
+      outcome.className = item.active ? "is-running" : item.ok === false ? "is-error" : "is-done";
+      heading.append(label, outcome);
+      row.appendChild(heading);
+      if (item.input) {
+        const input = document.createElement("div");
+        input.className = "tool-activity-detail";
+        input.textContent = `Input · ${oneLine(item.input, 260)}`;
+        row.appendChild(input);
+      }
+      if (item.result) {
+        const result = document.createElement("div");
+        result.className = "tool-activity-detail";
+        result.textContent = `Result · ${oneLine(item.result, 320)}`;
+        row.appendChild(result);
+      }
+      details.appendChild(row);
+    }
+    banner.appendChild(details);
+  }
+  return banner;
 }
 
 function render(): void {
@@ -195,14 +285,16 @@ function render(): void {
   showSettingsBtn.hidden = view === "terminal";
 
   // Conversation.
-  for (const node of transcriptEl.querySelectorAll(".msg, .thinking-dots")) node.remove();
+  for (const node of transcriptEl.querySelectorAll(".msg, .thinking-dots, .tool-activity"))
+    node.remove();
   emptyEl.hidden = state.messages.length > 0;
   for (const m of state.messages) {
     const bubble = document.createElement("div");
-    bubble.className = `msg msg--${m.role}`;
-    renderBlocks(bubble, m);
-    transcriptEl.appendChild(bubble);
+    bubble.className = `msg msg--${m.role}${m.partial ? " msg--streaming" : ""}`;
+    if (renderBlocks(bubble, m)) transcriptEl.appendChild(bubble);
   }
+  const activity = renderToolActivity();
+  if (activity) transcriptEl.appendChild(activity);
   if (state.status === "thinking" && !state.ejected) {
     const dots = document.createElement("div");
     dots.className = "thinking-dots";

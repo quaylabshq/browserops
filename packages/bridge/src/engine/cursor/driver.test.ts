@@ -69,4 +69,22 @@ describe("cursorLineToEvents", () => {
       message: { id: "cursor-tool-result-t1", role: "tool" },
     });
   });
+
+  it("keeps Cursor partial output in one assistant bubble for a turn", () => {
+    const partial = cursorLineToEvents(
+      { type: "assistant", timestamp_ms: 1, message: { content: [{ text: "hel" }] } },
+      "turn-1",
+    );
+    const complete = cursorLineToEvents({ type: "result", result: "hello" }, "turn-1");
+    expect(partial.events[0]).toMatchObject({
+      type: "message",
+      message: { id: "turn-1-assistant", partial: true },
+    });
+    expect(complete.events[0]).toMatchObject({
+      type: "message",
+      message: { id: "turn-1-assistant" },
+    });
+    const final = complete.events[0];
+    expect(final?.type === "message" ? final.message.partial : undefined).toBeUndefined();
+  });
 });

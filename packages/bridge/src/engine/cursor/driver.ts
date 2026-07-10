@@ -2,6 +2,7 @@ import {
   HeadlessProcessDriver,
   type BuildArgsInput,
   type HeadlessProcessDriverDeps,
+  type NormalizeContext,
   type NormalizedLine,
   type ProcessDriverState,
 } from "../process-driver.js";
@@ -33,8 +34,8 @@ export class CursorDriver extends HeadlessProcessDriver {
     return buildCursorArgs(input);
   }
 
-  protected normalizeLine(raw: unknown): NormalizedLine {
-    return cursorLineToEvents(raw);
+  protected normalizeLine(raw: unknown, context: NormalizeContext): NormalizedLine {
+    return cursorLineToEvents(raw, context.turnId);
   }
 
   protected override async buildTurnPrompt(

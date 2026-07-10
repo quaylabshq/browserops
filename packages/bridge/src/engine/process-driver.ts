@@ -54,6 +54,11 @@ export interface NormalizedLine {
   nativeSessionId?: string;
 }
 
+/** Stable turn context lets a provider normalize partial output into one UI message. */
+export interface NormalizeContext {
+  turnId: string;
+}
+
 export interface ProcessDriverState {
   ref: SessionRef;
   systemPrompt: string;
@@ -207,7 +212,7 @@ export abstract class HeadlessProcessDriver implements AgentDriver {
   }
 
   protected abstract buildArgs(input: BuildArgsInput): string[];
-  protected abstract normalizeLine(raw: unknown): NormalizedLine;
+  protected abstract normalizeLine(raw: unknown, context: NormalizeContext): NormalizedLine;
 
   protected async buildTurnPrompt(
     state: ProcessDriverState,
@@ -286,6 +291,7 @@ export abstract class HeadlessProcessDriver implements AgentDriver {
 
     const userMessage = this.userMessage(state, displayText);
     this.dispatch(state, { type: "message", message: userMessage });
+    const turnId = `${state.ref.sessionId}-turn-${state.turnSeq}`;
 
     const prompt = await this.buildTurnPrompt(state, text, first);
     const args = this.buildArgs({
@@ -307,6 +313,7 @@ export abstract class HeadlessProcessDriver implements AgentDriver {
       args,
       state,
       signal: state.abort.signal,
+      turnId,
       onStderr: (chunk) => {
         stderr += chunk;
       },
@@ -342,6 +349,7 @@ export abstract class HeadlessProcessDriver implements AgentDriver {
     args: readonly string[];
     state: ProcessDriverState;
     signal: AbortSignal;
+    turnId: string;
     onStderr: (chunk: string) => void;
   }): Promise<number> {
     const spawn = this.spawn ?? (nodeSpawn as unknown as SpawnLike);
@@ -382,7 +390,7 @@ export abstract class HeadlessProcessDriver implements AgentDriver {
           while ((nl = buf.indexOf("\n")) >= 0) {
             const line = buf.slice(0, nl);
             buf = buf.slice(nl + 1);
-            this.emitLine(params.state, line);
+            this.emitLine(params.state, line, params.turnId);
           }
         });
       }
@@ -401,13 +409,13 @@ export abstract class HeadlessProcessDriver implements AgentDriver {
         done(-1);
       });
       child.on("close", (code) => {
-        if (buf.trim().length > 0) this.emitLine(params.state, buf);
+        if (buf.trim().length > 0) this.emitLine(params.state, buf, params.turnId);
         done(code ?? 0);
       });
     });
   }
 
-  private emitLine(state: ProcessDriverState, line: string): void {
+  private emitLine(state: ProcessDriverState, line: string, turnId: string): void {
     const trimmed = line.trim();
     if (!trimmed) return;
     let raw: unknown;
@@ -416,7 +424,7 @@ export abstract class HeadlessProcessDriver implements AgentDriver {
     } catch {
       return;
     }
-    const normal = this.normalizeLine(raw);
+    const normal = this.normalizeLine(raw, { turnId });
     if (normal.nativeSessionId && state.ref.nativeSessionId === undefined) {
       state.ref.nativeSessionId = normal.nativeSessionId;
       for (const listener of this.sessionUpdateListeners) {
