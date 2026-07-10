@@ -139,6 +139,103 @@ describe("procedure execute — strict mode", () => {
     expect(textReads.length).toBeGreaterThanOrEqual(1);
   });
 
+  it("substitutes inputs inside step expect predicates", async () => {
+    await writeYaml("shared/input_expect/procedure.yaml", {
+      schema_version: 1,
+      name: "input.expect",
+      description: "input expect substitution",
+      kind: "leaf",
+      inputs: {
+        marker: { type: "string", required: true },
+      },
+      steps: [
+        {
+          id: "go",
+          do: "navigate",
+          with: { url: "https://example.com" },
+          expect: {
+            text_visible: "Saved {{input.marker}}",
+            timeout_ms: 100,
+            poll_interval_ms: 50,
+          },
+        },
+      ],
+    });
+
+    const ws = stubWsBridge([
+      {
+        method: "browser_navigate",
+        response: { final_url: "https://example.com", page_effect: emptyPageEffect() },
+      },
+      {
+        method: "browser_read",
+        response: {
+          content: "Saved alpha-1",
+          url: "https://example.com",
+          title: "Example",
+        },
+      },
+    ]);
+
+    const exec = makeProcedureExecutor(ws);
+    const result = await exec({
+      name: "input.expect",
+      tab_id: "t_1",
+      inputs: { marker: "alpha-1" },
+    });
+
+    expect(result.completed).toBe(true);
+  });
+
+  it("substitutes inputs inside top-level verify predicates", async () => {
+    await writeYaml("shared/input_verify/procedure.yaml", {
+      schema_version: 1,
+      name: "input.verify",
+      description: "input verify substitution",
+      kind: "leaf",
+      inputs: {
+        marker: { type: "string", required: true },
+      },
+      verify: {
+        text_visible: "Done {{marker}}",
+        timeout_ms: 100,
+        poll_interval_ms: 50,
+      },
+      steps: [
+        {
+          id: "go",
+          do: "navigate",
+          with: { url: "https://example.com" },
+        },
+      ],
+    });
+
+    const ws = stubWsBridge([
+      {
+        method: "browser_navigate",
+        response: { final_url: "https://example.com", page_effect: emptyPageEffect() },
+      },
+      {
+        method: "browser_read",
+        response: {
+          content: "Done beta-1",
+          url: "https://example.com",
+          title: "Example",
+        },
+      },
+    ]);
+
+    const exec = makeProcedureExecutor(ws);
+    const result = await exec({
+      name: "input.verify",
+      tab_id: "t_1",
+      inputs: { marker: "beta-1" },
+    });
+
+    expect(result.completed).toBe(true);
+    expect(result.verify_passed).toBe(true);
+  });
+
   it("auto-primes the ref-cache via browser_read before every locator step", async () => {
     // Two-step procedure so we can assert the prime fires twice.
     await writeYaml("shared/auto_prime/procedure.yaml", {
@@ -235,6 +332,97 @@ describe("procedure execute — strict mode", () => {
     expect(result.completed).toBe(true);
     const clickCall = ws.calls.find((c) => c.method === "browser_click");
     expect(clickCall?.params["ref"]).toBe(7);
+  });
+
+  it("accumulates locator health across repeated executions", async () => {
+    await writeYaml("shared/health_accum/procedure.yaml", {
+      schema_version: 1,
+      name: "health.accum",
+      description: "health accumulation demo",
+      kind: "leaf",
+      steps: [
+        {
+          id: "s1",
+          do: "click",
+          locator: { role: "button", name: "Compose" },
+        },
+      ],
+    });
+
+    const ws = stubWsBridge([
+      {
+        method: "browser_locate",
+        response: {
+          matches: [{ ref: 7, role: "button", name: "Compose", selector: "#x" }],
+          used_snapshot: "current",
+        },
+      },
+      {
+        method: "browser_click",
+        response: { clicked: true, page_effect: emptyPageEffect() },
+      },
+      {
+        method: "browser_locate",
+        response: {
+          matches: [{ ref: 7, role: "button", name: "Compose", selector: "#x" }],
+          used_snapshot: "current",
+        },
+      },
+      {
+        method: "browser_click",
+        response: { clicked: true, page_effect: emptyPageEffect() },
+      },
+    ]);
+    const exec = makeProcedureExecutor(ws);
+
+    await expect(exec({ name: "health.accum", tab_id: "t_1", inputs: {} })).resolves.toMatchObject({
+      completed: true,
+    });
+    await expect(exec({ name: "health.accum", tab_id: "t_1", inputs: {} })).resolves.toMatchObject({
+      completed: true,
+    });
+
+    const yamlText = await fs.readFile(
+      path.join(tmpDir, "shared/health_accum/procedure.yaml"),
+      "utf8",
+    );
+    const parsed = YAML.parse(yamlText);
+    expect(parsed.meta.health.steps.s1.runs).toBe(2);
+    expect(parsed.meta.health.steps.s1.relocates).toBe(0);
+    expect(parsed.meta.health.steps.s1.target_changed).toBe(0);
+  });
+
+  it("halts before dispatch when browser_locate returns an invalid ref", async () => {
+    await writeYaml("shared/bad_ref/procedure.yaml", {
+      schema_version: 1,
+      name: "bad.ref",
+      description: "bad ref demo",
+      kind: "leaf",
+      steps: [
+        {
+          id: "s1",
+          do: "click",
+          locator: { role: "button", name: "Compose" },
+        },
+      ],
+    });
+
+    const ws = stubWsBridge([
+      {
+        method: "browser_locate",
+        response: {
+          matches: [{ ref: 0, role: "button", name: "Compose", selector: "#x" }],
+          used_snapshot: "current",
+        },
+      },
+    ]);
+    const exec = makeProcedureExecutor(ws);
+    const result = await exec({ name: "bad.ref", tab_id: "t_1", inputs: {} });
+
+    expect(result.completed).toBe(false);
+    expect(result.status).toBe("halted");
+    expect(result.divergence?.reason).toMatch(/invalid ref/);
+    expect(ws.calls.some((c) => c.method === "browser_click")).toBe(false);
   });
 
   it("halts on locator miss with divergence info", async () => {

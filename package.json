@@ -1,6 +1,6 @@
 {
   "name": "@browserops/monorepo",
-  "version": "0.0.11",
+  "version": "0.0.12",
   "private": true,
   "description": "MCP server that drives a live Chrome browser profile",
   "license": "MIT",
