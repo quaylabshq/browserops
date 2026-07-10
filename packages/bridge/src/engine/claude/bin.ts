@@ -29,6 +29,26 @@ let cachedBin: string | null | undefined;
 let cachedEnv: NodeJS.ProcessEnv | undefined;
 
 /**
+ * A daemon can itself be started from inside Claude Code. Passing these markers
+ * to the panel's Claude child makes it look like a nested/child session; recent
+ * Claude builds then skip or misplace the new session transcript, which makes
+ * `claude --resume <panel-session-id>` fail during takeover.
+ */
+const INHERITED_SESSION_ENV = [
+  "CLAUDECODE",
+  "CLAUDE_CODE_ENTRYPOINT",
+  "CLAUDE_CODE_SESSION_ID",
+  "CLAUDE_CODE_CHILD_SESSION",
+  "CLAUDE_EFFORT",
+] as const;
+
+export function stripClaudeSessionEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const clean = { ...env };
+  for (const key of INHERITED_SESSION_ENV) delete clean[key];
+  return clean;
+}
+
+/**
  * Absolute path to `claude`, or null if it can't be found. Tries the daemon's
  * own PATH first, then a login shell.
  */
@@ -73,7 +93,7 @@ export function resolveLoginEnv(): NodeJS.ProcessEnv {
       /* ignore */
     }
   }
-  cachedEnv = { ...process.env, PATH: path };
+  cachedEnv = stripClaudeSessionEnv({ ...process.env, PATH: path });
   return cachedEnv;
 }
 

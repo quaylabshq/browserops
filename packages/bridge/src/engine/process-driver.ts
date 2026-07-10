@@ -64,6 +64,7 @@ export interface ProcessDriverState {
   mirrorPath: string;
   listeners: Set<ChatEventListener>;
   events: ChatEvent[];
+  partialMessages: Map<string, ChatMessage>;
   queue: Promise<void>;
   abort?: AbortController;
   turnSeq: number;
@@ -87,6 +88,8 @@ export interface BuildArgsInput {
   cwd: string;
   first: boolean;
   nativeSessionId?: string;
+  model?: string;
+  reasoningEffort?: string;
 }
 
 export abstract class HeadlessProcessDriver implements AgentDriver {
@@ -102,6 +105,7 @@ export abstract class HeadlessProcessDriver implements AgentDriver {
   private readonly buildPrompt: (page: ChatPageContext, instruction?: string) => string;
   private readonly logger?: Logger;
   private readonly sessions = new Map<string, ProcessDriverState>();
+  private readonly sessionUpdateListeners = new Set<(ref: SessionRef) => void>();
 
   constructor(id: AgentId, binName: string, deps: HeadlessProcessDriverDeps = {}) {
     this.id = id;
@@ -118,7 +122,9 @@ export abstract class HeadlessProcessDriver implements AgentDriver {
 
   async start(opts: StartOpts): Promise<SessionRef> {
     if (!this.bin) throw new EngineError("agent_not_found");
-    const sessionId = this.randomUUID();
+    // The manager supplies a private driver handle. The public BrowserOps
+    // conversation id never reaches provider process state.
+    const sessionId = opts.sessionId ?? this.randomUUID();
     const cwd = opts.cwd ?? workspaceDir();
     const title = (opts.instruction ?? opts.page.title ?? "New chat").trim().slice(0, 80);
     const ref: SessionRef = {
@@ -131,6 +137,9 @@ export abstract class HeadlessProcessDriver implements AgentDriver {
       ...(opts.migrationSourceAgent !== undefined
         ? { migrationSourceAgent: opts.migrationSourceAgent }
         : {}),
+      ...(opts.model !== undefined ? { model: opts.model } : {}),
+      ...(opts.reasoningEffort !== undefined ? { reasoningEffort: opts.reasoningEffort } : {}),
+      ...(opts.nativeSessionId !== undefined ? { nativeSessionId: opts.nativeSessionId } : {}),
     };
     const state = this.makeState(ref, opts.safeMode ?? false);
     this.sessions.set(sessionId, state);
@@ -142,7 +151,11 @@ export abstract class HeadlessProcessDriver implements AgentDriver {
     const seed = [state.systemPrompt, visibleSeed]
       .filter((part) => part.trim().length > 0)
       .join("\n\n");
-    void this.enqueue(state, () => this.runTurn(state, seed, true, visibleSeed)).catch(() => {});
+    const displaySeed =
+      opts.migratedFrom !== undefined
+        ? `Continue conversation migrated from ${opts.migrationSourceAgent ?? "another agent"}.`
+        : visibleSeed;
+    void this.enqueue(state, () => this.runTurn(state, seed, true, displaySeed)).catch(() => {});
     return ref;
   }
 
@@ -184,6 +197,15 @@ export abstract class HeadlessProcessDriver implements AgentDriver {
     return { ...DEFAULT_CHAT_SESSION_CAPABILITIES };
   }
 
+  availability(): { available: boolean; reason?: string } {
+    return this.bin ? { available: true } : { available: false, reason: "agent_not_found" };
+  }
+
+  onSessionUpdated(listener: (ref: SessionRef) => void): Unsubscribe {
+    this.sessionUpdateListeners.add(listener);
+    return () => this.sessionUpdateListeners.delete(listener);
+  }
+
   protected abstract buildArgs(input: BuildArgsInput): string[];
   protected abstract normalizeLine(raw: unknown): NormalizedLine;
 
@@ -219,6 +241,7 @@ export abstract class HeadlessProcessDriver implements AgentDriver {
       mirrorPath: join(this.chatDir, `${ref.sessionId}.mirror.log`),
       listeners: new Set(),
       events: [],
+      partialMessages: new Map(),
       queue: Promise.resolve(),
       turnSeq: 0,
     };
@@ -272,6 +295,10 @@ export abstract class HeadlessProcessDriver implements AgentDriver {
       first,
       ...(state.ref.nativeSessionId !== undefined
         ? { nativeSessionId: state.ref.nativeSessionId }
+        : {}),
+      ...(state.ref.model !== undefined ? { model: state.ref.model } : {}),
+      ...(state.ref.reasoningEffort !== undefined
+        ? { reasoningEffort: state.ref.reasoningEffort }
         : {}),
     });
     state.abort = new AbortController();
@@ -392,24 +419,65 @@ export abstract class HeadlessProcessDriver implements AgentDriver {
     const normal = this.normalizeLine(raw);
     if (normal.nativeSessionId && state.ref.nativeSessionId === undefined) {
       state.ref.nativeSessionId = normal.nativeSessionId;
+      for (const listener of this.sessionUpdateListeners) {
+        try {
+          listener(state.ref);
+        } catch {
+          /* index persistence must not interrupt the live stream */
+        }
+      }
     }
     for (const event of normal.events) this.dispatch(state, event);
   }
 
   private dispatch(state: ProcessDriverState, event: ChatEvent): void {
-    state.events.push(event);
+    const normalized = this.coalescePartial(state, event);
+    state.events.push(normalized);
     if (state.events.length > EVENT_BUFFER_CAP) state.events.shift();
-    const line = mirrorEventLine(event);
+    const line = mirrorEventLine(normalized);
     if (line) void appendMirror(state.mirrorPath, line);
-    if (event.type === "message") {
-      void appendBrowserTranscriptMessage(state.ref.sessionId, event.message, this.chatDir);
+    if (normalized.type === "message") {
+      void appendBrowserTranscriptMessage(state.ref.sessionId, normalized.message, this.chatDir);
     }
     for (const listener of state.listeners) {
       try {
-        listener(event);
+        listener(normalized);
       } catch {
         /* listener failure must not break the others */
       }
     }
+  }
+
+  /** Turn provider delta fragments into stable message snapshots for the panel. */
+  private coalescePartial(state: ProcessDriverState, event: ChatEvent): ChatEvent {
+    if (event.type !== "message") return event;
+    const message = event.message;
+    if (!message.partial) {
+      state.partialMessages.delete(message.id);
+      return event;
+    }
+    const prior = state.partialMessages.get(message.id);
+    const priorText =
+      prior?.blocks
+        .filter(
+          (block): block is Extract<ChatMessage["blocks"][number], { kind: "text" }> =>
+            block.kind === "text",
+        )
+        .map((block) => block.text)
+        .join("") ?? "";
+    const delta = message.blocks
+      .filter(
+        (block): block is Extract<ChatMessage["blocks"][number], { kind: "text" }> =>
+          block.kind === "text",
+      )
+      .map((block) => block.text)
+      .join("");
+    const merged: ChatMessage = {
+      ...message,
+      blocks: [{ kind: "text", text: priorText + delta }],
+      partial: true,
+    };
+    state.partialMessages.set(message.id, merged);
+    return { type: "message", message: merged };
   }
 }

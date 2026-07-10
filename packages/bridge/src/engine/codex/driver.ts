@@ -8,19 +8,25 @@ import {
 import { codexLineToEvents } from "./normalize.js";
 
 export interface CodexDriverDeps extends HeadlessProcessDriverDeps {
-  /** Test/compat seam for older Codex builds that only support --full-auto. */
+  /** Reserved for legacy builds; current arguments are intentionally capability-safe. */
   legacyFullAuto?: boolean;
 }
 
 export function buildCodexArgs(input: BuildArgsInput & { legacyFullAuto?: boolean }): string[] {
   const args = ["exec"];
-  if (!input.first && input.nativeSessionId) args.push("resume", input.nativeSessionId);
-  args.push("--json", "--skip-git-repo-check", "--sandbox", "workspace-write");
-  if (!input.safeMode) {
-    if (input.legacyFullAuto) args.push("--full-auto");
-    else args.push("--ask-for-approval", "never");
+  const resuming = !input.first && input.nativeSessionId !== undefined;
+  if (resuming) args.push("resume", input.nativeSessionId!);
+  // Current Codex resume accepts a smaller flag surface than initial exec:
+  // no sandbox, working-directory, or old ask-for-approval flags.
+  if (input.model) args.push("--model", input.model);
+  if (input.reasoningEffort) {
+    args.push("-c", 'model_reasoning_effort="' + input.reasoningEffort + '"');
   }
-  args.push("-C", input.cwd, "--", input.prompt);
+  args.push("--json", "--skip-git-repo-check");
+  if (!resuming) {
+    args.push("--sandbox", "workspace-write", "-C", input.cwd);
+  }
+  args.push("--", input.prompt);
   return args;
 }
 

@@ -55,7 +55,7 @@ import {
   type SubmitOptions,
 } from "./pty.js";
 import { TranscriptTailer } from "./tail.js";
-import { loadHistory } from "./transcript.js";
+import { findTranscriptPath, loadHistory } from "./transcript.js";
 
 const EVENT_BUFFER_CAP = 4000;
 const DEFAULT_ALLOWED_TOOLS = "mcp__browserops";
@@ -140,12 +140,14 @@ export class ClaudePtyDriver implements AgentDriver, TerminalAttachable {
     if (!this.bin) throw new EngineError("claude_not_found");
     const spawner = this.spawner ?? (await this.loadSpawner());
 
-    const sessionId = this.randomUUID();
+    const sessionId = opts.sessionId ?? this.randomUUID();
+    const nativeSessionId = opts.nativeSessionId ?? sessionId;
     const cwd = opts.cwd ?? workspaceDir();
     const title = (opts.instruction ?? opts.page.title ?? "New chat").trim().slice(0, 80);
     const ref: SessionRef = {
       agent: "claude",
       sessionId,
+      nativeSessionId,
       cwd,
       createdAt: this.now(),
       ...(title ? { title } : {}),
@@ -153,6 +155,8 @@ export class ClaudePtyDriver implements AgentDriver, TerminalAttachable {
       ...(opts.migrationSourceAgent !== undefined
         ? { migrationSourceAgent: opts.migrationSourceAgent }
         : {}),
+      ...(opts.model !== undefined ? { model: opts.model } : {}),
+      ...(opts.reasoningEffort !== undefined ? { reasoningEffort: opts.reasoningEffort } : {}),
     };
     await this.ensureWorkspace(cwd);
 
@@ -181,7 +185,7 @@ export class ClaudePtyDriver implements AgentDriver, TerminalAttachable {
     state.session = session;
     session.onExit((e) => this.onExit(state, e));
 
-    const tailer = new TranscriptTailer(sessionId, cwd, (ev) => this.dispatch(state, ev), {
+    const tailer = new TranscriptTailer(nativeSessionId, cwd, (ev) => this.dispatch(state, ev), {
       ...(this.projectsRoot !== undefined ? { projectsRoot: this.projectsRoot } : {}),
       ...(this.tailerOpts.pollMs !== undefined ? { pollMs: this.tailerOpts.pollMs } : {}),
       ...(this.tailerOpts.quiescenceMs !== undefined
@@ -221,7 +225,7 @@ export class ClaudePtyDriver implements AgentDriver, TerminalAttachable {
   }
 
   async history(ref: SessionRef): Promise<ChatMessage[]> {
-    const native = await loadHistory(ref.sessionId, {
+    const native = await loadHistory(ref.nativeSessionId ?? ref.sessionId, {
       cwd: ref.cwd,
       ...(this.projectsRoot ? { projectsRoot: this.projectsRoot } : {}),
     });
@@ -278,6 +282,18 @@ export class ClaudePtyDriver implements AgentDriver, TerminalAttachable {
     };
   }
 
+  availability(): { available: boolean; reason?: string } {
+    return this.bin ? { available: true } : { available: false, reason: "claude_not_found" };
+  }
+
+  async canTakeover(ref: SessionRef): Promise<{ ok: true } | { ok: false; error: string }> {
+    const path = await findTranscriptPath(ref.nativeSessionId ?? ref.sessionId, {
+      cwd: ref.cwd,
+      ...(this.projectsRoot ? { projectsRoot: this.projectsRoot } : {}),
+    });
+    return path ? { ok: true } : { ok: false, error: "session_not_persisted" };
+  }
+
   // --- internals ------------------------------------------------------------
 
   private async loadSpawner(): Promise<PtySpawner> {
@@ -301,12 +317,14 @@ export class ClaudePtyDriver implements AgentDriver, TerminalAttachable {
     // (non-safe) is the defensible middle ground; safe mode prompts in the pane.
     const args = [
       "--session-id",
-      state.ref.sessionId,
+      state.ref.nativeSessionId ?? state.ref.sessionId,
       "--permission-mode",
       state.safeMode ? "default" : "acceptEdits",
     ];
     if (!state.safeMode && this.allowedTools) args.push("--allowedTools", this.allowedTools);
     args.push("--append-system-prompt", state.systemPrompt);
+    if (state.ref.model) args.push("--model", state.ref.model);
+    if (state.ref.reasoningEffort) args.push("--effort", state.ref.reasoningEffort);
     return args;
   }
 

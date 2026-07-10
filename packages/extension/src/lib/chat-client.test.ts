@@ -3,6 +3,7 @@ import type { ChatEvent, ChatMessage } from "@browserops/shared";
 import {
   appendUserMessage,
   buildNewBody,
+  chatBase,
   initialChatState,
   ptyInputFrame,
   ptyResizeFrame,
@@ -133,6 +134,12 @@ describe("streamUrl", () => {
     const url = streamUrl("tok en", "s/1");
     expect(url).toContain("/chat/stream?token=tok%20en");
     expect(url).toContain("session_id=s%2F1");
+  });
+});
+
+describe("chatBase", () => {
+  it("uses the paired host and port rather than assuming the default loopback port", () => {
+    expect(chatBase({ host: "localhost", port: 9876 })).toBe("http://localhost:9876");
   });
 });
 

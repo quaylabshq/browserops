@@ -23,15 +23,18 @@ import { Safety } from "./safety.js";
 import { TabRegistry, type TabRecord } from "./tab-registry.js";
 import { loadOrCreateToken } from "./token.js";
 import { loadPinnedExtensionId, persistPinnedExtensionId } from "./extension-pin.js";
-import { join } from "node:path";
 import { WSBridge, type ChatService } from "./ws-server.js";
 import { launchAgent, openSessionTerminal } from "./launch-agent.js";
 import { ChatEngine } from "./engine/manager.js";
 import { createChatEngineDrivers } from "./engine/factory.js";
-import { chatDir } from "./paths.js";
 import { ensureIndex } from "./procedures/index-builder.js";
 import { proceduresRoot } from "./procedures/paths.js";
-import { loadChatTransport, loadConfigFeatures } from "./config.js";
+import {
+  loadChatSettings,
+  loadChatTransport,
+  loadConfigFeatures,
+  updateChatSettings,
+} from "./config.js";
 
 export interface DaemonRuntime {
   version: string;
@@ -128,18 +131,38 @@ export async function bootDaemonRuntime(opts: BootDaemonRuntimeOptions): Promise
   });
   await logger.write({ dir: "system", event: "chat_transport", transport: chatTransport });
   const chatService: ChatService = {
-    start: (params) =>
-      chatEngine.start({
-        agent: params.agent as AgentId,
+    start: async (params) => {
+      const settings = await loadChatSettings();
+      const agent = params.agent as AgentId;
+      return chatEngine.start({
+        agent,
         page: params.page,
+        safeMode: settings.safeMode,
+        ...(settings.models[agent] ? { model: settings.models[agent] } : {}),
+        ...(settings.reasoningEfforts[agent]
+          ? { reasoningEffort: settings.reasoningEfforts[agent] }
+          : {}),
         ...(params.instruction !== undefined ? { instruction: params.instruction } : {}),
-      }),
+      });
+    },
     send: (sessionId, text) => chatEngine.send(sessionId, text),
     subscribe: (sessionId, listener) => chatEngine.subscribe(sessionId, listener),
     history: (sessionId) => chatEngine.history(sessionId),
     listSessions: () => chatEngine.listSessions(),
     capabilities: (sessionId) => chatEngine.capabilities(sessionId),
-    migrate: (sessionId, targetAgent) => chatEngine.migrate(sessionId, targetAgent),
+    migrate: async (sessionId, targetAgent) => {
+      const settings = await loadChatSettings();
+      return chatEngine.migrate(sessionId, targetAgent, {
+        safeMode: settings.safeMode,
+        ...(settings.models[targetAgent] ? { model: settings.models[targetAgent] } : {}),
+        ...(settings.reasoningEfforts[targetAgent]
+          ? { reasoningEffort: settings.reasoningEfforts[targetAgent] }
+          : {}),
+      });
+    },
+    settings: () => loadChatSettings(),
+    updateSettings: (update) => updateChatSettings(update),
+    agents: () => Promise.resolve(chatEngine.agentStatuses()),
     terminal: async (sessionId, mode) => {
       const meta = await chatEngine.getSession(sessionId);
       if (!meta) return { ok: false, error: "unknown_session" };
@@ -147,13 +170,23 @@ export async function bootDaemonRuntime(opts: BootDaemonRuntimeOptions): Promise
       if (mode === "takeover" && !caps.externalTakeover) {
         return { ok: false, error: "pty_unavailable" };
       }
+      if (mode === "takeover") {
+        const ready = await chatEngine.canTakeover(sessionId);
+        if (!ready.ok) return ready;
+      }
       // Takeover hands the session to an interactive terminal, so the engine
       // must let go first — one writer at a time. eject() prefers the driver's
       // relinquish (the pty transport keeps a live read-only transcript mirror);
       // mirror mode is read-only and leaves the engine driving.
       if (mode === "takeover") await chatEngine.eject(sessionId);
+      const target = await chatEngine.terminalTarget(sessionId);
       const result = await openSessionTerminal(
-        { mode, sessionId, cwd: meta.cwd, mirrorPath: join(chatDir(), `${sessionId}.mirror.log`) },
+        {
+          mode,
+          sessionId: target.sessionId,
+          cwd: target.cwd,
+          mirrorPath: target.mirrorPath,
+        },
         logger,
       );
       return result.ok ? { ok: true } : { ok: false, error: result.error };

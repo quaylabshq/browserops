@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   appendBrowserTranscriptMessage,
+  formatMessagesForProvider,
   formatMessagesForPrompt,
   readBrowserTranscript,
 } from "./transcript.js";
@@ -51,5 +52,34 @@ describe("BrowserOps transcript", () => {
         },
       ]),
     ).toContain("assistant: [tool_use:read]");
+  });
+
+  it("keeps the newest context when a migration prompt is capped", () => {
+    const first = "a".repeat(18_000);
+    const newest = "newest user request";
+    const out = formatMessagesForPrompt(
+      [
+        { id: "old", role: "assistant", blocks: [{ kind: "text", text: first }] },
+        { id: "new", role: "user", blocks: [{ kind: "text", text: newest }] },
+      ],
+      100,
+    );
+    expect(out).toContain(newest);
+    expect(out).toContain("earlier transcript omitted");
+  });
+
+  it("does not project hidden reasoning into a different provider", () => {
+    const out = formatMessagesForProvider([
+      {
+        id: "a",
+        role: "assistant",
+        blocks: [
+          { kind: "thinking", text: "private chain of thought" },
+          { kind: "text", text: "visible answer" },
+        ],
+      },
+    ]);
+    expect(out).toContain("visible answer");
+    expect(out).not.toContain("private chain of thought");
   });
 });

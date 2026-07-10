@@ -16,7 +16,16 @@
  */
 import { promises as fs } from "node:fs";
 import { dirname } from "node:path";
-import { ENV, type FeatureName, parseFeaturesEnv, resolveFeatures } from "@browserops/shared";
+import {
+  DEFAULT_CHAT_SETTINGS,
+  canChatAgent,
+  type AgentId,
+  type ChatSettings,
+  ENV,
+  type FeatureName,
+  parseFeaturesEnv,
+  resolveFeatures,
+} from "@browserops/shared";
 import { configPath } from "./paths.js";
 
 /**
@@ -48,6 +57,49 @@ interface ConfigFileShape {
   safe_mode?: boolean;
   /** In-panel chat transport. See {@link ChatTransport}. */
   chat_transport?: ChatTransport;
+  /** Sidebar chat defaults. These are deliberately separate from CLI launchers. */
+  chat_default_agent?: AgentId;
+  chat_models?: Partial<Record<AgentId, string>>;
+  chat_reasoning_efforts?: Partial<Record<AgentId, string>>;
+}
+
+function asAgentStringMap(value: unknown): Partial<Record<AgentId, string>> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return {};
+  const out: Partial<Record<AgentId, string>> = {};
+  for (const [key, raw] of Object.entries(value)) {
+    if (canChatAgent(key) && typeof raw === "string" && raw.trim().length > 0) {
+      out[key] = raw.trim().slice(0, 160);
+    }
+  }
+  return out;
+}
+
+function chatSettingsFromFile(file: ConfigFileShape | null): ChatSettings {
+  const defaultAgent = file?.chat_default_agent;
+  return {
+    defaultAgent:
+      defaultAgent && canChatAgent(defaultAgent)
+        ? defaultAgent
+        : DEFAULT_CHAT_SETTINGS.defaultAgent,
+    models: asAgentStringMap(file?.chat_models),
+    reasoningEfforts: asAgentStringMap(file?.chat_reasoning_efforts),
+    safeMode: file?.safe_mode === true,
+    transport: isChatTransport(file?.chat_transport)
+      ? file.chat_transport
+      : DEFAULT_CHAT_SETTINGS.transport,
+  };
+}
+
+async function readConfigFile(path: string): Promise<ConfigFileShape | null> {
+  try {
+    const raw = await fs.readFile(path, "utf8");
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as ConfigFileShape)
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 export interface FeatureResolution {
@@ -123,6 +175,52 @@ export async function loadChatTransport(path: string = configPath()): Promise<Ch
     // ENOENT, parse error, or anything else → default.
   }
   return "terminal";
+}
+
+/** Read non-secret sidebar chat preferences from the shared BrowserOps config. */
+export async function loadChatSettings(path: string = configPath()): Promise<ChatSettings> {
+  return chatSettingsFromFile(await readConfigFile(path));
+}
+
+/**
+ * Persist a validated partial settings update. Transport is written for the
+ * next daemon boot; model/default/safety settings are read for every new chat.
+ */
+export async function updateChatSettings(
+  updates: Partial<ChatSettings>,
+  path: string = configPath(),
+): Promise<ChatSettings> {
+  const current = (await readConfigFile(path)) ?? {};
+  const previous = chatSettingsFromFile(current);
+  const next: ChatSettings = {
+    defaultAgent:
+      updates.defaultAgent && canChatAgent(updates.defaultAgent)
+        ? updates.defaultAgent
+        : previous.defaultAgent,
+    models: updates.models === undefined ? previous.models : asAgentStringMap(updates.models),
+    reasoningEfforts:
+      updates.reasoningEfforts === undefined
+        ? previous.reasoningEfforts
+        : asAgentStringMap(updates.reasoningEfforts),
+    safeMode: updates.safeMode === undefined ? previous.safeMode : updates.safeMode === true,
+    transport:
+      updates.transport !== undefined && isChatTransport(updates.transport)
+        ? updates.transport
+        : previous.transport,
+  };
+  const out: ConfigFileShape = {
+    ...current,
+    safe_mode: next.safeMode,
+    chat_transport: next.transport,
+    chat_default_agent: next.defaultAgent,
+    chat_models: next.models,
+    chat_reasoning_efforts: next.reasoningEfforts,
+  };
+  await fs.mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  const tmp = `${path}.${process.pid}.tmp`;
+  await fs.writeFile(tmp, JSON.stringify(out, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
+  await fs.rename(tmp, path);
+  return next;
 }
 
 /**

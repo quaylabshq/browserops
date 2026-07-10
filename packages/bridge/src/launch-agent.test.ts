@@ -335,7 +335,7 @@ describe("session terminal scripts", () => {
     expect(normal).toContain("cd '/work'");
     expect(normal).toContain("command -v claude");
     expect(normal).toContain(
-      "exec claude --permission-mode acceptEdits --allowedTools mcp__browserops --resume 'sess-123'",
+      "exec env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT -u CLAUDE_CODE_SESSION_ID -u CLAUDE_CODE_CHILD_SESSION -u CLAUDE_EFFORT claude --permission-mode acceptEdits --allowedTools mcp__browserops --resume 'sess-123'",
     );
     expect(normal).not.toContain("dangerously-skip-permissions");
 
@@ -346,7 +346,9 @@ describe("session terminal scripts", () => {
       binary: "claude",
       scriptPath: "/d/x.command",
     });
-    expect(safe).toContain("exec claude --permission-mode default --resume 'sess-123'");
+    expect(safe).toContain(
+      "exec env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT -u CLAUDE_CODE_SESSION_ID -u CLAUDE_CODE_CHILD_SESSION -u CLAUDE_EFFORT claude --permission-mode default --resume 'sess-123'",
+    );
     expect(safe).not.toContain("dangerously-skip-permissions");
   });
 

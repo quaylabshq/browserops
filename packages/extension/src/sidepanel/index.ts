@@ -1,18 +1,29 @@
 export {};
 
-import { AGENTS, DEFAULT_AGENT_ID, type ChatEvent, type ChatMessage } from "@browserops/shared";
+import {
+  AGENTS,
+  DEFAULT_AGENT_ID,
+  type ChatEvent,
+  type ChatMessage,
+  type ChatSettings,
+} from "@browserops/shared";
 import {
   appendUserMessage,
+  chatAgents,
   chatHistory,
+  chatMigrate,
   chatNew,
   chatSend,
+  chatSettings,
   chatSessions,
   chatTerminal,
+  chatUpdateSettings,
   grabPageMeta,
   initialChatState,
   reduceChat,
   statusLabel,
   streamUrl,
+  type ChatEndpoint,
   type ChatState,
   type PageMeta,
   type SessionSummary,
@@ -41,15 +52,31 @@ const messageEl = $<HTMLTextAreaElement>("message");
 const sendBtn = $<HTMLButtonElement>("send");
 const panelEl = $<HTMLDivElement>("panel");
 const termHost = $<HTMLDivElement>("terminal-host");
+const showSettingsBtn = $<HTMLButtonElement>("show-settings");
+const closeSettingsBtn = $<HTMLButtonElement>("close-settings");
+const settingsPane = $<HTMLElement>("settings-pane");
+const settingsForm = $<HTMLFormElement>("settings-form");
+const settingsToken = $<HTMLInputElement>("settings-token");
+const settingsHost = $<HTMLInputElement>("settings-host");
+const settingsPort = $<HTMLInputElement>("settings-port");
+const settingsAgent = $<HTMLSelectElement>("settings-agent");
+const settingsModel = $<HTMLInputElement>("settings-model");
+const settingsEffort = $<HTMLInputElement>("settings-effort");
+const settingsSafeMode = $<HTMLInputElement>("settings-safe-mode");
+const settingsTransport = $<HTMLSelectElement>("settings-transport");
+const settingsSaved = $<HTMLSpanElement>("settings-saved");
+const agentAvailability = $<HTMLDivElement>("agent-availability");
 
 let selectedAgent: string = DEFAULT_AGENT_ID;
 let connected = false;
 let state: ChatState = initialChatState();
 let stream: EventSource | null = null;
 let terminal: EmbeddedTerminal | null = null;
-let view: "chat" | "terminal" = "chat";
+let view: "chat" | "terminal" | "settings" = "chat";
 let tokenCache: string | null = null;
 let systemSeq = 0;
+let savedChatSettings: ChatSettings | undefined;
+let agentAvailabilityById = new Map<string, boolean>();
 
 function sessionCaps(value: {
   capabilities?: ChatState["capabilities"];
@@ -75,6 +102,14 @@ async function getToken(): Promise<string | null> {
   return tokenCache;
 }
 
+async function getEndpoint(): Promise<ChatEndpoint> {
+  const local = await chrome.storage.local.get({ host: "127.0.0.1", port: 57321 });
+  return {
+    host: typeof local["host"] === "string" ? local["host"] : "127.0.0.1",
+    port: typeof local["port"] === "number" ? local["port"] : 57321,
+  };
+}
+
 // --- agent picker -----------------------------------------------------------
 
 function renderAgents(): void {
@@ -92,14 +127,22 @@ function renderAgents(): void {
       note.textContent = a.note;
       chip.appendChild(note);
     }
-    if (a.caps.chat) chip.addEventListener("click", () => selectAgent(a.id));
-    else chip.disabled = true;
+    if (a.caps.chat && agentAvailabilityById.get(a.id) !== false) {
+      chip.addEventListener("click", () => selectAgent(a.id));
+    } else {
+      chip.disabled = true;
+      if (agentAvailabilityById.get(a.id) === false) chip.title = "CLI unavailable";
+    }
     agentsEl.appendChild(chip);
   }
   syncAgentSelection();
 }
 
 function selectAgent(id: string): void {
+  if (state.session && state.session.agent !== id) {
+    void migrateSession(id);
+    return;
+  }
   selectedAgent = id;
   syncAgentSelection();
 }
@@ -147,6 +190,9 @@ function render(): void {
     closeTerminal();
   }
   panelEl.classList.toggle("view-terminal", view === "terminal");
+  panelEl.classList.toggle("view-settings", view === "settings");
+  settingsPane.hidden = view !== "settings";
+  showSettingsBtn.hidden = view === "terminal";
 
   // Conversation.
   for (const node of transcriptEl.querySelectorAll(".msg, .thinking-dots")) node.remove();
@@ -197,7 +243,7 @@ function pushSystem(text: string): void {
 async function loadSessions(): Promise<void> {
   const token = await getToken();
   if (!token) return;
-  renderSessions(await chatSessions(token));
+  renderSessions(await chatSessions(token, await getEndpoint()));
 }
 
 function renderSessions(sessions: SessionSummary[]): void {
@@ -219,23 +265,25 @@ function renderSessions(sessions: SessionSummary[]): void {
 async function openSession(summary: SessionSummary): Promise<void> {
   const token = await getToken();
   if (!token) return;
+  const endpoint = await getEndpoint();
   closeStream();
   closeTerminal();
   state = reduceChat(initialChatState(), { type: "session", ref: summary });
   state = { ...state, capabilities: sessionCaps(summary) };
   render();
-  const history = await chatHistory(token, summary.sessionId);
+  const history = await chatHistory(token, summary.sessionId, endpoint);
   state = { ...state, messages: history };
   render();
-  openStream(token, summary.sessionId);
+  openStream(token, summary.sessionId, endpoint);
   await loadSessions();
 }
 
 // --- live stream ------------------------------------------------------------
 
-function openStream(token: string, sessionId: string): void {
+function openStream(token: string, sessionId: string, endpoint: ChatEndpoint): void {
   closeStream();
-  stream = new EventSource(streamUrl(token, sessionId));
+  const expectedSession = sessionId;
+  stream = new EventSource(streamUrl(token, sessionId, endpoint));
   stream.onmessage = (e: MessageEvent<string>) => {
     let event: ChatEvent;
     try {
@@ -243,8 +291,21 @@ function openStream(token: string, sessionId: string): void {
     } catch {
       return;
     }
+    // A delayed callback from a closed EventSource must never contaminate a
+    // newly selected conversation.
+    if (state.session?.sessionId !== expectedSession) return;
     state = reduceChat(state, event);
     render();
+  };
+  stream.onerror = () => {
+    // EventSource retries automatically. Reconcile durable history once so a
+    // daemon restart or bounded replay buffer cannot silently lose messages.
+    void chatHistory(token, expectedSession, endpoint).then((history) => {
+      if (state.session?.sessionId === expectedSession && history.length > 0) {
+        state = { ...state, messages: history };
+        render();
+      }
+    });
   };
 }
 
@@ -316,12 +377,33 @@ function renderConnection(isConnected: boolean): void {
   statusPill.className = `pill ${isConnected ? "pill--on" : "pill--off"}`;
   disconnectedEl.style.display = isConnected ? "none" : "block";
   render();
-  if (isConnected) void loadSessions();
+  if (isConnected) {
+    void loadSessions();
+    void loadAgentAvailability();
+  }
 }
 
 async function refreshConnection(): Promise<void> {
   const local = await chrome.storage.local.get("connected");
   renderConnection(local["connected"] === true);
+}
+
+async function loadChatDefaults(): Promise<void> {
+  const token = await getToken();
+  if (!token) return;
+  const settings = await chatSettings(token, await getEndpoint());
+  if (!settings) return;
+  savedChatSettings = settings;
+  selectedAgent = settings.defaultAgent;
+  syncAgentSelection();
+}
+
+async function loadAgentAvailability(): Promise<void> {
+  const token = await getToken();
+  if (!token) return;
+  const statuses = await chatAgents(token, await getEndpoint());
+  agentAvailabilityById = new Map(statuses.map((status) => [status.agent, status.available]));
+  renderAgents();
 }
 
 // --- send -------------------------------------------------------------------
@@ -341,10 +423,11 @@ async function sendMessage(): Promise<void> {
     pushSystem("Run setup first (no token).");
     return;
   }
+  const endpoint = await getEndpoint();
 
   if (!state.session) {
     const meta = await capturePageMeta();
-    const res = await chatNew({ token, agent: selectedAgent, instruction: text, meta });
+    const res = await chatNew({ token, agent: selectedAgent, instruction: text, meta, endpoint });
     if (!res.ok || !res.session) {
       state = { ...state, status: "idle" };
       pushSystem(newError(res.status, res.error));
@@ -352,11 +435,11 @@ async function sendMessage(): Promise<void> {
     }
     state = reduceChat(state, { type: "session", ref: res.session });
     state = { ...state, capabilities: sessionCaps(res) };
-    openStream(token, res.session.sessionId);
+    openStream(token, res.session.sessionId, endpoint);
     render();
     await loadSessions();
   } else {
-    const res = await chatSend(token, state.session.sessionId, text);
+    const res = await chatSend(token, state.session.sessionId, text, endpoint);
     if (!res.ok) {
       state = { ...state, status: "idle" };
       pushSystem(sendError(res.status, res.error));
@@ -380,6 +463,148 @@ function sendError(status: number, error?: string): string {
   return "Couldn't send that message.";
 }
 
+// --- migration --------------------------------------------------------------
+
+async function migrateSession(targetAgent: string): Promise<void> {
+  const source = state.session;
+  if (!source || source.agent === targetAgent) {
+    selectedAgent = targetAgent;
+    syncAgentSelection();
+    return;
+  }
+  const token = await getToken();
+  if (!token) {
+    pushSystem("Run setup first (no token).");
+    return;
+  }
+  state = { ...state, status: "thinking" };
+  render();
+  const endpoint = await getEndpoint();
+  const result = await chatMigrate({
+    token,
+    sessionId: source.sessionId,
+    targetAgent,
+    endpoint,
+  });
+  if (!result.ok || !result.session) {
+    state = { ...state, status: "idle" };
+    pushSystem("Couldn't switch this conversation to that agent.");
+    return;
+  }
+  closeStream();
+  closeTerminal();
+  selectedAgent = targetAgent;
+  state = reduceChat(initialChatState(), { type: "session", ref: result.session });
+  const canonicalHistory = await chatHistory(token, result.session.sessionId, endpoint);
+  state = {
+    ...state,
+    capabilities: sessionCaps(result),
+    messages: canonicalHistory,
+  };
+  openStream(token, result.session.sessionId, endpoint);
+  render();
+  await loadSessions();
+}
+
+// --- settings ---------------------------------------------------------------
+
+function ensureSettingsAgents(): void {
+  if (settingsAgent.options.length > 0) return;
+  for (const agent of AGENTS.filter((a) => a.caps.chat)) {
+    const option = document.createElement("option");
+    option.value = agent.id;
+    option.textContent = agent.label;
+    settingsAgent.appendChild(option);
+  }
+}
+
+function syncInferenceInputs(): void {
+  const agent = settingsAgent.value;
+  settingsModel.value = savedChatSettings?.models[agent as keyof ChatSettings["models"]] ?? "";
+  settingsEffort.value =
+    savedChatSettings?.reasoningEfforts[agent as keyof ChatSettings["reasoningEfforts"]] ?? "";
+}
+
+function renderAgentAvailability(agents: Awaited<ReturnType<typeof chatAgents>>): void {
+  agentAvailability.replaceChildren();
+  for (const status of agents) {
+    const line = document.createElement("div");
+    line.textContent = `${status.agent}: ${status.available ? "available" : (status.reason ?? "unavailable")}`;
+    if (!status.available) line.className = "unavailable";
+    agentAvailability.appendChild(line);
+  }
+}
+
+async function openSettings(): Promise<void> {
+  closeTerminal();
+  view = "settings";
+  ensureSettingsAgents();
+  const local = await chrome.storage.local.get({ token: "", host: "127.0.0.1", port: 57321 });
+  settingsToken.value = typeof local["token"] === "string" ? local["token"] : "";
+  settingsHost.value = typeof local["host"] === "string" ? local["host"] : "127.0.0.1";
+  settingsPort.value = String(typeof local["port"] === "number" ? local["port"] : 57321);
+  const token = await getToken();
+  const endpoint = await getEndpoint();
+  savedChatSettings = token ? await chatSettings(token, endpoint) : undefined;
+  if (savedChatSettings) {
+    settingsAgent.value = savedChatSettings.defaultAgent;
+    settingsSafeMode.checked = savedChatSettings.safeMode;
+    settingsTransport.value = savedChatSettings.transport;
+    selectedAgent = savedChatSettings.defaultAgent;
+    syncAgentSelection();
+  }
+  syncInferenceInputs();
+  renderAgentAvailability(token ? await chatAgents(token, endpoint) : []);
+  render();
+}
+
+async function saveSettings(): Promise<void> {
+  const port = Number.parseInt(settingsPort.value, 10);
+  const endpoint: ChatEndpoint = {
+    host: settingsHost.value.trim() || "127.0.0.1",
+    port: Number.isFinite(port) && port > 0 ? port : 57321,
+  };
+  const nextToken = settingsToken.value.trim();
+  await chrome.storage.local.set({ token: nextToken, host: endpoint.host, port: endpoint.port });
+  tokenCache = nextToken || null;
+  chrome.runtime.sendMessage({ type: "reconnect" }).catch(() => {});
+  if (!nextToken) {
+    settingsSaved.textContent = "Connection saved";
+    return;
+  }
+  const models = { ...(savedChatSettings?.models ?? {}) } as Record<string, string>;
+  const efforts = { ...(savedChatSettings?.reasoningEfforts ?? {}) } as Record<string, string>;
+  const selected = settingsAgent.value;
+  const model = settingsModel.value.trim();
+  const effort = settingsEffort.value.trim();
+  if (model) models[selected] = model;
+  else delete models[selected];
+  if (effort) efforts[selected] = effort;
+  else delete efforts[selected];
+  const updated = await chatUpdateSettings(
+    nextToken,
+    {
+      defaultAgent: selected,
+      safeMode: settingsSafeMode.checked,
+      transport: settingsTransport.value as "terminal" | "headless",
+      models,
+      reasoningEfforts: efforts,
+    },
+    endpoint,
+  );
+  if (!updated) {
+    settingsSaved.textContent = "Bridge settings could not be saved";
+    return;
+  }
+  savedChatSettings = updated;
+  selectedAgent = updated.defaultAgent;
+  syncAgentSelection();
+  settingsSaved.textContent = "Saved";
+  window.setTimeout(() => {
+    settingsSaved.textContent = "";
+  }, 1600);
+}
+
 // --- terminal affordances ---------------------------------------------------
 
 // ▤ Terminal: a full-window VIEW toggle. The panel shows EITHER the chat OR a
@@ -400,11 +625,17 @@ async function setView(next: "chat" | "terminal"): Promise<void> {
     pushSystem("Run setup first (no token).");
     return;
   }
+  const endpoint = await getEndpoint();
   view = "terminal";
   render(); // applies .view-terminal first so the pane is laid out at full size
   try {
     const { mountTerminal } = await import("../lib/pty-terminal.js");
-    terminal = mountTerminal({ container: termHost, token, sessionId: state.session.sessionId });
+    terminal = mountTerminal({
+      container: termHost,
+      token,
+      sessionId: state.session.sessionId,
+      endpoint,
+    });
     requestAnimationFrame(() => terminal?.fit());
   } catch {
     closeTerminal();
@@ -438,9 +669,13 @@ async function takeoverTerminal(): Promise<void> {
     pushSystem("Run setup first (no token).");
     return;
   }
-  const res = await chatTerminal(token, state.session.sessionId, "takeover");
+  const res = await chatTerminal(token, state.session.sessionId, "takeover", await getEndpoint());
   if (!res.ok) {
-    pushSystem("Couldn't open the terminal.");
+    pushSystem(
+      res.error === "session_not_persisted"
+        ? "This Claude chat has not been persisted yet, so it cannot be taken over safely."
+        : "Couldn't open the terminal.",
+    );
     return;
   }
   closeTerminal(); // leave the embedded terminal view; you drive in the external one now
@@ -481,6 +716,16 @@ termMirrorBtn.addEventListener("click", () => {
   void setView(view === "terminal" ? "chat" : "terminal");
 });
 termTakeoverBtn.addEventListener("click", () => void takeoverTerminal());
+showSettingsBtn.addEventListener("click", () => void openSettings());
+closeSettingsBtn.addEventListener("click", () => {
+  view = "chat";
+  render();
+});
+settingsAgent.addEventListener("change", syncInferenceInputs);
+settingsForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  void saveSettings();
+});
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;
@@ -496,3 +741,5 @@ renderAgents();
 render();
 void refreshConnection();
 void refreshContext();
+void loadChatDefaults();
+void loadAgentAvailability();

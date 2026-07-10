@@ -3,7 +3,7 @@ import { buildCodexArgs } from "./driver.js";
 import { codexLineToEvents } from "./normalize.js";
 
 describe("CodexDriver args", () => {
-  it("uses JSON, workspace-write sandbox, and modern approval bypass by default", () => {
+  it("uses only flags supported by the current initial Codex exec contract", () => {
     expect(
       buildCodexArgs({
         prompt: "do it",
@@ -17,8 +17,6 @@ describe("CodexDriver args", () => {
       "--skip-git-repo-check",
       "--sandbox",
       "workspace-write",
-      "--ask-for-approval",
-      "never",
       "-C",
       "/w",
       "--",
@@ -26,7 +24,7 @@ describe("CodexDriver args", () => {
     ]);
   });
 
-  it("resumes when a native session id is known and omits approval override in safe mode", () => {
+  it("resumes with the intentionally smaller resume flag surface", () => {
     expect(
       buildCodexArgs({
         prompt: "next",
@@ -35,19 +33,7 @@ describe("CodexDriver args", () => {
         first: false,
         nativeSessionId: "native-1",
       }),
-    ).toEqual([
-      "exec",
-      "resume",
-      "native-1",
-      "--json",
-      "--skip-git-repo-check",
-      "--sandbox",
-      "workspace-write",
-      "-C",
-      "/w",
-      "--",
-      "next",
-    ]);
+    ).toEqual(["exec", "resume", "native-1", "--json", "--skip-git-repo-check", "--", "next"]);
   });
 });
 
@@ -68,14 +54,30 @@ describe("codexLineToEvents", () => {
     ]);
   });
 
-  it("normalizes result events into final text plus idle", () => {
+  it("normalizes result events into final text without treating a provider item as a turn lifecycle", () => {
     const out = codexLineToEvents({ type: "result", result: "done", id: "r1" });
     expect(out.events).toEqual([
       {
         type: "message",
         message: { id: "r1", role: "assistant", blocks: [{ kind: "text", text: "done" }] },
       },
-      { type: "status", state: "idle" },
+    ]);
+  });
+
+  it("treats a completed item as a message, not as an idle turn", () => {
+    const out = codexLineToEvents({
+      type: "item.completed",
+      item: { id: "agent-1", type: "agent_message", text: "stream complete" },
+    });
+    expect(out.events).toEqual([
+      {
+        type: "message",
+        message: {
+          id: "agent-1",
+          role: "assistant",
+          blocks: [{ kind: "text", text: "stream complete" }],
+        },
+      },
     ]);
   });
 });

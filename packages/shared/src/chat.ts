@@ -9,9 +9,9 @@
  * and the side-panel UI only ever see these normalized types, so neither
  * depends on any particular agent's wire protocol.
  *
- * Two feeds normalize into the same `ChatMessage`:
- *  - live: `--output-format stream-json` events streamed off the agent process;
- *  - history: the agent's own on-disk transcript, re-read by session id.
+ * Provider streams and native transcripts are ingress feeds. BrowserOps writes
+ * their normalized events to its own canonical session journal; provider
+ * transcripts are only a compatibility import / native-resume detail.
  */
 import type { AgentId } from "./agents.js";
 
@@ -45,13 +45,22 @@ export interface ChatMessage {
   partial?: boolean;
 }
 
-/** A started conversation, addressable by its native session id. */
+/**
+ * The public handle for a BrowserOps conversation. `sessionId` is minted by
+ * BrowserOps and never changes when the active inference provider changes.
+ */
 export interface SessionRef {
   agent: AgentId;
-  /** BrowserOps session id, usually also the native agent id when the CLI allows that. */
+  /** BrowserOps-owned stable conversation id. */
   sessionId: string;
-  /** Native agent session id when it differs from BrowserOps' stable id. */
+  /** Native id for the currently active provider binding, if it has one. */
   nativeSessionId?: string;
+  /** The active provider binding within this BrowserOps conversation. */
+  bindingId?: string;
+  /** Immutable model selected when this session was created. */
+  model?: string;
+  /** Immutable reasoning-effort selected when this session was created. */
+  reasoningEffort?: string;
   /** Working dir the agent ran in — needed to locate Claude's transcript. */
   cwd: string;
   title?: string;
@@ -60,6 +69,64 @@ export interface SessionRef {
   migratedFrom?: string;
   /** Source agent for a migrated session. */
   migrationSourceAgent?: AgentId;
+}
+
+/** Provider-local state attached to a canonical BrowserOps conversation. */
+export interface ChatProviderBinding {
+  id: string;
+  sessionId: string;
+  agent: AgentId;
+  /** Driver-local handle; may differ from the provider's eventual native id. */
+  driverSessionId: string;
+  nativeSessionId?: string;
+  cwd: string;
+  createdAt: number;
+  model?: string;
+  reasoningEffort?: string;
+  /** Only one writer may own a binding at a time. */
+  mode: "bridge" | "terminal" | "paused" | "stopped";
+  /** Last canonical event delivered to this provider projection. */
+  lastProjectedSequence: number;
+}
+
+export interface ChatEventMeta {
+  /** Monotonic BrowserOps event number, assigned by the canonical session store. */
+  sequence?: number;
+  /** Durable event id, useful when an SSE client reconnects. */
+  eventId?: string;
+}
+
+/**
+ * Persisted preferences for the in-panel chat engine. Provider credentials stay
+ * with the provider CLIs; this only stores non-secret routing preferences.
+ */
+export interface ChatSettings {
+  defaultAgent: AgentId;
+  /** Model override per provider. Omitted means use that provider's CLI default. */
+  models: Partial<Record<AgentId, string>>;
+  /** Optional per-provider reasoning effort accepted by the corresponding CLI. */
+  reasoningEfforts: Partial<Record<AgentId, string>>;
+  /** Restore normal provider approval prompts when true. */
+  safeMode: boolean;
+  /** Claude's panel transport. A change takes effect after a daemon restart. */
+  transport: "terminal" | "headless";
+}
+
+export const DEFAULT_CHAT_SETTINGS: ChatSettings = {
+  defaultAgent: "claude",
+  models: {},
+  reasoningEfforts: {},
+  safeMode: false,
+  transport: "terminal",
+};
+
+/** Runtime availability, surfaced before the panel lets a user choose an agent. */
+export interface ChatAgentStatus {
+  agent: AgentId;
+  available: boolean;
+  /** Installed CLI version when cheaply available; never a credential. */
+  version?: string;
+  reason?: string;
 }
 
 export interface ChatSessionCapabilities {
@@ -80,10 +147,10 @@ export type ChatStatusState = "starting" | "thinking" | "idle" | "ejected" | "er
 
 /** Server→client events streamed over SSE to the panel. */
 export type ChatEvent =
-  | { type: "session"; ref: SessionRef }
-  | { type: "message"; message: ChatMessage }
-  | { type: "status"; state: ChatStatusState; detail?: string }
-  | { type: "end"; reason: string };
+  | ({ type: "session"; ref: SessionRef } & ChatEventMeta)
+  | ({ type: "message"; message: ChatMessage } & ChatEventMeta)
+  | ({ type: "status"; state: ChatStatusState; detail?: string } & ChatEventMeta)
+  | ({ type: "end"; reason: string } & ChatEventMeta);
 
 /**
  * Lightweight context about the tab the user launched from. Sent with the first

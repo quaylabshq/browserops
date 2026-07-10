@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadChatTransport, loadSafeMode } from "./config.js";
+import { loadChatSettings, loadChatTransport, loadSafeMode, updateChatSettings } from "./config.js";
 
 describe("loadSafeMode", () => {
   let dir: string;
@@ -98,5 +98,50 @@ describe("loadChatTransport", () => {
     await fs.writeFile(path, JSON.stringify({ chat_transport: "headless" }));
     process.env[ENV] = "bogus";
     await expect(loadChatTransport(path)).resolves.toBe("headless");
+  });
+});
+
+describe("sidebar chat settings", () => {
+  let dir: string;
+  let path: string;
+
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(join(tmpdir(), "browserops-chat-settings-"));
+    path = join(dir, "config.json");
+  });
+
+  afterEach(async () => {
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("uses safe defaults and round-trips non-secret inference preferences", async () => {
+    await expect(loadChatSettings(path)).resolves.toMatchObject({
+      defaultAgent: "claude",
+      models: {},
+      safeMode: false,
+      transport: "terminal",
+    });
+    await expect(
+      updateChatSettings(
+        {
+          defaultAgent: "codex",
+          models: { codex: "gpt-5.6-terra" },
+          reasoningEfforts: { codex: "xhigh" },
+          safeMode: true,
+          transport: "headless",
+        },
+        path,
+      ),
+    ).resolves.toMatchObject({
+      defaultAgent: "codex",
+      models: { codex: "gpt-5.6-terra" },
+      reasoningEfforts: { codex: "xhigh" },
+      safeMode: true,
+      transport: "headless",
+    });
+    await expect(loadChatSettings(path)).resolves.toMatchObject({
+      defaultAgent: "codex",
+      models: { codex: "gpt-5.6-terra" },
+    });
   });
 });

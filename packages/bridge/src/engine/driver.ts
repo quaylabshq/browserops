@@ -3,9 +3,9 @@
  * Codex / Cursor later — implements this interface. Each does its own native
  * reading and sending (Claude speaks the `claude` CLI's stream-json protocol;
  * others will differ) and maps both directions onto the shared, agent-agnostic
- * ChatMessage / ChatEvent shapes. The ChatEngine and the HTTP/SSE surface only
- * ever see this interface, so adding an agent is a new driver file — nothing
- * upstream changes.
+ * ChatMessage / ChatEvent shapes. Drivers are translation adapters: the
+ * ChatEngine persists their normalized output in its BrowserOps-owned event
+ * journal, so adding an agent is a new driver file — nothing upstream changes.
  */
 import type {
   AgentId,
@@ -20,6 +20,10 @@ export type ChatEventListener = (event: ChatEvent) => void;
 export type Unsubscribe = () => void;
 
 export interface StartOpts {
+  /** BrowserOps-generated driver handle. This is never exposed as the public conversation id. */
+  sessionId?: string;
+  /** Requested native provider id when a CLI accepts one (Claude does). */
+  nativeSessionId?: string;
   /** The tab the user launched from; woven into the seed turn as context. */
   page: ChatPageContext;
   /** The user's first message. */
@@ -28,6 +32,10 @@ export interface StartOpts {
   cwd?: string;
   /** When true, omit auto-approve / danger flags. */
   safeMode?: boolean;
+  /** Provider model selected for this session. */
+  model?: string;
+  /** Provider-specific reasoning effort selected for this session. */
+  reasoningEffort?: string;
   migratedFrom?: string;
   migrationSourceAgent?: AgentId;
 }
@@ -49,7 +57,7 @@ export interface AgentDriver {
   /** Stream live events; replays any buffered events first. */
   subscribe(ref: SessionRef, listener: ChatEventListener): Unsubscribe;
 
-  /** Re-read the agent's own transcript into normalized messages. */
+  /** Legacy import / native-recovery fallback; never the canonical history source. */
   history(ref: SessionRef): Promise<ChatMessage[]>;
 
   /** Tear the session down completely (kill the process, end the stream). */
@@ -57,6 +65,15 @@ export interface AgentDriver {
 
   /** Per-session capabilities exposed to the side panel. */
   capabilities?(ref: SessionRef): ChatSessionCapabilities;
+
+  /** Whether the provider binary is usable before a session is started. */
+  availability?(): { available: boolean; version?: string; reason?: string };
+
+  /** Called when a provider discovers a native session/thread id asynchronously. */
+  onSessionUpdated?(listener: (ref: SessionRef) => void): Unsubscribe;
+
+  /** Validate that an interactive external takeover can resume this session. */
+  canTakeover?(ref: SessionRef): Promise<{ ok: true } | { ok: false; error: string }>;
 
   /**
    * Hand the session to an external terminal (the takeover eject): the driver

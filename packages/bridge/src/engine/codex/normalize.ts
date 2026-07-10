@@ -93,6 +93,80 @@ export function codexLineToEvents(raw: unknown): NormalizedLine {
   const subtype = asString(o["subtype"]);
   const native = nativeSessionId(o);
   const events: ChatEvent[] = [];
+  const item = asObject(o["item"]);
+  const itemType = asString(item?.["type"]);
+
+  // Codex exec --json emits the app-server item lifecycle. Item completion is
+  // not turn completion: a command/tool item can complete while the model is
+  // still working, so never emit idle here.
+  if (type === "item.completed" && item) {
+    if (itemType === "agent_message" || itemType === "agentMessage") {
+      const text = extractText(item);
+      if (text.trim()) {
+        events.push({
+          type: "message",
+          message: {
+            id: eventId(item, "codex-assistant"),
+            role: "assistant",
+            blocks: [{ kind: "text", text }],
+          },
+        });
+      }
+    } else if (
+      itemType === "command_execution" ||
+      itemType === "commandExecution" ||
+      itemType === "mcp_tool_call" ||
+      itemType === "mcpToolCall"
+    ) {
+      events.push({
+        type: "message",
+        message: {
+          id: eventId(item, "codex-tool-result"),
+          role: "tool",
+          blocks: [toolResultBlock(item)],
+        },
+      });
+    }
+    return native ? { events, nativeSessionId: native } : { events };
+  }
+
+  if (
+    type === "item.agent_message.delta" ||
+    type === "item/agentMessage/delta" ||
+    type === "agent_message.delta"
+  ) {
+    const text = extractText(o);
+    if (text.trim()) {
+      events.push({
+        type: "message",
+        message: {
+          id: pickString(o, ["item_id", "itemId"]) ?? eventId(o, "codex-assistant"),
+          role: "assistant",
+          blocks: [{ kind: "text", text }],
+          partial: true,
+        },
+      });
+    }
+    return native ? { events, nativeSessionId: native } : { events };
+  }
+
+  if (
+    (type === "item.started" || type === "item/started") &&
+    item &&
+    (itemType === "command_execution" ||
+      itemType === "commandExecution" ||
+      itemType === "mcp_tool_call" ||
+      itemType === "mcpToolCall")
+  ) {
+    const block = toolBlock(item);
+    if (block) {
+      events.push({
+        type: "message",
+        message: { id: eventId(item, "codex-tool"), role: "assistant", blocks: [block] },
+      });
+    }
+    return native ? { events, nativeSessionId: native } : { events };
+  }
 
   if (type.includes("assistant") || type.includes("message") || type === "agent_message") {
     const text = extractText(o);
@@ -121,7 +195,7 @@ export function codexLineToEvents(raw: unknown): NormalizedLine {
         blocks: [toolResultBlock(asObject(o["tool_call"]) ?? o)],
       },
     });
-  } else if (type === "result" || type.endsWith(".completed") || type === "turn.completed") {
+  } else if (type === "result" || type === "turn.completed" || type === "turn/completed") {
     const text = extractText(o);
     if (text.trim()) {
       events.push({
@@ -133,7 +207,7 @@ export function codexLineToEvents(raw: unknown): NormalizedLine {
         },
       });
     }
-    events.push({ type: "status", state: o["is_error"] === true ? "error" : "idle" });
+    if (o["is_error"] === true) events.push({ type: "status", state: "error" });
   } else if (type.includes("error")) {
     events.push({ type: "status", state: "error", detail: extractText(o) || type });
   }

@@ -681,6 +681,7 @@ describe("WSBridge /chat/*", () => {
     const sessions: (SessionRef & { lastActive: number })[] = [];
     const ptyWrites: string[] = [];
     const ptyResizes: { cols: number; rows: number }[] = [];
+    const streamAfter: number[] = [];
     const chat: ChatService = {
       async start(params) {
         const ref: SessionRef = {
@@ -698,9 +699,10 @@ describe("WSBridge /chat/*", () => {
         if (id === "noterm") throw new EngineError("pty_unavailable");
         sent.push({ id, text });
       },
-      async subscribe(id, listener) {
+      async subscribe(id, listener, after) {
         if (id === "missing") throw new EngineError("unknown_session");
-        listener({ type: "status", state: "thinking" }); // exercises replay-before-headers
+        streamAfter.push(after ?? 0);
+        listener({ type: "status", state: "thinking", sequence: 8, eventId: "event-8" }); // exercises replay-before-headers
         return () => {};
       },
       async history(id) {
@@ -731,6 +733,31 @@ describe("WSBridge /chat/*", () => {
         sessions.unshift({ ...ref, lastActive: 2 });
         return ref;
       },
+      async settings() {
+        return {
+          defaultAgent: "claude",
+          models: {},
+          reasoningEfforts: {},
+          safeMode: false,
+          transport: "terminal",
+        };
+      },
+      async updateSettings(update) {
+        return {
+          defaultAgent: update.defaultAgent ?? "claude",
+          models: update.models ?? {},
+          reasoningEfforts: update.reasoningEfforts ?? {},
+          safeMode: update.safeMode ?? false,
+          transport: update.transport ?? "terminal",
+        };
+      },
+      async agents() {
+        return [
+          { agent: "claude", available: true },
+          { agent: "codex", available: true },
+          { agent: "cursor", available: true },
+        ];
+      },
       async terminal(id, mode) {
         terminals.push({ id, mode });
         return { ok: true };
@@ -750,7 +777,7 @@ describe("WSBridge /chat/*", () => {
         return id !== "noterm"; // a "noterm" session is headless/cold → no toggle
       },
     };
-    return { chat, sent, terminals, sessions, ptyWrites, ptyResizes };
+    return { chat, sent, terminals, sessions, ptyWrites, ptyResizes, streamAfter };
   }
 
   function postChat(
@@ -970,6 +997,38 @@ describe("WSBridge /chat/*", () => {
     }
   });
 
+  it("reads and updates sidebar chat settings and reports provider availability", async () => {
+    const f = fakeChat();
+    const fixture = await startBridge({ pinnedExtensionId: PIN, chat: f.chat });
+    try {
+      const initial = await getChat(fixture.port, `/chat/settings?token=${VALID_TOKEN}`);
+      expect(initial.status).toBe(200);
+      expect(
+        ((await initial.json()) as { settings: { defaultAgent: string } }).settings.defaultAgent,
+      ).toBe("claude");
+      const update = await postChat(fixture.port, "/chat/settings", {
+        token: VALID_TOKEN,
+        default_agent: "codex",
+        safe_mode: true,
+        models: { codex: "gpt-test" },
+      });
+      expect(update.status).toBe(200);
+      const changed = (await update.json()) as {
+        settings: { defaultAgent: string; safeMode: boolean; models: Record<string, string> };
+      };
+      expect(changed.settings).toMatchObject({
+        defaultAgent: "codex",
+        safeMode: true,
+        models: { codex: "gpt-test" },
+      });
+      const agents = await getChat(fixture.port, `/chat/agents?token=${VALID_TOKEN}`);
+      expect(agents.status).toBe(200);
+      expect(((await agents.json()) as { agents: { agent: string }[] }).agents).toHaveLength(3);
+    } finally {
+      await fixture.bridge.stop();
+    }
+  });
+
   it("POST /chat/migrate creates a target-agent session", async () => {
     const f = fakeChat();
     const fixture = await startBridge({ pinnedExtensionId: PIN, chat: f.chat });
@@ -1021,6 +1080,22 @@ describe("WSBridge /chat/*", () => {
       expect(res.headers.get("content-type")).toContain("text/event-stream");
       const text = await readStream(res, "thinking");
       expect(text).toContain(`"state":"thinking"`);
+      expect(text).toContain("id: 8");
+    } finally {
+      await fixture.bridge.stop();
+    }
+  });
+
+  it("GET /chat/stream resumes from Last-Event-ID", async () => {
+    const f = fakeChat();
+    const fixture = await startBridge({ pinnedExtensionId: PIN, chat: f.chat });
+    try {
+      const res = await fetch(
+        `http://127.0.0.1:${fixture.port}/chat/stream?token=${VALID_TOKEN}&session_id=s1`,
+        { headers: { Origin: PIN_ORIGIN, "Last-Event-ID": "7" } },
+      );
+      await readStream(res, "thinking");
+      expect(f.streamAfter).toEqual([7]);
     } finally {
       await fixture.bridge.stop();
     }

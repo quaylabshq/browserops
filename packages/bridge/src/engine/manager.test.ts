@@ -13,6 +13,7 @@ import type {
 } from "./driver.js";
 import { EngineError, engineErrorCode, type EngineErrorCode } from "./errors.js";
 import { ChatEngine } from "./manager.js";
+import { SessionStore } from "./session-store.js";
 import { SessionIndex } from "./sessions.js";
 
 class FakeDriver implements AgentDriver {
@@ -118,14 +119,23 @@ async function codeOf(p: Promise<unknown>): Promise<string | undefined> {
 describe("ChatEngine", () => {
   let dir: string;
   let index: SessionIndex;
+  let store: SessionStore;
   let driver: FakeDriver;
   let engine: ChatEngine;
 
   beforeEach(async () => {
     dir = await fs.mkdtemp(join(tmpdir(), "browserops-engine-"));
     index = new SessionIndex(dir);
+    store = new SessionStore(join(dir, "chat"));
     driver = new FakeDriver();
-    engine = new ChatEngine({ drivers: { claude: driver }, index, now: () => 1000 });
+    let ids = 0;
+    engine = new ChatEngine({
+      drivers: { claude: driver },
+      index,
+      store,
+      now: () => 1000,
+      randomUUID: () => `browserops-${++ids}`,
+    });
   });
   afterEach(async () => {
     await fs.rm(dir, { recursive: true, force: true });
@@ -137,10 +147,11 @@ describe("ChatEngine", () => {
       page: { url: "https://x" },
       instruction: "hi",
     });
-    expect(ref.sessionId).toBe("s1");
+    expect(ref.sessionId).toBe("browserops-1");
+    expect(ref.bindingId).toBe("browserops-4");
     expect(driver.started).toHaveLength(1);
     const sessions = await engine.listSessions();
-    expect(sessions.map((s) => s.sessionId)).toEqual(["s1"]);
+    expect(sessions.map((s) => s.sessionId)).toEqual([ref.sessionId]);
     expect(sessions[0]).toMatchObject({ lastActive: 1000, title: "hi" });
   });
 
@@ -148,16 +159,25 @@ describe("ChatEngine", () => {
     const ref = await engine.start({ agent: "claude", page: { url: "x" } });
     const got: ChatEvent[] = [];
     await engine.subscribe(ref.sessionId, (e) => got.push(e));
+    expect(got[0]).toMatchObject({ type: "session", ref: { sessionId: ref.sessionId } });
     driver.emit("s1", { type: "status", state: "thinking" });
-    expect(got).toEqual([{ type: "status", state: "thinking" }]);
+    for (let i = 0; got.length < 2 && i < 20; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect(got.at(-1)).toMatchObject({ type: "status", state: "thinking", sequence: 2 });
   });
 
   it("send routes through and bumps lastActive", async () => {
     const ref = await engine.start({ agent: "claude", page: { url: "x" } });
-    const engine2 = new ChatEngine({ drivers: { claude: driver }, index, now: () => 2000 });
+    const engine2 = new ChatEngine({
+      drivers: { claude: driver },
+      index,
+      store,
+      now: () => 2000,
+    });
     await engine2.send(ref.sessionId, "next");
     expect(driver.sent).toEqual([{ id: "s1", text: "next" }]);
-    expect((await index.get("s1"))!.lastActive).toBe(2000);
+    expect((await index.get(ref.sessionId))!.lastActive).toBe(2000);
   });
 
   it("history routes to the driver", async () => {
@@ -177,7 +197,7 @@ describe("ChatEngine", () => {
     const e = new ChatEngine({ drivers: { claude: d }, index, now: () => 1 });
     const ref = await e.start({ agent: "claude", page: { url: "x" } });
     await e.eject(ref.sessionId);
-    expect(d.relinquished).toEqual([ref.sessionId]);
+    expect(d.relinquished).toEqual(["s1"]);
     expect(d.stopped).toEqual([]); // hard stop NOT used when relinquish exists
   });
 
@@ -185,6 +205,14 @@ describe("ChatEngine", () => {
     const ref = await engine.start({ agent: "claude", page: { url: "x" } });
     await engine.eject(ref.sessionId);
     expect(driver.stopped).toEqual(["s1"]);
+  });
+
+  it("keeps the public BrowserOps id out of terminal takeover commands", async () => {
+    const ref = await engine.start({ agent: "claude", page: { url: "x" } });
+    const target = await engine.terminalTarget(ref.sessionId);
+    expect(target.sessionId).toBe("browserops-3");
+    expect(target.sessionId).not.toBe(ref.sessionId);
+    expect(target.mirrorPath).toContain("s1.mirror.log");
   });
 
   it("terminalCapable: live terminal driver true; not-live / headless / cold false", async () => {
@@ -230,22 +258,71 @@ describe("ChatEngine", () => {
     const e = new ChatEngine({
       drivers: { claude: source, codex: target },
       index,
+      store,
       now: () => 1,
     });
     const ref = await e.start({ agent: "claude", page: { url: "x" } });
     const migrated = await e.migrate(ref.sessionId, "codex");
     expect(migrated.agent).toBe("codex");
-    expect(migrated.migratedFrom).toBe(ref.sessionId);
+    expect(migrated.sessionId).toBe(ref.sessionId);
     expect(migrated.migrationSourceAgent).toBe("claude");
-    expect(target.started[0]?.instruction).toContain("Prior normalized transcript");
+    expect(target.started[0]?.instruction).toContain("Canonical transcript");
     expect(target.started[0]?.instruction).toContain("user: summarize this");
     expect(target.started[0]?.instruction).toContain("assistant: done");
+    const back = await e.migrate(ref.sessionId, "claude");
+    expect(back.sessionId).toBe(ref.sessionId);
+    expect(back.agent).toBe("claude");
+    expect(source.started).toHaveLength(1); // native Claude binding was reused
+  });
+
+  it("projects missed canonical turns before resuming a paused provider binding", async () => {
+    const source = new FakeDriver("claude");
+    source.historyResult = [{ id: "u", role: "user", blocks: [{ kind: "text", text: "first" }] }];
+    const target = new FakeDriver("codex");
+    const e = new ChatEngine({
+      drivers: { claude: source, codex: target },
+      index,
+      store,
+      now: () => 1,
+    });
+    const ref = await e.start({ agent: "claude", page: { url: "x" } });
+    await e.migrate(ref.sessionId, "codex");
+    target.emit("s1", {
+      type: "message",
+      message: {
+        id: "codex-answer",
+        role: "assistant",
+        blocks: [{ kind: "text", text: "codex update" }],
+      },
+    });
+    for (let i = 0; i < 20; i++) {
+      if ((await e.history(ref.sessionId)).some((message) => message.id === "codex-answer")) break;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    await e.migrate(ref.sessionId, "claude");
+    await e.send(ref.sessionId, "continue here");
+
+    expect(source.sent.at(-1)?.text).toContain("codex update");
+    expect(source.sent.at(-1)?.text).toContain("continue here");
+    expect(
+      (await e.history(ref.sessionId)).filter(
+        (message) =>
+          message.role === "user" &&
+          message.blocks[0]?.kind === "text" &&
+          message.blocks[0].text === "continue here",
+      ),
+    ).toHaveLength(1);
   });
 
   it("resolves a cold session from the index after a restart", async () => {
     const ref = await engine.start({ agent: "claude", page: { url: "x" } });
     const driver2 = new FakeDriver();
-    const engine2 = new ChatEngine({ drivers: { claude: driver2 }, index, now: () => 3000 });
+    const engine2 = new ChatEngine({
+      drivers: { claude: driver2 },
+      index,
+      store,
+      now: () => 3000,
+    });
     await engine2.send(ref.sessionId, "cold");
     expect(driver2.sent).toEqual([{ id: "s1", text: "cold" }]);
   });
@@ -264,12 +341,13 @@ describe("ChatEngine", () => {
       drivers: { claude: primary },
       fallbacks: { claude: fallback },
       index,
+      store,
       now: () => 1,
     });
     const ref = await e.start({ agent: "claude", page: { url: "x" }, instruction: "hi" });
     expect(fallback.started).toHaveLength(1);
     await e.send(ref.sessionId, "next");
-    expect(fallback.sent).toEqual([{ id: ref.sessionId, text: "next" }]);
+    expect(fallback.sent).toEqual([{ id: "s1", text: "next" }]);
   });
 
   it("does not fall back for non-pty errors", async () => {

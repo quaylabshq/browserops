@@ -32,7 +32,7 @@ import { EngineError } from "../errors.js";
 import { resolveClaudeBin, resolveLoginEnv } from "./bin.js";
 import { appendMirror, mirrorEventLine, mirrorHeader, mirrorUserLine } from "./mirror.js";
 import { runClaudeTurn, type SpawnLike } from "./runtime.js";
-import { loadHistory } from "./transcript.js";
+import { findTranscriptPath, loadHistory } from "./transcript.js";
 import { appendBrowserTranscriptMessage, readBrowserTranscript } from "../transcript.js";
 
 const EVENT_BUFFER_CAP = 4000;
@@ -51,6 +51,9 @@ interface SessionState {
   events: ChatEvent[];
   queue: Promise<void>;
   abort?: AbortController;
+  turnSeq: number;
+  /** Compatibility-journal writes are drained before a completed turn resolves. */
+  historyWrite: Promise<void>;
 }
 
 export interface ClaudeDriverDeps {
@@ -97,12 +100,16 @@ export class ClaudeDriver implements AgentDriver {
   }
 
   async start(opts: StartOpts): Promise<SessionRef> {
-    const sessionId = this.randomUUID();
+    const sessionId = opts.sessionId ?? this.randomUUID();
+    // Claude accepts a caller-supplied native id. Keep it distinct from the
+    // BrowserOps/driver handle so handoff never mistakes one for the other.
+    const nativeSessionId = opts.nativeSessionId ?? sessionId;
     const cwd = opts.cwd ?? workspaceDir();
     const title = (opts.instruction ?? opts.page.title ?? "New chat").trim().slice(0, 80);
     const ref: SessionRef = {
       agent: "claude",
       sessionId,
+      nativeSessionId,
       cwd,
       createdAt: this.now(),
       ...(title ? { title } : {}),
@@ -110,6 +117,8 @@ export class ClaudeDriver implements AgentDriver {
       ...(opts.migrationSourceAgent !== undefined
         ? { migrationSourceAgent: opts.migrationSourceAgent }
         : {}),
+      ...(opts.model !== undefined ? { model: opts.model } : {}),
+      ...(opts.reasoningEffort !== undefined ? { reasoningEffort: opts.reasoningEffort } : {}),
     };
     const state = this.makeState(ref, opts.safeMode ?? false, true);
     this.sessions.set(sessionId, state);
@@ -118,7 +127,11 @@ export class ClaudeDriver implements AgentDriver {
     await appendMirror(state.mirrorPath, mirrorHeader(sessionId));
 
     const seed = this.buildPrompt(opts.page, opts.instruction);
-    void this.enqueue(state, () => this.runTurn(state, seed, true)).catch(() => {});
+    const displaySeed =
+      opts.migratedFrom !== undefined
+        ? `Continue conversation migrated from ${opts.migrationSourceAgent ?? "another agent"}.`
+        : seed;
+    void this.enqueue(state, () => this.runTurn(state, seed, true, displaySeed)).catch(() => {});
     return ref;
   }
 
@@ -144,7 +157,7 @@ export class ClaudeDriver implements AgentDriver {
   }
 
   async history(ref: SessionRef): Promise<ChatMessage[]> {
-    const native = await loadHistory(ref.sessionId, {
+    const native = await loadHistory(ref.nativeSessionId ?? ref.sessionId, {
       cwd: ref.cwd,
       ...(this.projectsRoot ? { projectsRoot: this.projectsRoot } : {}),
     });
@@ -166,6 +179,18 @@ export class ClaudeDriver implements AgentDriver {
     };
   }
 
+  availability(): { available: boolean; reason?: string } {
+    return this.bin ? { available: true } : { available: false, reason: "claude_not_found" };
+  }
+
+  async canTakeover(ref: SessionRef): Promise<{ ok: true } | { ok: false; error: string }> {
+    const path = await findTranscriptPath(ref.nativeSessionId ?? ref.sessionId, {
+      cwd: ref.cwd,
+      ...(this.projectsRoot ? { projectsRoot: this.projectsRoot } : {}),
+    });
+    return path ? { ok: true } : { ok: false, error: "session_not_persisted" };
+  }
+
   // --- internals ------------------------------------------------------------
 
   private makeState(ref: SessionRef, safeMode: boolean, createdHere: boolean): SessionState {
@@ -181,6 +206,8 @@ export class ClaudeDriver implements AgentDriver {
       listeners: new Set(),
       events: [],
       queue: Promise.resolve(),
+      turnSeq: 0,
+      historyWrite: Promise.resolve(),
     };
   }
 
@@ -217,13 +244,23 @@ export class ClaudeDriver implements AgentDriver {
       "--append-system-prompt",
       state.systemPrompt,
     ];
-    args.push(first ? "--session-id" : "--resume", state.ref.sessionId);
+    args.push(
+      first ? "--session-id" : "--resume",
+      state.ref.nativeSessionId ?? state.ref.sessionId,
+    );
+    if (state.ref.model) args.push("--model", state.ref.model);
+    if (state.ref.reasoningEffort) args.push("--effort", state.ref.reasoningEffort);
     if (!state.safeMode) args.push("--dangerously-skip-permissions");
     args.push("--", userText); // -- guards user text that starts with '-'
     return args;
   }
 
-  private async runTurn(state: SessionState, userText: string, first: boolean): Promise<void> {
+  private async runTurn(
+    state: SessionState,
+    userText: string,
+    first: boolean,
+    displayText: string = userText,
+  ): Promise<void> {
     if (state.ejected) throw new EngineError("session_ejected");
     if (!this.bin) {
       this.dispatch(state, { type: "status", state: "error", detail: "claude_not_found" });
@@ -231,6 +268,15 @@ export class ClaudeDriver implements AgentDriver {
     }
     await this.ensureDirs(state);
     this.dispatch(state, { type: "status", state: "thinking" });
+    this.dispatch(state, {
+      type: "message",
+      message: {
+        id: `${state.ref.sessionId}-user-${++state.turnSeq}`,
+        role: "user",
+        blocks: [{ kind: "text", text: displayText }],
+        ts: this.now(),
+      },
+    });
     await appendMirror(state.mirrorPath, mirrorUserLine(userText));
 
     const useFirst = first && state.createdHere && !state.everRun;
@@ -267,6 +313,7 @@ export class ClaudeDriver implements AgentDriver {
       }
     }
     this.dispatch(state, { type: "status", state: "idle" });
+    await state.historyWrite;
   }
 
   private dispatch(state: SessionState, event: ChatEvent): void {
@@ -275,7 +322,11 @@ export class ClaudeDriver implements AgentDriver {
     const line = mirrorEventLine(event);
     if (line) void appendMirror(state.mirrorPath, line);
     if (event.type === "message") {
-      void appendBrowserTranscriptMessage(state.ref.sessionId, event.message, this.chatDir);
+      state.historyWrite = appendBrowserTranscriptMessage(
+        state.ref.sessionId,
+        event.message,
+        this.chatDir,
+      );
     }
     for (const listener of state.listeners) {
       try {

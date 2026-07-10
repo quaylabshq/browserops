@@ -242,6 +242,11 @@ export function resumePermissionArgs(safeMode: boolean): string {
     : "--permission-mode acceptEdits --allowedTools mcp__browserops";
 }
 
+/** Ensure an external takeover is not mistaken for a child of the daemon's Claude session. */
+function macFreshClaudeEnv(): string {
+  return "env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT -u CLAUDE_CODE_SESSION_ID -u CLAUDE_CODE_CHILD_SESSION -u CLAUDE_EFFORT";
+}
+
 export interface ResumeScriptParams {
   sessionId: string;
   cwd: string;
@@ -270,7 +275,7 @@ export function buildMacResumeScript({
     '  read -r -p "Press Enter to close..."',
     "  exit 1",
     "fi",
-    `exec ${binary} ${permissionArgs} --resume ${shSingleQuote(sessionId)}`,
+    `exec ${macFreshClaudeEnv()} ${binary} ${permissionArgs} --resume ${shSingleQuote(sessionId)}`,
     "",
   ].join("\n");
 }
@@ -292,6 +297,11 @@ export function buildWindowsResumeScript({
     '  Read-Host "Press Enter to close"',
     "  exit 1",
     "}",
+    "$env:CLAUDECODE = $null",
+    "$env:CLAUDE_CODE_ENTRYPOINT = $null",
+    "$env:CLAUDE_CODE_SESSION_ID = $null",
+    "$env:CLAUDE_CODE_CHILD_SESSION = $null",
+    "$env:CLAUDE_EFFORT = $null",
     `${binary} ${permissionArgs} --resume ${psSingleQuote(sessionId)}`,
     "",
   ].join("\r\n");

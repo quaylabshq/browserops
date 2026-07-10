@@ -1,3 +1,4 @@
+/** Legacy compatibility journal and prompt-formatting helpers. */
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import type { ChatBlock, ChatMessage, ChatRole } from "@browserops/shared";
@@ -9,6 +10,7 @@ interface TranscriptRecord {
 }
 
 const ROLES = new Set<ChatRole>(["user", "assistant", "system", "tool"]);
+const appendQueues = new Map<string, Promise<void>>();
 
 function asObject(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
@@ -55,16 +57,23 @@ export async function appendBrowserTranscriptMessage(
   message: ChatMessage,
   dir: string = defaultChatDir(),
 ): Promise<void> {
-  try {
-    await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-    const record: TranscriptRecord = { type: "message", message };
-    await fs.appendFile(browserTranscriptPath(sessionId, dir), JSON.stringify(record) + "\n", {
-      encoding: "utf8",
-      mode: 0o600,
+  const key = browserTranscriptPath(sessionId, dir);
+  const previous = appendQueues.get(key) ?? Promise.resolve();
+  const write = previous
+    .catch(() => {})
+    .then(async () => {
+      await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+      const record: TranscriptRecord = { type: "message", message };
+      await fs.appendFile(key, JSON.stringify(record) + "\n", {
+        encoding: "utf8",
+        mode: 0o600,
+      });
+    })
+    .catch(() => {
+      /* history is non-fatal, but writes must stay ordered after a failure */
     });
-  } catch {
-    /* transcript is best-effort */
-  }
+  appendQueues.set(key, write);
+  await write;
 }
 
 export async function readBrowserTranscript(
@@ -115,10 +124,40 @@ export function messageText(message: ChatMessage): string {
 }
 
 export function formatMessagesForPrompt(messages: readonly ChatMessage[], cap = 20_000): string {
+  return formatMessages(messages, cap, messageText);
+}
+
+/**
+ * Canonical-to-provider projection. Deliberate reasoning is never forwarded
+ * between providers; provider-private thought must not become another model's
+ * prompt. Tool blocks retain only their compact, renderable context.
+ */
+export function formatMessagesForProvider(messages: readonly ChatMessage[], cap = 20_000): string {
+  return formatMessages(messages, cap, (message) => {
+    const parts: string[] = [];
+    for (const block of message.blocks) {
+      if (block.kind === "text") parts.push(block.text);
+      else if (block.kind === "tool_use") parts.push(`[tool_use:${block.name}]`);
+      else if (block.kind === "tool_result") {
+        parts.push(`[tool_result:${block.ok ? "ok" : "error"}] ${block.preview}`);
+      }
+    }
+    return parts.join("\n").trim();
+  });
+}
+
+function formatMessages(
+  messages: readonly ChatMessage[],
+  cap: number,
+  textFor: (message: ChatMessage) => string,
+): string {
   const lines: string[] = [];
   let total = 0;
-  for (const message of messages.slice(-40)) {
-    const text = messageText(message).replace(/\s+/g, " ").trim();
+  // Work backwards so a cap never drops the newest user turn. The old forward
+  // loop retained older messages first and could omit the message we were about
+  // to answer when a conversation was long.
+  for (const message of [...messages.slice(-40)].reverse()) {
+    const text = textFor(message).replace(/\s+/g, " ").trim();
     if (!text) continue;
     const line = `${message.role}: ${text}`;
     total += line.length + 1;
@@ -126,7 +165,17 @@ export function formatMessagesForPrompt(messages: readonly ChatMessage[], cap = 
       lines.unshift("[earlier transcript omitted]");
       break;
     }
-    lines.push(line);
+    lines.unshift(line);
   }
   return lines.join("\n");
+}
+
+/** Merge native/provider and BrowserOps records without duplicating a replay. */
+export function mergeChatHistory(
+  first: readonly ChatMessage[],
+  second: readonly ChatMessage[],
+): ChatMessage[] {
+  const byId = new Map<string, ChatMessage>();
+  for (const message of [...first, ...second]) byId.set(message.id, message);
+  return [...byId.values()];
 }

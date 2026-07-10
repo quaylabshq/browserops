@@ -9,7 +9,9 @@
  */
 import type {
   ChatEvent,
+  ChatAgentStatus,
   ChatMessage,
+  ChatSettings,
   ChatSessionCapabilities,
   ChatStatusState,
   SessionRef,
@@ -21,6 +23,18 @@ export type { PageMeta, ChatEvent, ChatMessage, SessionRef };
 
 /** Loopback bridge base. Hardcoded like the onboard page's /pair fetch. */
 export const CHAT_BASE = "http://127.0.0.1:57321";
+
+export interface ChatEndpoint {
+  host: string;
+  port: number;
+}
+
+export function chatBase(endpoint?: ChatEndpoint): string {
+  if (!endpoint) return CHAT_BASE;
+  const host = endpoint.host.trim() || "127.0.0.1";
+  const port = Number.isInteger(endpoint.port) && endpoint.port > 0 ? endpoint.port : 57321;
+  return `http://${host}:${port}`;
+}
 
 export interface SessionSummary extends SessionRef {
   lastActive: number;
@@ -163,8 +177,8 @@ export function statusLabel(status: ChatStatusState, ejected: boolean): string {
 
 // --- impure: bridge calls ---------------------------------------------------
 
-async function postJson(path: string, body: unknown): Promise<Response> {
-  return fetch(`${CHAT_BASE}${path}`, {
+async function postJson(path: string, body: unknown, endpoint?: ChatEndpoint): Promise<Response> {
+  return fetch(`${chatBase(endpoint)}${path}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -195,10 +209,11 @@ export async function chatNew(input: {
   agent: string;
   instruction?: string;
   meta: PageMeta;
+  endpoint?: ChatEndpoint;
 }): Promise<NewResult> {
   let res: Response;
   try {
-    res = await postJson("/chat/new", buildNewBody(input));
+    res = await postJson("/chat/new", buildNewBody(input), input.endpoint);
   } catch {
     return { ok: false, status: 0, error: "unreachable" };
   }
@@ -217,10 +232,11 @@ export async function chatSend(
   token: string,
   sessionId: string,
   text: string,
+  endpoint?: ChatEndpoint,
 ): Promise<{ ok: boolean; status: number; error?: string }> {
   let res: Response;
   try {
-    res = await postJson("/chat/send", { token, session_id: sessionId, text });
+    res = await postJson("/chat/send", { token, session_id: sessionId, text }, endpoint);
   } catch {
     return { ok: false, status: 0, error: "unreachable" };
   }
@@ -236,10 +252,11 @@ export async function chatTerminal(
   token: string,
   sessionId: string,
   mode: "mirror" | "takeover",
+  endpoint?: ChatEndpoint,
 ): Promise<{ ok: boolean; error?: string }> {
   let res: Response;
   try {
-    res = await postJson("/chat/terminal", { token, session_id: sessionId, mode });
+    res = await postJson("/chat/terminal", { token, session_id: sessionId, mode }, endpoint);
   } catch {
     return { ok: false, error: "unreachable" };
   }
@@ -254,14 +271,19 @@ export async function chatMigrate(input: {
   token: string;
   sessionId: string;
   targetAgent: string;
+  endpoint?: ChatEndpoint;
 }): Promise<NewResult> {
   let res: Response;
   try {
-    res = await postJson("/chat/migrate", {
-      token: input.token,
-      session_id: input.sessionId,
-      target_agent: input.targetAgent,
-    });
+    res = await postJson(
+      "/chat/migrate",
+      {
+        token: input.token,
+        session_id: input.sessionId,
+        target_agent: input.targetAgent,
+      },
+      input.endpoint,
+    );
   } catch {
     return { ok: false, status: 0, error: "unreachable" };
   }
@@ -276,9 +298,14 @@ export async function chatMigrate(input: {
   };
 }
 
-export async function chatSessions(token: string): Promise<SessionSummary[]> {
+export async function chatSessions(
+  token: string,
+  endpoint?: ChatEndpoint,
+): Promise<SessionSummary[]> {
   try {
-    const res = await fetch(`${CHAT_BASE}/chat/sessions?token=${encodeURIComponent(token)}`);
+    const res = await fetch(
+      `${chatBase(endpoint)}/chat/sessions?token=${encodeURIComponent(token)}`,
+    );
     const data = await readJson(res);
     return Array.isArray(data["sessions"]) ? (data["sessions"] as SessionSummary[]) : [];
   } catch {
@@ -286,10 +313,14 @@ export async function chatSessions(token: string): Promise<SessionSummary[]> {
   }
 }
 
-export async function chatHistory(token: string, sessionId: string): Promise<ChatMessage[]> {
+export async function chatHistory(
+  token: string,
+  sessionId: string,
+  endpoint?: ChatEndpoint,
+): Promise<ChatMessage[]> {
   try {
     const res = await fetch(
-      `${CHAT_BASE}/chat/history?token=${encodeURIComponent(token)}&session_id=${encodeURIComponent(sessionId)}`,
+      `${chatBase(endpoint)}/chat/history?token=${encodeURIComponent(token)}&session_id=${encodeURIComponent(sessionId)}`,
     );
     const data = await readJson(res);
     return Array.isArray(data["messages"]) ? (data["messages"] as ChatMessage[]) : [];
@@ -298,14 +329,75 @@ export async function chatHistory(token: string, sessionId: string): Promise<Cha
   }
 }
 
-export function streamUrl(token: string, sessionId: string): string {
-  return `${CHAT_BASE}/chat/stream?token=${encodeURIComponent(token)}&session_id=${encodeURIComponent(sessionId)}`;
+export function streamUrl(token: string, sessionId: string, endpoint?: ChatEndpoint): string {
+  return `${chatBase(endpoint)}/chat/stream?token=${encodeURIComponent(token)}&session_id=${encodeURIComponent(sessionId)}`;
 }
 
 /** The /chat/pty WebSocket URL for the embedded terminal (ws://, token in the query like SSE). */
-export function ptyUrl(token: string, sessionId: string): string {
-  const base = CHAT_BASE.replace(/^http/, "ws");
+export function ptyUrl(token: string, sessionId: string, endpoint?: ChatEndpoint): string {
+  const base = chatBase(endpoint).replace(/^http/, "ws");
   return `${base}/chat/pty?token=${encodeURIComponent(token)}&session_id=${encodeURIComponent(sessionId)}`;
+}
+
+export async function chatSettings(
+  token: string,
+  endpoint?: ChatEndpoint,
+): Promise<ChatSettings | undefined> {
+  try {
+    const res = await fetch(
+      `${chatBase(endpoint)}/chat/settings?token=${encodeURIComponent(token)}`,
+    );
+    const data = await readJson(res);
+    return res.ok ? (data["settings"] as ChatSettings | undefined) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export async function chatUpdateSettings(
+  token: string,
+  update: {
+    defaultAgent?: string;
+    safeMode?: boolean;
+    transport?: "terminal" | "headless";
+    models?: Record<string, string>;
+    reasoningEfforts?: Record<string, string>;
+  },
+  endpoint?: ChatEndpoint,
+): Promise<ChatSettings | undefined> {
+  try {
+    const res = await postJson(
+      "/chat/settings",
+      {
+        token,
+        ...(update.defaultAgent !== undefined ? { default_agent: update.defaultAgent } : {}),
+        ...(update.safeMode !== undefined ? { safe_mode: update.safeMode } : {}),
+        ...(update.transport !== undefined ? { transport: update.transport } : {}),
+        ...(update.models !== undefined ? { models: update.models } : {}),
+        ...(update.reasoningEfforts !== undefined
+          ? { reasoning_efforts: update.reasoningEfforts }
+          : {}),
+      },
+      endpoint,
+    );
+    const data = await readJson(res);
+    return res.ok ? (data["settings"] as ChatSettings | undefined) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export async function chatAgents(
+  token: string,
+  endpoint?: ChatEndpoint,
+): Promise<ChatAgentStatus[]> {
+  try {
+    const res = await fetch(`${chatBase(endpoint)}/chat/agents?token=${encodeURIComponent(token)}`);
+    const data = await readJson(res);
+    return Array.isArray(data["agents"]) ? (data["agents"] as ChatAgentStatus[]) : [];
+  } catch {
+    return [];
+  }
 }
 
 /** Client→server pty frames. Raw pty output comes back the other way, unframed. */

@@ -22,7 +22,9 @@ import {
   type Request as WireRequest,
   type Response as WireResponse,
   type ChatEvent,
+  type ChatAgentStatus,
   type ChatMessage,
+  type ChatSettings,
   type ChatSessionCapabilities,
   type SessionRef,
   type TerminalMode,
@@ -74,11 +76,18 @@ export interface ChatService {
   start(params: ChatStartParams): Promise<SessionRef>;
   send(sessionId: string, text: string): Promise<void>;
   /** Attach a live listener; the implementation replays buffered events first. */
-  subscribe(sessionId: string, listener: (event: ChatEvent) => void): Promise<() => void>;
+  subscribe(
+    sessionId: string,
+    listener: (event: ChatEvent) => void,
+    after?: number,
+  ): Promise<() => void>;
   history(sessionId: string): Promise<ChatMessage[]>;
   listSessions(): Promise<ChatSessionSummary[]>;
   capabilities(sessionId: string): Promise<ChatSessionCapabilities>;
   migrate(sessionId: string, targetAgent: AgentId): Promise<SessionRef>;
+  settings(): Promise<ChatSettings>;
+  updateSettings(update: Partial<ChatSettings>): Promise<ChatSettings>;
+  agents(): Promise<ChatAgentStatus[]>;
   /** Open a read-only terminal mirror, or eject the session into a terminal. */
   terminal(sessionId: string, mode: TerminalMode): Promise<ChatTerminalOutcome>;
   /** Bind a live raw-terminal handle for the embedded xterm pane (via /chat/pty). */
@@ -441,16 +450,26 @@ export class WSBridge {
       return;
     }
 
+    if (urlPath === "/chat/settings" && req.method === "GET") {
+      void this.handleChatGet(req, res, origin, urlPath);
+      return;
+    }
     if (
       urlPath === "/chat/new" ||
       urlPath === "/chat/send" ||
       urlPath === "/chat/terminal" ||
-      urlPath === "/chat/migrate"
+      urlPath === "/chat/migrate" ||
+      urlPath === "/chat/settings"
     ) {
       void this.handleChatPost(req, res, origin, urlPath);
       return;
     }
-    if (urlPath === "/chat/sessions" || urlPath === "/chat/history") {
+    if (
+      urlPath === "/chat/sessions" ||
+      urlPath === "/chat/history" ||
+      urlPath === "/chat/settings" ||
+      urlPath === "/chat/agents"
+    ) {
       void this.handleChatGet(req, res, origin, urlPath);
       return;
     }
@@ -833,6 +852,28 @@ export class WSBridge {
         return;
       }
 
+      if (path === "/chat/settings") {
+        const update: Partial<ChatSettings> = {};
+        if (typeof body["default_agent"] === "string") {
+          update.defaultAgent = body["default_agent"] as AgentId;
+        }
+        if (typeof body["safe_mode"] === "boolean") update.safeMode = body["safe_mode"];
+        if (typeof body["transport"] === "string") {
+          update.transport = body["transport"] as ChatSettings["transport"];
+        }
+        if (body["models"] !== undefined && typeof body["models"] === "object") {
+          update.models = body["models"] as ChatSettings["models"];
+        }
+        if (
+          body["reasoning_efforts"] !== undefined &&
+          typeof body["reasoning_efforts"] === "object"
+        ) {
+          update.reasoningEfforts = body["reasoning_efforts"] as ChatSettings["reasoningEfforts"];
+        }
+        this.endJson(res, 200, { ok: true, settings: await this.chat.updateSettings(update) });
+        return;
+      }
+
       // /chat/terminal
       const sessionId = capField(body["session_id"], 100);
       const mode = body["mode"];
@@ -873,6 +914,14 @@ export class WSBridge {
       return;
     }
     try {
+      if (path === "/chat/settings") {
+        this.endJson(res, 200, { ok: true, settings: await this.chat.settings() });
+        return;
+      }
+      if (path === "/chat/agents") {
+        this.endJson(res, 200, { ok: true, agents: await this.chat.agents() });
+        return;
+      }
       if (path === "/chat/sessions") {
         const chat = this.chat;
         const sessions = await Promise.all(
@@ -929,10 +978,17 @@ export class WSBridge {
       return;
     }
 
+    const afterQuery = Number(this.queryParam(req, "after") ?? "0");
+    const afterHeader = Number(req.headers["last-event-id"] ?? "0");
+    const after = Math.max(
+      Number.isFinite(afterQuery) ? afterQuery : 0,
+      Number.isFinite(afterHeader) ? afterHeader : 0,
+    );
     const queued: ChatEvent[] = [];
     let live = false;
     const writeEvent = (event: ChatEvent): void => {
       try {
+        if (event.sequence !== undefined) res.write(`id: ${event.sequence}\n`);
         res.write(`data: ${JSON.stringify(event)}\n\n`);
       } catch {
         /* client gone */
@@ -943,10 +999,14 @@ export class WSBridge {
     try {
       // subscribe replays the buffer synchronously into our listener; capture
       // those into `queued` so they don't write before the SSE headers.
-      unsub = await this.chat.subscribe(sessionId, (event) => {
-        if (live) writeEvent(event);
-        else queued.push(event);
-      });
+      unsub = await this.chat.subscribe(
+        sessionId,
+        (event) => {
+          if (live) writeEvent(event);
+          else queued.push(event);
+        },
+        after,
+      );
     } catch (err) {
       this.endJson(res, this.chatErrorStatus(err), {
         ok: false,

@@ -17,6 +17,8 @@ export function buildCursorArgs(input: BuildArgsInput): string[] {
     "--workspace",
     input.cwd,
   ];
+  if (!input.first && input.nativeSessionId) args.push("--resume", input.nativeSessionId);
+  if (input.model) args.push("--model", input.model);
   if (!input.safeMode) args.push("--force");
   args.push(input.prompt);
   return args;
@@ -40,7 +42,7 @@ export class CursorDriver extends HeadlessProcessDriver {
     text: string,
     first: boolean,
   ): Promise<string> {
-    if (first) return text;
+    if (first || state.ref.nativeSessionId) return text;
     return this.replayPrompt(state, text);
   }
 }

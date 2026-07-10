@@ -11,7 +11,7 @@
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import { ptyInputFrame, ptyResizeFrame, ptyUrl } from "./chat-client.js";
+import { ptyInputFrame, ptyResizeFrame, ptyUrl, type ChatEndpoint } from "./chat-client.js";
 
 export interface EmbeddedTerminal {
   /** Re-fit to the container (call after the pane becomes visible / resizes). */
@@ -24,6 +24,7 @@ export function mountTerminal(opts: {
   container: HTMLElement;
   token: string;
   sessionId: string;
+  endpoint?: ChatEndpoint;
 }): EmbeddedTerminal {
   const term = new Terminal({
     fontSize: 12,
@@ -44,7 +45,7 @@ export function mountTerminal(opts: {
   };
   tryFit();
 
-  const ws = new WebSocket(ptyUrl(opts.token, opts.sessionId));
+  const ws = new WebSocket(ptyUrl(opts.token, opts.sessionId, opts.endpoint));
   const sendResize = (): void => {
     if (ws.readyState === WebSocket.OPEN) ws.send(ptyResizeFrame(term.cols, term.rows));
   };

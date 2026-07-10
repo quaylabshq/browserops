@@ -1,19 +1,22 @@
 /**
- * The session index — the small slice of state that is genuinely ours.
- *
- * History lives in the agents' own transcripts (re-read on demand); all we keep
- * is a manifest of sessions we've started, so the panel can list and reopen
- * them. One JSON file, newest-first, capped. Distinct from the unrelated
- * `DaemonSession` (tab-group) concept elsewhere in the bridge.
+ * The BrowserOps conversation index. Canonical history lives in the per-session
+ * event journals; this file is the small manifest used to list/reopen sessions
+ * and reconstruct their provider bindings after a daemon restart. One JSON
+ * file, newest-first, capped. Distinct from the unrelated `DaemonSession`
+ * (tab-group) concept elsewhere in the bridge.
  */
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
-import type { SessionRef } from "@browserops/shared";
+import type { ChatProviderBinding, SessionRef } from "@browserops/shared";
 import { sessionsDir } from "../paths.js";
 
 export interface SessionMeta extends SessionRef {
   /** Epoch ms of the last user activity (start / send / stop). */
   lastActive: number;
+  /** Version 2 records BrowserOps-owned conversations and provider bindings. */
+  schemaVersion?: 2;
+  bindings?: ChatProviderBinding[];
+  lastEventSequence?: number;
 }
 
 const MAX_SESSIONS = 200;
