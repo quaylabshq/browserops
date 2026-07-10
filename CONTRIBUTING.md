@@ -93,7 +93,7 @@ Procedures live under `~/browserops/procedures/`. The recommended path is to use
 4. Run `procedures_execute({name, tab_id, strict: true})` against a clean state.
 5. If green, `procedures_save({name, bump_success: true})` flips status to `trusted`.
 
-See [docs/design/](docs/design/) and the `browserops-teach` skill for the full discipline.
+See the `browserops-teach` skill for the full discipline.
 
 ## Commit conventions
 
