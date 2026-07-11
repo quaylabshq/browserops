@@ -64,24 +64,76 @@ function nativeSessionId(o: Record<string, unknown>): string | undefined {
   ]);
 }
 
+function parseArguments(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return value;
+  }
+}
+
+function normalizedItemType(o: Record<string, unknown>): string {
+  return asString(o["type"]).replace(/[_-]/g, "").toLowerCase();
+}
+
+function isActionItem(type: string): boolean {
+  return ["commandexecution", "mcptoolcall", "filechange", "websearch"].includes(type);
+}
+
 function toolBlock(o: Record<string, unknown>): ChatBlock | null {
-  const name = pickString(o, ["name", "tool_name", "toolName", "command"]);
+  const type = normalizedItemType(o);
+  const id = pickString(o, ["id", "call_id", "tool_call_id"]) ?? type;
+  if (type === "mcptoolcall") {
+    const server = pickString(o, ["server", "server_name", "serverName"]) ?? "mcp";
+    const tool = pickString(o, ["tool", "name", "tool_name", "toolName"]) ?? "tool";
+    return {
+      kind: "tool_use",
+      id,
+      name: `mcp__${server}__${tool}`,
+      input: parseArguments(o["arguments"] ?? o["input"] ?? o["args"]),
+    };
+  }
+  if (type === "commandexecution") {
+    return {
+      kind: "tool_use",
+      id,
+      name: "command_execution",
+      input: { command: o["command"], cwd: o["cwd"] },
+    };
+  }
+  if (type === "filechange") {
+    return { kind: "tool_use", id, name: "file_change", input: { changes: o["changes"] } };
+  }
+  if (type === "websearch") {
+    return { kind: "tool_use", id, name: "web_search", input: { query: o["query"] } };
+  }
+  const name = pickString(o, ["name", "tool", "tool_name", "toolName", "command"]);
   if (!name) return null;
-  return {
-    kind: "tool_use",
-    id: pickString(o, ["id", "call_id", "tool_call_id"]) ?? name,
-    name,
-    input: o["input"] ?? o["args"] ?? o["arguments"],
-  };
+  return { kind: "tool_use", id, name, input: o["input"] ?? o["args"] ?? o["arguments"] };
 }
 
 function toolResultBlock(o: Record<string, unknown>): ChatBlock {
-  const preview =
-    pickString(o, ["preview", "output", "result", "content", "message"]) ?? JSON.stringify(o);
+  const type = normalizedItemType(o);
+  const raw =
+    type === "commandexecution"
+      ? {
+          output: o["aggregated_output"] ?? o["output"],
+          exitCode: o["exit_code"] ?? o["exitCode"],
+          durationMs: o["duration_ms"] ?? o["durationMs"],
+        }
+      : type === "filechange"
+        ? { changes: o["changes"] }
+        : (o["result"] ?? o["output"] ?? o["content"] ?? o["message"] ?? o);
+  const preview = typeof raw === "string" ? raw : JSON.stringify(raw);
   return {
     kind: "tool_result",
-    id: pickString(o, ["id", "call_id", "tool_call_id"]) ?? "tool",
-    ok: o["is_error"] !== true && o["error"] === undefined,
+    id: pickString(o, ["id", "call_id", "tool_call_id"]) ?? (type || "tool"),
+    ok:
+      o["is_error"] !== true &&
+      o["error"] === undefined &&
+      o["status"] !== "failed" &&
+      o["status"] !== "declined",
     preview: preview.length > 2000 ? preview.slice(0, 2000) + "…" : preview,
   };
 }
@@ -112,12 +164,7 @@ export function codexLineToEvents(raw: unknown): NormalizedLine {
           },
         });
       }
-    } else if (
-      itemType === "command_execution" ||
-      itemType === "commandExecution" ||
-      itemType === "mcp_tool_call" ||
-      itemType === "mcpToolCall"
-    ) {
+    } else if (isActionItem(normalizedItemType(item))) {
       events.push({
         type: "message",
         message: {
@@ -153,10 +200,7 @@ export function codexLineToEvents(raw: unknown): NormalizedLine {
   if (
     (type === "item.started" || type === "item/started") &&
     item &&
-    (itemType === "command_execution" ||
-      itemType === "commandExecution" ||
-      itemType === "mcp_tool_call" ||
-      itemType === "mcpToolCall")
+    isActionItem(normalizedItemType(item))
   ) {
     const block = toolBlock(item);
     if (block) {

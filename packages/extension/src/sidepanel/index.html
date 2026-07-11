@@ -10,7 +10,12 @@
       <header class="panel-head">
         <span class="panel-title">Chat</span>
         <div class="head-right">
-          <button id="show-settings" type="button" class="link-btn" title="Chat and inference settings">
+          <button
+            id="show-settings"
+            type="button"
+            class="link-btn"
+            title="Chat and inference settings"
+          >
             ⚙ Settings
           </button>
           <button
@@ -31,12 +36,36 @@
           >
             ⤢ Take over
           </button>
+          <button id="stop-response" type="button" class="link-btn" hidden>■ Stop</button>
           <button id="new-session" type="button" class="link-btn" hidden>↻ New</button>
           <span id="status" class="pill pill--off" aria-live="polite">Disconnected</span>
         </div>
       </header>
 
       <div id="agents" class="agents" role="radiogroup" aria-label="Agent"></div>
+
+      <dialog
+        id="agent-switch-dialog"
+        class="agent-switch-dialog"
+        aria-labelledby="agent-switch-title"
+      >
+        <form method="dialog" class="agent-switch-card">
+          <h2 id="agent-switch-title">Switch chat provider?</h2>
+          <p id="agent-switch-copy"></p>
+          <p id="agent-switch-note" class="agent-switch-note">
+            Your current chat stays in Recent sessions. Any reply already in progress will finish
+            there.
+          </p>
+          <div class="agent-switch-actions">
+            <button id="agent-switch-cancel" type="button" class="agent-switch-cancel">
+              Keep current chat
+            </button>
+            <button id="agent-switch-confirm" type="button" class="agent-switch-confirm">
+              Switch provider
+            </button>
+          </div>
+        </form>
+      </dialog>
 
       <!-- Shown only when disconnected: chatting needs a live bridge. -->
       <div id="disconnected" class="notice">
@@ -62,20 +91,33 @@
           <section class="settings-section">
             <h2>Inference</h2>
             <label>Default agent<select id="settings-agent"></select></label>
-            <label>Model override<input id="settings-model" type="text" placeholder="Provider default" /></label>
-            <label>Reasoning effort<input id="settings-effort" type="text" placeholder="Provider default" /></label>
+            <label
+              >Model override<input id="settings-model" type="text" placeholder="Provider default"
+            /></label>
+            <label
+              >Reasoning effort<input
+                id="settings-effort"
+                type="text"
+                placeholder="Provider default"
+            /></label>
             <div id="agent-availability" class="agent-availability"></div>
           </section>
           <section class="settings-section">
             <h2>Chat behavior</h2>
-            <label class="toggle-label"><input id="settings-safe-mode" type="checkbox" /> Require provider approval prompts</label>
-            <label>Claude transport
+            <label class="toggle-label"
+              ><input id="settings-safe-mode" type="checkbox" /> Require provider approval
+              prompts</label
+            >
+            <label
+              >Claude transport
               <select id="settings-transport">
                 <option value="terminal">Interactive terminal</option>
                 <option value="headless">Headless stream</option>
               </select>
             </label>
-            <p class="settings-hint">Transport changes apply after restarting the BrowserOps bridge.</p>
+            <p class="settings-hint">
+              Transport changes apply after restarting the BrowserOps bridge.
+            </p>
           </section>
           <button class="settings-save" type="submit">Save settings</button>
         </form>

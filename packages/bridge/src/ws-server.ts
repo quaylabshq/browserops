@@ -75,6 +75,8 @@ export type ChatTerminalOutcome = { ok: true } | { ok: false; error: string };
 export interface ChatService {
   start(params: ChatStartParams): Promise<SessionRef>;
   send(sessionId: string, text: string): Promise<void>;
+  /** Interrupt an in-flight response while preserving the chat for later turns. */
+  cancel(sessionId: string): Promise<void>;
   /** Attach a live listener; the implementation replays buffered events first. */
   subscribe(
     sessionId: string,
@@ -116,7 +118,7 @@ export interface WSBridgeOptions {
    */
   onLaunch?: (params: LaunchRequestParams) => Promise<LaunchOutcome>;
   /**
-   * The in-panel chat surface (POST /chat/new|send|terminal, GET
+   * The in-panel chat surface (POST /chat/new|send|cancel|terminal, GET
    * /chat/sessions|history, SSE /chat/stream). Token + origin-pinned exactly
    * like /launch. Absent → /chat/* responds 503 chat_unavailable.
    */
@@ -457,6 +459,7 @@ export class WSBridge {
     if (
       urlPath === "/chat/new" ||
       urlPath === "/chat/send" ||
+      urlPath === "/chat/cancel" ||
       urlPath === "/chat/terminal" ||
       urlPath === "/chat/migrate" ||
       urlPath === "/chat/settings"
@@ -758,7 +761,7 @@ export class WSBridge {
     return true;
   }
 
-  /** POST /chat/new | /chat/send | /chat/terminal. Token in the JSON body. */
+  /** POST /chat/new | /chat/send | /chat/cancel | /chat/terminal. Token in the JSON body. */
   private async handleChatPost(
     req: IncomingMessage,
     res: ServerResponse,
@@ -826,6 +829,17 @@ export class WSBridge {
           return;
         }
         await this.chat.send(sessionId, text);
+        this.endJson(res, 200, { ok: true });
+        return;
+      }
+
+      if (path === "/chat/cancel") {
+        const sessionId = capField(body["session_id"], 100);
+        if (!sessionId) {
+          this.endJson(res, 400, { ok: false, error: "bad_request" });
+          return;
+        }
+        await this.chat.cancel(sessionId);
         this.endJson(res, 200, { ok: true });
         return;
       }

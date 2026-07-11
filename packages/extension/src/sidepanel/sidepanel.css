@@ -21,7 +21,12 @@ body {
   height: 100%;
 }
 body {
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-family:
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    sans-serif;
   font-size: 12px;
   line-height: 1.45;
   color: var(--color-ink);
@@ -63,6 +68,10 @@ body {
 }
 .link-btn[hidden] {
   display: none;
+}
+.link-btn:disabled {
+  color: var(--color-ink-45);
+  cursor: not-allowed;
 }
 
 .pill {
@@ -125,6 +134,70 @@ body {
   letter-spacing: 0.04em;
   margin-left: 6px;
   opacity: 0.7;
+}
+
+.agent-switch-dialog {
+  width: min(340px, calc(100vw - 36px));
+  margin: auto;
+  padding: 0;
+  border: 1px solid var(--color-ink-12);
+  border-radius: 12px;
+  color: var(--color-ink);
+  background: var(--color-surface);
+  box-shadow: 0 18px 48px rgba(25, 24, 27, 0.24);
+}
+.agent-switch-dialog::backdrop {
+  background: rgba(25, 24, 27, 0.34);
+}
+.agent-switch-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 18px;
+}
+.agent-switch-card h2,
+.agent-switch-card p {
+  margin: 0;
+}
+.agent-switch-card h2 {
+  font-size: 15px;
+}
+.agent-switch-card p {
+  color: var(--color-ink-60);
+  font-size: 12px;
+}
+.agent-switch-card .agent-switch-note {
+  border-left: 2px solid var(--color-ink-12);
+  padding-left: 8px;
+  color: var(--color-ink-45);
+  font-size: 11px;
+}
+.agent-switch-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+.agent-switch-actions button {
+  padding: 7px 9px;
+  border-radius: 7px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.agent-switch-cancel {
+  border: 1px solid var(--color-ink-12);
+  color: var(--color-ink);
+  background: var(--color-surface);
+}
+.agent-switch-confirm {
+  border: 1px solid var(--color-brand);
+  color: #fff;
+  background: var(--color-brand);
+}
+.agent-switch-confirm:hover {
+  background: var(--color-brand-deep);
 }
 
 /* Conversation */
@@ -285,7 +358,12 @@ body {
   white-space: nowrap;
 }
 .tool-activity--working .tool-activity-toggle {
-  background: linear-gradient(100deg, transparent 20%, rgba(46, 94, 196, 0.08) 50%, transparent 80%);
+  background: linear-gradient(
+    100deg,
+    transparent 20%,
+    rgba(46, 94, 196, 0.08) 50%,
+    transparent 80%
+  );
   background-size: 220% 100%;
   animation: activity-shimmer 2.4s ease-in-out infinite;
 }

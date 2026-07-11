@@ -87,6 +87,15 @@ export interface ChatProviderBinding {
   mode: "bridge" | "terminal" | "paused" | "stopped";
   /** Last canonical event delivered to this provider projection. */
   lastProjectedSequence: number;
+  /**
+   * The provider is selected, but has no native session yet. This lets a
+   * completed BrowserOps conversation switch providers without sending the
+   * transcript as a prompt (which would otherwise trigger a new answer).
+   */
+  deferredStart?: {
+    migrationSourceAgent: AgentId;
+    safeMode?: boolean;
+  };
 }
 
 export interface ChatEventMeta {

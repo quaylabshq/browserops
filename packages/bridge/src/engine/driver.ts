@@ -63,6 +63,12 @@ export interface AgentDriver {
   /** Tear the session down completely (kill the process, end the stream). */
   stop(ref: SessionRef): Promise<void>;
 
+  /**
+   * Interrupt only the currently running response while keeping the session
+   * usable for the next user turn. Providers without a live turn may no-op.
+   */
+  cancel?(ref: SessionRef): Promise<void>;
+
   /** Per-session capabilities exposed to the side panel. */
   capabilities?(ref: SessionRef): ChatSessionCapabilities;
 

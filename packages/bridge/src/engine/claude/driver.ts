@@ -50,7 +50,9 @@ interface SessionState {
   listeners: Set<ChatEventListener>;
   events: ChatEvent[];
   queue: Promise<void>;
+  activeTurn?: Promise<void>;
   abort?: AbortController;
+  cancelRequested: boolean;
   turnSeq: number;
   /** Compatibility-journal writes are drained before a completed turn resolves. */
   historyWrite: Promise<void>;
@@ -131,14 +133,18 @@ export class ClaudeDriver implements AgentDriver {
       opts.migratedFrom !== undefined
         ? `Continue conversation migrated from ${opts.migrationSourceAgent ?? "another agent"}.`
         : seed;
-    void this.enqueue(state, () => this.runTurn(state, seed, true, displaySeed)).catch(() => {});
+    const turn = this.enqueue(state, () => this.runTurn(state, seed, true, displaySeed));
+    state.activeTurn = turn;
+    void turn.catch(() => {});
     return ref;
   }
 
   async send(ref: SessionRef, text: string): Promise<void> {
     const state = this.ensureState(ref);
     if (state.ejected) throw new EngineError("session_ejected");
-    return this.enqueue(state, () => this.runTurn(state, text, false));
+    const turn = this.enqueue(state, () => this.runTurn(state, text, false));
+    state.activeTurn = turn;
+    return turn;
   }
 
   subscribe(ref: SessionRef, listener: ChatEventListener): Unsubscribe {
@@ -170,6 +176,14 @@ export class ClaudeDriver implements AgentDriver {
     state.ejected = true;
     state.abort?.abort();
     this.dispatch(state, { type: "status", state: "ejected" });
+  }
+
+  async cancel(ref: SessionRef): Promise<void> {
+    const state = this.sessions.get(ref.sessionId);
+    if (!state || state.ejected) return;
+    state.cancelRequested = true;
+    state.abort?.abort();
+    await state.activeTurn?.catch(() => {});
   }
 
   capabilities(_ref: SessionRef): ChatSessionCapabilities {
@@ -206,6 +220,7 @@ export class ClaudeDriver implements AgentDriver {
       listeners: new Set(),
       events: [],
       queue: Promise.resolve(),
+      cancelRequested: false,
       turnSeq: 0,
       historyWrite: Promise.resolve(),
     };
@@ -262,6 +277,7 @@ export class ClaudeDriver implements AgentDriver {
     displayText: string = userText,
   ): Promise<void> {
     if (state.ejected) throw new EngineError("session_ejected");
+    state.cancelRequested = false;
     if (!this.bin) {
       this.dispatch(state, { type: "status", state: "error", detail: "claude_not_found" });
       return;
@@ -282,6 +298,7 @@ export class ClaudeDriver implements AgentDriver {
     const useFirst = first && state.createdHere && !state.everRun;
     const args = this.buildArgs(state, userText, useFirst);
     state.abort = new AbortController();
+    if (state.cancelRequested) state.abort.abort();
     let stderr = "";
 
     const code = await runClaudeTurn({
@@ -297,9 +314,16 @@ export class ClaudeDriver implements AgentDriver {
       },
     });
 
+    const cancelled = state.cancelRequested || state.abort.signal.aborted;
     state.everRun = true;
     state.abort = undefined;
     if (state.ejected) return; // stop() owns the terminal status
+
+    if (cancelled) {
+      this.dispatch(state, { type: "status", state: "idle" });
+      await state.historyWrite;
+      return;
+    }
 
     if (code !== 0) {
       this.dispatch(state, { type: "status", state: "error", detail: `exit_${code}` });

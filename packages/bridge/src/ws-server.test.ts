@@ -677,6 +677,7 @@ describe("WSBridge POST /launch", () => {
 describe("WSBridge /chat/*", () => {
   function fakeChat() {
     const sent: { id: string; text: string }[] = [];
+    const cancelled: string[] = [];
     const terminals: { id: string; mode: string }[] = [];
     const sessions: (SessionRef & { lastActive: number })[] = [];
     const ptyWrites: string[] = [];
@@ -698,6 +699,10 @@ describe("WSBridge /chat/*", () => {
         if (id === "missing") throw new EngineError("unknown_session");
         if (id === "noterm") throw new EngineError("pty_unavailable");
         sent.push({ id, text });
+      },
+      async cancel(id) {
+        if (id === "missing") throw new EngineError("unknown_session");
+        cancelled.push(id);
       },
       async subscribe(id, listener, after) {
         if (id === "missing") throw new EngineError("unknown_session");
@@ -777,7 +782,7 @@ describe("WSBridge /chat/*", () => {
         return id !== "noterm"; // a "noterm" session is headless/cold → no toggle
       },
     };
-    return { chat, sent, terminals, sessions, ptyWrites, ptyResizes, streamAfter };
+    return { chat, sent, cancelled, terminals, sessions, ptyWrites, ptyResizes, streamAfter };
   }
 
   function postChat(
@@ -929,6 +934,32 @@ describe("WSBridge /chat/*", () => {
           })
         ).status,
       ).toBe(503);
+    } finally {
+      await fixture.bridge.stop();
+    }
+  });
+
+  it("POST /chat/cancel interrupts a live response while retaining the session", async () => {
+    const f = fakeChat();
+    const fixture = await startBridge({ pinnedExtensionId: PIN, chat: f.chat });
+    try {
+      const ok = await postChat(fixture.port, "/chat/cancel", {
+        token: VALID_TOKEN,
+        session_id: "s1",
+      });
+      expect(ok.status).toBe(200);
+      expect(f.cancelled).toEqual(["s1"]);
+      expect(
+        (
+          await postChat(fixture.port, "/chat/cancel", {
+            token: VALID_TOKEN,
+            session_id: "missing",
+          })
+        ).status,
+      ).toBe(404);
+      expect((await postChat(fixture.port, "/chat/cancel", { token: VALID_TOKEN })).status).toBe(
+        400,
+      );
     } finally {
       await fixture.bridge.stop();
     }

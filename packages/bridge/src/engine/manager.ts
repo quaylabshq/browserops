@@ -150,14 +150,18 @@ export class ChatEngine {
       "panel",
     );
     this.emit(conversation, userEvent);
-    active.suppressProviderUserMessages++;
-    active.binding.lastProjectedSequence =
-      userEvent.sequence ?? active.binding.lastProjectedSequence;
     await this.index.touch(sessionId, this.now());
-    await active.driver.send(
-      active.ref,
-      missed.length > 0 ? this.syncProjection(missed, text) : text,
-    );
+    if (active.binding.deferredStart) {
+      await this.activateDeferredBinding(sessionId, conversation, active);
+    } else {
+      active.suppressProviderUserMessages++;
+      active.binding.lastProjectedSequence =
+        userEvent.sequence ?? active.binding.lastProjectedSequence;
+      await active.driver.send(
+        active.ref,
+        missed.length > 0 ? this.syncProjection(missed, text) : text,
+      );
+    }
     await this.persist(sessionId, conversation);
   }
 
@@ -195,8 +199,9 @@ export class ChatEngine {
 
   /**
    * Select a provider binding without creating a second BrowserOps chat. A
-   * previous binding for that agent resumes natively; a new one receives a
-   * deterministic projection of the canonical transcript.
+   * previous binding resumes natively. A brand-new target is deliberately
+   * deferred: sending history as a seed prompt would make it generate an
+   * unsolicited second answer after an otherwise completed conversation.
    */
   async migrate(
     sessionId: string,
@@ -212,20 +217,10 @@ export class ChatEngine {
       (candidate) => candidate.binding.agent === targetAgent && candidate.binding.mode === "paused",
     );
     if (!target) {
-      const messages = await this.history(sessionId);
-      const projection = this.projection(source.binding.agent, messages);
-      target = await this.startBinding(
-        sessionId,
-        targetAgent,
-        {
-          agent: targetAgent,
-          page: { url: "", title: `Switched from ${source.binding.agent}` },
-          instruction: projection,
-          cwd: source.ref.cwd,
-          ...opts,
-        },
-        source.binding.agent,
-      );
+      // Materialize legacy provider history before the deferred binding becomes
+      // active, so its eventual first real turn sees the whole conversation.
+      await this.history(sessionId);
+      target = await this.deferBinding(sessionId, targetAgent, source, opts);
       conversation.bindings.set(target.binding.id, target);
     }
 
@@ -235,7 +230,7 @@ export class ChatEngine {
     source.binding.mode = "paused";
     source.unsubscribe?.();
     target.binding.mode = "bridge";
-    this.bindProviderEvents(sessionId, target);
+    if (!target.binding.deferredStart) this.bindProviderEvents(sessionId, target);
     conversation.ref = {
       ...this.publicRef(sessionId, target.binding, source.binding.agent),
       createdAt: conversation.ref.createdAt,
@@ -284,6 +279,15 @@ export class ChatEngine {
     await active.driver.stop(active.ref);
     await this.persist(sessionId, conversation);
     return conversation.ref;
+  }
+
+  /** Interrupt an in-flight answer but leave the active provider ready for another turn. */
+  async cancel(sessionId: string): Promise<void> {
+    const conversation = await this.resolve(sessionId);
+    const active = this.activeBinding(conversation);
+    if (active.binding.mode !== "bridge") throw new EngineError("session_ejected");
+    if (active.binding.deferredStart) return;
+    await active.driver.cancel?.(active.ref);
   }
 
   async eject(sessionId: string): Promise<SessionRef> {
@@ -363,6 +367,7 @@ export class ChatEngine {
     agent: AgentId,
     request: StartRequest,
     migrationSourceAgent: AgentId | undefined,
+    bindingId?: string,
   ): Promise<BindingRuntime> {
     const driver = this.driverFor(agent);
     const driverSessionId = this.newId();
@@ -397,7 +402,7 @@ export class ChatEngine {
       });
     }
     const binding: ChatProviderBinding = {
-      id: this.newId(),
+      id: bindingId ?? this.newId(),
       sessionId,
       agent,
       driverSessionId: ref.sessionId,
@@ -419,6 +424,86 @@ export class ChatEngine {
       driver: owner,
       suppressProviderUserMessages: migrationSourceAgent ? 1 : 0,
     };
+  }
+
+  private async deferBinding(
+    sessionId: string,
+    agent: AgentId,
+    source: BindingRuntime,
+    opts: Pick<StartRequest, "safeMode" | "model" | "reasoningEffort">,
+  ): Promise<BindingRuntime> {
+    const createdAt = this.now();
+    const driverSessionId = this.newId();
+    const ref: SessionRef = {
+      agent,
+      sessionId: driverSessionId,
+      cwd: source.ref.cwd,
+      createdAt,
+      ...(opts.model !== undefined ? { model: opts.model } : {}),
+      ...(opts.reasoningEffort !== undefined ? { reasoningEffort: opts.reasoningEffort } : {}),
+    };
+    return {
+      binding: {
+        id: this.newId(),
+        sessionId,
+        agent,
+        driverSessionId,
+        cwd: ref.cwd,
+        createdAt,
+        ...(ref.model !== undefined ? { model: ref.model } : {}),
+        ...(ref.reasoningEffort !== undefined ? { reasoningEffort: ref.reasoningEffort } : {}),
+        mode: "bridge",
+        lastProjectedSequence: await this.store.lastSequence(sessionId),
+        deferredStart: {
+          migrationSourceAgent: source.binding.agent,
+          ...(opts.safeMode !== undefined ? { safeMode: opts.safeMode } : {}),
+        },
+      },
+      ref,
+      driver: this.driverFor(agent),
+      suppressProviderUserMessages: 0,
+    };
+  }
+
+  private async activateDeferredBinding(
+    sessionId: string,
+    conversation: ConversationRuntime,
+    deferred: BindingRuntime,
+  ): Promise<void> {
+    const bootstrap = deferred.binding.deferredStart;
+    if (!bootstrap) return;
+    const messages = await this.history(sessionId);
+    const started = await this.startBinding(
+      sessionId,
+      deferred.binding.agent,
+      {
+        agent: deferred.binding.agent,
+        page: { url: "", title: `Switched from ${bootstrap.migrationSourceAgent}` },
+        instruction: this.projection(bootstrap.migrationSourceAgent, messages),
+        cwd: deferred.binding.cwd,
+        ...(bootstrap.safeMode !== undefined ? { safeMode: bootstrap.safeMode } : {}),
+        ...(deferred.binding.model !== undefined ? { model: deferred.binding.model } : {}),
+        ...(deferred.binding.reasoningEffort !== undefined
+          ? { reasoningEffort: deferred.binding.reasoningEffort }
+          : {}),
+      },
+      bootstrap.migrationSourceAgent,
+      deferred.binding.id,
+    );
+    conversation.bindings.set(deferred.binding.id, started);
+    conversation.ref = {
+      ...this.publicRef(sessionId, started.binding, bootstrap.migrationSourceAgent),
+      createdAt: conversation.ref.createdAt,
+      ...(conversation.ref.title !== undefined ? { title: conversation.ref.title } : {}),
+    };
+    this.bindProviderEvents(sessionId, started);
+    await this.persist(sessionId, conversation);
+    const event = await this.store.append(
+      sessionId,
+      { type: "session", ref: conversation.ref },
+      "system",
+    );
+    this.emit(conversation, event);
   }
 
   private bindProviderEvents(sessionId: string, runtime: BindingRuntime): void {
@@ -508,7 +593,9 @@ export class ChatEngine {
         suppressProviderUserMessages: 0,
       };
       runtimeBindings.set(binding.id, entry);
-      if (binding.id === activeId) this.bindProviderEvents(sessionId, entry);
+      if (binding.id === activeId && !binding.deferredStart) {
+        this.bindProviderEvents(sessionId, entry);
+      }
     }
     const active = runtimeBindings.get(activeId)!;
     const ref: SessionRef = {
@@ -524,6 +611,9 @@ export class ChatEngine {
       ...(active.binding.model !== undefined ? { model: active.binding.model } : {}),
       ...(active.binding.reasoningEffort !== undefined
         ? { reasoningEffort: active.binding.reasoningEffort }
+        : {}),
+      ...(meta.migrationSourceAgent !== undefined
+        ? { migrationSourceAgent: meta.migrationSourceAgent }
         : {}),
     };
     const conversation: ConversationRuntime = {

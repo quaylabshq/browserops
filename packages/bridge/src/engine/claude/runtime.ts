@@ -88,7 +88,9 @@ export function runClaudeTurn(p: TurnParams): Promise<number> {
         ...(p.signal ? { signal: p.signal } : {}),
       });
     } catch (err) {
-      p.onEvent({ type: "status", state: "error", detail: errMsg(err) });
+      if (!(err instanceof Error && err.name === "AbortError")) {
+        p.onEvent({ type: "status", state: "error", detail: errMsg(err) });
+      }
       done(-1);
       return;
     }

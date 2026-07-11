@@ -59,6 +59,51 @@ function fakeClaude() {
   return { spawn, calls };
 }
 
+/** First turn waits for AbortSignal; later turns complete normally. */
+function interruptibleClaude() {
+  const calls: string[][] = [];
+  const spawn: SpawnLike = (_cmd, args, opts) => {
+    calls.push([...args]);
+    const dataCbs: ((c: string) => void)[] = [];
+    const closeCbs: ((code: number | null) => void)[] = [];
+    const errorCbs: ((err: Error) => void)[] = [];
+    const child: ChildLike = {
+      stdout: {
+        setEncoding() {},
+        on(_e: "data", cb: (c: string) => void) {
+          dataCbs.push(cb);
+        },
+      },
+      stderr: { setEncoding() {}, on() {} },
+      on(ev: "error" | "close", cb: (arg: never) => void) {
+        if (ev === "close") closeCbs.push(cb as (code: number | null) => void);
+        else errorCbs.push(cb as (err: Error) => void);
+      },
+    };
+    const abort = () => {
+      const err = Object.assign(new Error("aborted"), { name: "AbortError" });
+      for (const cb of errorCbs) cb(err);
+      for (const cb of closeCbs) cb(null);
+    };
+    if (calls.length === 1) {
+      if (opts.signal?.aborted) queueMicrotask(abort);
+      else opts.signal?.addEventListener("abort", abort, { once: true });
+    } else {
+      queueMicrotask(() => {
+        const line = JSON.stringify({
+          type: "assistant",
+          uuid: "u-retry",
+          message: { role: "assistant", content: [{ type: "text", text: "retried" }] },
+        });
+        for (const cb of dataCbs) cb(line + "\n");
+        for (const cb of closeCbs) cb(0);
+      });
+    }
+    return child;
+  };
+  return { spawn, calls };
+}
+
 function valueAfter(argv: string[], flag: string): string | undefined {
   const i = argv.indexOf(flag);
   return i >= 0 ? argv[i + 1] : undefined;
@@ -209,6 +254,34 @@ describe("ClaudeDriver", () => {
     await driver.stop(ref);
     expect(events.some((e) => e.type === "status" && e.state === "ejected")).toBe(true);
     await expect(driver.send(ref, "still there?")).rejects.toThrow(/eject/);
+  });
+
+  it("cancel() waits for the child to stop and leaves the session usable", async () => {
+    const fake = interruptibleClaude();
+    const driver = new ClaudeDriver({
+      bin: "/fake/claude",
+      spawn: fake.spawn,
+      env: { PATH: "/usr/bin" },
+      randomUUID: () => UUID,
+      now: () => 1000,
+      buildSystemPrompt: () => "SYS",
+      buildPrompt: (page, instruction) =>
+        `PAGE ${page.url}${instruction ? ` :: ${instruction}` : ""}`,
+      chatDir: join(dir, "chat"),
+    });
+    const ref = await driver.start({ page: { url: "https://x.test" } });
+    const events: ChatEvent[] = [];
+    driver.subscribe(ref, (event) => events.push(event));
+    await waitFor(() =>
+      events.some((event) => event.type === "status" && event.state === "thinking"),
+    );
+
+    await driver.cancel(ref);
+
+    expect(events.some((event) => event.type === "status" && event.state === "idle")).toBe(true);
+    expect(events.some((event) => event.type === "status" && event.state === "error")).toBe(false);
+    await driver.send(ref, "retry");
+    expect(fake.calls).toHaveLength(2);
   });
 
   it("reports claude_not_found instead of throwing when the binary is missing", async () => {

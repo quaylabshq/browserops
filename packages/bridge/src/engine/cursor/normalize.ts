@@ -61,25 +61,31 @@ function toolName(tool: Record<string, unknown>): string {
   return asString(tool["name"]) || "tool";
 }
 
-function toolUseBlock(tool: Record<string, unknown>): ChatBlock {
+function callId(tool: Record<string, unknown>, fallback?: string): string {
+  return (
+    asString(fallback) || asString(tool["id"]) || asString(tool["toolCallId"]) || toolName(tool)
+  );
+}
+
+function toolUseBlock(tool: Record<string, unknown>, fallbackId?: string): ChatBlock {
   const name = toolName(tool);
   const inner = asObject(tool[name]) ?? tool;
   return {
     kind: "tool_use",
-    id: asString(tool["id"]) || name,
+    id: callId(inner, fallbackId),
     name,
     input: inner["args"] ?? tool["args"] ?? tool,
   };
 }
 
-function toolResultBlock(tool: Record<string, unknown>): ChatBlock {
+function toolResultBlock(tool: Record<string, unknown>, fallbackId?: string): ChatBlock {
   const name = toolName(tool);
   const inner = asObject(tool[name]) ?? tool;
   const raw = inner["result"] ?? tool["result"] ?? tool;
   const preview = stringify(raw);
   return {
     kind: "tool_result",
-    id: asString(tool["id"]) || name,
+    id: callId(inner, fallbackId),
     ok: asObject(raw)?.["error"] === undefined && tool["error"] === undefined,
     preview: preview.length > 2000 ? preview.slice(0, 2000) + "…" : preview,
   };
@@ -104,9 +110,12 @@ export function cursorLineToEvents(raw: unknown, turnId?: string): NormalizedLin
   if (type === "assistant") {
     const text = textFromEvent(o);
     if (text.trim()) {
-      const partial = o["timestamp_ms"] !== undefined;
+      // Cursor documents assistant output as deltas that must be concatenated.
+      // The process driver supplies a unique id per turn, so each answer keeps
+      // one streaming bubble until its terminal result arrives.
+      const partial = turnId !== undefined || o["timestamp_ms"] !== undefined;
       const message: ChatMessage = {
-        id: partial && turnId ? `${turnId}-assistant` : eventId(o, "cursor-assistant"),
+        id: turnId ? `${turnId}-assistant` : eventId(o, "cursor-assistant"),
         role: "assistant",
         blocks: [{ kind: "text", text }],
         ...(partial ? { partial: true } : {}),
@@ -115,13 +124,14 @@ export function cursorLineToEvents(raw: unknown, turnId?: string): NormalizedLin
     }
   } else if (type === "tool_call") {
     const tool = asObject(o["tool_call"]) ?? o;
+    const id = asString(o["call_id"]) || asString(o["tool_call_id"]);
     if (subtype === "completed") {
       events.push({
         type: "message",
         message: {
           id: eventId(o, "cursor-tool-result"),
           role: "tool",
-          blocks: [toolResultBlock(tool)],
+          blocks: [toolResultBlock(tool, id)],
         },
       });
     } else {
@@ -130,7 +140,7 @@ export function cursorLineToEvents(raw: unknown, turnId?: string): NormalizedLin
         message: {
           id: eventId(o, "cursor-tool"),
           role: "assistant",
-          blocks: [toolUseBlock(tool)],
+          blocks: [toolUseBlock(tool, id)],
         },
       });
     }

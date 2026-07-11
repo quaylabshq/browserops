@@ -163,6 +163,15 @@ export class TranscriptTailer {
     }
   }
 
+  /** The driver interrupted the current TUI turn (Ctrl+C). */
+  markIdle(): void {
+    this.lastActivity = 0;
+    if (this.state !== "idle") {
+      this.state = "idle";
+      this.listener({ type: "status", state: "idle" });
+    }
+  }
+
   private async resolvePath(): Promise<string | null> {
     if (this.path) return this.path;
     const found = await findTranscriptPath(this.sessionId, {

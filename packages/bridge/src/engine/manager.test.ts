@@ -20,6 +20,7 @@ class FakeDriver implements AgentDriver {
   readonly id: AgentId;
   started: StartOpts[] = [];
   sent: { id: string; text: string }[] = [];
+  cancelled: string[] = [];
   stopped: string[] = [];
   historyResult: ChatMessage[] = [];
   private seq = 0;
@@ -62,6 +63,9 @@ class FakeDriver implements AgentDriver {
   }
   async stop(ref: SessionRef): Promise<void> {
     this.stopped.push(ref.sessionId);
+  }
+  async cancel(ref: SessionRef): Promise<void> {
+    this.cancelled.push(ref.sessionId);
   }
   emit(sessionId: string, event: ChatEvent): void {
     for (const l of this.listeners.get(sessionId) ?? []) l(event);
@@ -192,6 +196,13 @@ describe("ChatEngine", () => {
     expect(driver.stopped).toEqual(["s1"]);
   });
 
+  it("cancel interrupts the current response without stopping the session", async () => {
+    const ref = await engine.start({ agent: "claude", page: { url: "x" } });
+    await engine.cancel(ref.sessionId);
+    expect(driver.cancelled).toEqual(["s1"]);
+    expect(driver.stopped).toEqual([]);
+  });
+
   it("eject prefers the driver's relinquish over stop", async () => {
     const d = new RelinquishDriver();
     const e = new ChatEngine({ drivers: { claude: d }, index, now: () => 1 });
@@ -248,7 +259,7 @@ describe("ChatEngine", () => {
     });
   });
 
-  it("migrates via normalized history into a new target-agent session", async () => {
+  it("defers a new target provider until the user sends the next real turn", async () => {
     const source = new FakeDriver("claude");
     source.historyResult = [
       { id: "u", role: "user", blocks: [{ kind: "text", text: "summarize this" }] },
@@ -266,9 +277,14 @@ describe("ChatEngine", () => {
     expect(migrated.agent).toBe("codex");
     expect(migrated.sessionId).toBe(ref.sessionId);
     expect(migrated.migrationSourceAgent).toBe("claude");
+    expect(target.started).toHaveLength(0);
+    await e.send(ref.sessionId, "continue with a shorter version");
+    expect(target.started).toHaveLength(1);
     expect(target.started[0]?.instruction).toContain("Canonical transcript");
     expect(target.started[0]?.instruction).toContain("user: summarize this");
     expect(target.started[0]?.instruction).toContain("assistant: done");
+    expect(target.started[0]?.instruction).toContain("continue with a shorter version");
+    expect(target.sent).toEqual([]); // the real user turn is the target's seed, not a duplicate send
     const back = await e.migrate(ref.sessionId, "claude");
     expect(back.sessionId).toBe(ref.sessionId);
     expect(back.agent).toBe("claude");
@@ -287,6 +303,7 @@ describe("ChatEngine", () => {
     });
     const ref = await e.start({ agent: "claude", page: { url: "x" } });
     await e.migrate(ref.sessionId, "codex");
+    await e.send(ref.sessionId, "pick up the work here");
     target.emit("s1", {
       type: "message",
       message: {
@@ -312,6 +329,36 @@ describe("ChatEngine", () => {
           message.blocks[0].text === "continue here",
       ),
     ).toHaveLength(1);
+  });
+
+  it("keeps a deferred provider dormant across a restart until a real user turn", async () => {
+    const source = new FakeDriver("claude");
+    source.historyResult = [
+      { id: "a", role: "assistant", blocks: [{ kind: "text", text: "done" }] },
+    ];
+    const target = new FakeDriver("codex");
+    const first = new ChatEngine({
+      drivers: { claude: source, codex: target },
+      index,
+      store,
+      now: () => 1,
+    });
+    const ref = await first.start({ agent: "claude", page: { url: "x" } });
+    await first.migrate(ref.sessionId, "codex");
+    expect(target.started).toHaveLength(0);
+
+    const restoredSource = new FakeDriver("claude");
+    const restoredTarget = new FakeDriver("codex");
+    const restored = new ChatEngine({
+      drivers: { claude: restoredSource, codex: restoredTarget },
+      index,
+      store,
+      now: () => 2,
+    });
+    await restored.send(ref.sessionId, "continue");
+
+    expect(restoredTarget.started).toHaveLength(1);
+    expect(restoredTarget.sent).toEqual([]);
   });
 
   it("resolves a cold session from the index after a restart", async () => {

@@ -4,6 +4,7 @@ import {
   appendUserMessage,
   buildNewBody,
   chatBase,
+  chatCancel,
   collectToolActivity,
   initialChatState,
   ptyInputFrame,
@@ -80,6 +81,19 @@ describe("reduceChat", () => {
     expect(s.messages.map((m) => m.id)).toEqual(["u-ext"]);
   });
 
+  it("suppresses a repeated provider echo of an already-rendered user message", () => {
+    let s = reduceChat(initialChatState(), {
+      type: "message",
+      message: { id: "canonical", role: "user", blocks: [{ kind: "text", text: "open docs" }] },
+    });
+    s = reduceChat(s, {
+      type: "message",
+      message: { id: "provider-echo", role: "user", blocks: [{ kind: "text", text: "open docs" }] },
+    });
+    expect(s.messages).toHaveLength(1);
+    expect(s.messages[0]?.id).toBe("canonical");
+  });
+
   it("tracks status, latches ejected, and drops terminal capabilities on eject", () => {
     let s = {
       ...initialChatState(),
@@ -150,7 +164,25 @@ describe("collectToolActivity", () => {
       },
     ]);
     expect(activity).toMatchObject({ active: true, completed: 0 });
-    expect(activity.latest).toMatchObject({ label: "Typing", active: true });
+    expect(activity.latest).toMatchObject({ label: "Entering text", active: true });
+  });
+
+  it("turns BrowserOps tool inputs into a user-readable action", () => {
+    const activity = collectToolActivity([
+      {
+        id: "call",
+        role: "assistant",
+        blocks: [
+          {
+            kind: "tool_use",
+            id: "tool-3",
+            name: "mcp__browserops__browser_click_by_text",
+            input: { text: "Sign in", role: "button" },
+          },
+        ],
+      },
+    ]);
+    expect(activity.latest).toMatchObject({ label: "Clicking “Sign in”", detail: "button" });
   });
 });
 
@@ -169,6 +201,10 @@ describe("statusLabel", () => {
     expect(statusLabel("thinking", true)).toBe("Controlled in your terminal");
     expect(statusLabel("thinking", false)).toBe("Working…");
     expect(statusLabel("error", false)).toBe("Something went wrong");
+    expect(statusLabel("error", false, "agent_not_found", "codex")).toContain("Codex CLI");
+    expect(statusLabel("error", false, "exit_1: authentication failed", "cursor")).toContain(
+      "authentication failed",
+    );
     expect(statusLabel("idle", false)).toBe("");
   });
 });
@@ -178,6 +214,26 @@ describe("streamUrl", () => {
     const url = streamUrl("tok en", "s/1");
     expect(url).toContain("/chat/stream?token=tok%20en");
     expect(url).toContain("session_id=s%2F1");
+  });
+});
+
+describe("chatCancel", () => {
+  it("sends the session id to the cancellation endpoint", async () => {
+    const originalFetch = globalThis.fetch;
+    let request: Request | undefined;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      request = new Request(input, init);
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }) as typeof fetch;
+    try {
+      await expect(chatCancel("token", "session-1")).resolves.toMatchObject({ ok: true });
+      expect(request?.url).toContain("/chat/cancel");
+      expect(await request?.text()).toBe(
+        JSON.stringify({ token: "token", session_id: "session-1" }),
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });
 

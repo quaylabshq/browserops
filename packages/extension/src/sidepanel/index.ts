@@ -3,6 +3,7 @@ export {};
 import {
   AGENTS,
   DEFAULT_AGENT_ID,
+  type ChatAgentStatus,
   type ChatEvent,
   type ChatMessage,
   type ChatSettings,
@@ -10,6 +11,7 @@ import {
 import {
   appendUserMessage,
   chatAgents,
+  chatCancel,
   chatHistory,
   chatMigrate,
   chatNew,
@@ -39,6 +41,7 @@ const $ = <T extends HTMLElement>(id: string): T => {
 
 const statusPill = $<HTMLSpanElement>("status");
 const newSessionBtn = $<HTMLButtonElement>("new-session");
+const stopResponseBtn = $<HTMLButtonElement>("stop-response");
 const termMirrorBtn = $<HTMLButtonElement>("term-mirror");
 const termTakeoverBtn = $<HTMLButtonElement>("term-takeover");
 const disconnectedEl = $<HTMLDivElement>("disconnected");
@@ -67,6 +70,12 @@ const settingsSafeMode = $<HTMLInputElement>("settings-safe-mode");
 const settingsTransport = $<HTMLSelectElement>("settings-transport");
 const settingsSaved = $<HTMLSpanElement>("settings-saved");
 const agentAvailability = $<HTMLDivElement>("agent-availability");
+const agentSwitchDialog = $<HTMLDialogElement>("agent-switch-dialog");
+const agentSwitchTitle = $<HTMLHeadingElement>("agent-switch-title");
+const agentSwitchCopy = $<HTMLParagraphElement>("agent-switch-copy");
+const agentSwitchNote = $<HTMLParagraphElement>("agent-switch-note");
+const agentSwitchCancel = $<HTMLButtonElement>("agent-switch-cancel");
+const agentSwitchConfirm = $<HTMLButtonElement>("agent-switch-confirm");
 
 let selectedAgent: string = DEFAULT_AGENT_ID;
 let connected = false;
@@ -77,9 +86,11 @@ let view: "chat" | "terminal" | "settings" = "chat";
 let tokenCache: string | null = null;
 let systemSeq = 0;
 let savedChatSettings: ChatSettings | undefined;
-let agentAvailabilityById = new Map<string, boolean>();
+let agentAvailabilityById = new Map<string, ChatAgentStatus>();
 let toolActivityExpanded = false;
 let toolActivitySessionId: string | undefined;
+let pendingAgentSwitch: string | undefined;
+let stoppingResponse = false;
 
 function sessionCaps(value: {
   capabilities?: ChatState["capabilities"];
@@ -130,24 +141,69 @@ function renderAgents(): void {
       note.textContent = a.note;
       chip.appendChild(note);
     }
-    if (a.caps.chat && agentAvailabilityById.get(a.id) !== false) {
+    const availability = agentAvailabilityById.get(a.id);
+    if (a.caps.chat && availability?.available !== false) {
       chip.addEventListener("click", () => selectAgent(a.id));
     } else {
       chip.disabled = true;
-      if (agentAvailabilityById.get(a.id) === false) chip.title = "CLI unavailable";
+      chip.title = agentAvailabilityMessage(a.label, availability?.reason);
     }
     agentsEl.appendChild(chip);
   }
   syncAgentSelection();
 }
 
+function agentLabel(id: string): string {
+  return AGENTS.find((agent) => agent.id === id)?.label ?? id;
+}
+
+function agentAvailabilityMessage(label: string, reason?: string): string {
+  if (reason === "agent_not_found") {
+    return `${label} CLI was not found by BrowserOps. Install or sign in, then reopen Chat.`;
+  }
+  if (reason === "driver_unavailable") return `${label} is not enabled by this BrowserOps bridge.`;
+  return reason ? `${label} is unavailable: ${reason}` : `${label} is unavailable.`;
+}
+
+function responseIsActive(): boolean {
+  return state.status === "starting" || state.status === "thinking";
+}
+
 function selectAgent(id: string): void {
   if (state.session && state.session.agent !== id) {
-    void migrateSession(id);
+    pendingAgentSwitch = id;
+    const source = agentLabel(state.session.agent);
+    const target = agentLabel(id);
+    const busy = responseIsActive();
+    agentSwitchTitle.textContent = busy
+      ? "Stop the response before switching"
+      : "Switch chat provider?";
+    agentSwitchCopy.textContent = busy
+      ? `${source} is still generating a response. Stop it before switching to ${target}.`
+      : `Switch from ${source} to ${target}? BrowserOps will create a linked ${target} session with this conversation’s history.`;
+    agentSwitchNote.textContent = busy
+      ? "This prevents a response from continuing in a provider you are no longer viewing."
+      : "Your current chat stays in Recent sessions. The new provider will wait until your next message before responding.";
+    agentSwitchCancel.textContent = busy ? "Back to chat" : "Keep current chat";
+    agentSwitchConfirm.hidden = busy;
+    if (!agentSwitchDialog.open) agentSwitchDialog.showModal();
+    agentSwitchCancel.focus();
     return;
   }
   selectedAgent = id;
   syncAgentSelection();
+}
+
+function dismissAgentSwitch(): void {
+  pendingAgentSwitch = undefined;
+  agentSwitchConfirm.hidden = false;
+  agentSwitchDialog.close();
+}
+
+async function confirmAgentSwitch(): Promise<void> {
+  const targetAgent = pendingAgentSwitch;
+  dismissAgentSwitch();
+  if (targetAgent && !responseIsActive()) await migrateSession(targetAgent);
 }
 
 function syncAgentSelection(): void {
@@ -221,7 +277,8 @@ function renderToolActivity(): HTMLElement | undefined {
     : `${activity.completed} browser action${activity.completed === 1 ? "" : "s"} completed`;
   const detail = document.createElement("span");
   detail.textContent = working
-    ? `${activity.items.length} action${activity.items.length === 1 ? "" : "s"} in this response · live`
+    ? (latest?.detail ??
+      `${activity.items.length} action${activity.items.length === 1 ? "" : "s"} in this response · live`)
     : "Select to review actions";
   copy.append(title, detail);
   toggle.appendChild(copy);
@@ -251,6 +308,12 @@ function renderToolActivity(): HTMLElement | undefined {
       outcome.className = item.active ? "is-running" : item.ok === false ? "is-error" : "is-done";
       heading.append(label, outcome);
       row.appendChild(heading);
+      if (item.detail) {
+        const detail = document.createElement("div");
+        detail.className = "tool-activity-detail";
+        detail.textContent = `Activity · ${item.detail}`;
+        row.appendChild(detail);
+      }
       if (item.input) {
         const input = document.createElement("div");
         input.className = "tool-activity-detail";
@@ -304,7 +367,7 @@ function render(): void {
   transcriptEl.scrollTop = transcriptEl.scrollHeight;
 
   // Status line.
-  const label = statusLabel(state.status, state.ejected);
+  const label = statusLabel(state.status, state.ejected, state.statusDetail, state.session?.agent);
   agentStatusEl.textContent = label;
   agentStatusEl.hidden = label.length === 0;
 
@@ -315,6 +378,11 @@ function render(): void {
   termTakeoverBtn.hidden =
     !hasSession || !connected || state.ejected || !state.capabilities.externalTakeover;
   newSessionBtn.hidden = state.messages.length === 0 && !hasSession;
+  newSessionBtn.disabled = responseIsActive();
+  newSessionBtn.title = responseIsActive() ? "Stop the response before starting a new chat" : "";
+  stopResponseBtn.hidden = !hasSession || !connected || state.ejected || !responseIsActive();
+  stopResponseBtn.disabled = stoppingResponse;
+  stopResponseBtn.textContent = stoppingResponse ? "■ Stopping…" : "■ Stop";
   syncTerminalBtn();
   syncComposer();
 }
@@ -387,6 +455,7 @@ function openStream(token: string, sessionId: string, endpoint: ChatEndpoint): v
     // newly selected conversation.
     if (state.session?.sessionId !== expectedSession) return;
     state = reduceChat(state, event);
+    if (event.type === "status" && !responseIsActive()) stoppingResponse = false;
     render();
   };
   stream.onerror = () => {
@@ -453,14 +522,16 @@ async function capturePageMeta(): Promise<PageMeta> {
 // --- connection + composer state -------------------------------------------
 
 function syncComposer(): void {
-  const canSend = connected && !state.ejected;
+  const canSend = connected && !state.ejected && !responseIsActive();
   messageEl.disabled = !canSend;
   sendBtn.disabled = !canSend;
   messageEl.placeholder = !connected
     ? "Connect the bridge to start…"
     : state.ejected
       ? "This session is now controlled in your terminal"
-      : "Message…";
+      : responseIsActive()
+        ? "Wait for the current reply or stop it…"
+        : "Message…";
 }
 
 function renderConnection(isConnected: boolean): void {
@@ -494,7 +565,7 @@ async function loadAgentAvailability(): Promise<void> {
   const token = await getToken();
   if (!token) return;
   const statuses = await chatAgents(token, await getEndpoint());
-  agentAvailabilityById = new Map(statuses.map((status) => [status.agent, status.available]));
+  agentAvailabilityById = new Map(statuses.map((status) => [status.agent, status]));
   renderAgents();
 }
 
@@ -544,6 +615,9 @@ function newError(status: number, error?: string): string {
   if (status === 401 || status === 403) return "Not authorized — re-run setup.";
   if (error === "chat_unavailable") return "Chat isn't available on this bridge.";
   if (error === "agent_unavailable") return "That agent isn't available yet.";
+  if (error === "agent_not_found") {
+    return "That provider's CLI is unavailable. Install or sign in, then retry.";
+  }
   return "Couldn't start the chat.";
 }
 
@@ -552,7 +626,33 @@ function sendError(status: number, error?: string): string {
   if (status === 404) return "This session is no longer available. Start a new chat.";
   if (status === 409 || error === "session_ejected")
     return "This session is controlled in your terminal.";
+  if (error === "agent_not_found") {
+    return "That provider's CLI is unavailable. Install or sign in, then retry.";
+  }
   return "Couldn't send that message.";
+}
+
+async function stopResponse(): Promise<void> {
+  if (!state.session || !responseIsActive() || stoppingResponse) return;
+  const token = await getToken();
+  if (!token) {
+    pushSystem("Run setup first (no token).");
+    return;
+  }
+  stoppingResponse = true;
+  render();
+  const result = await chatCancel(token, state.session.sessionId, await getEndpoint());
+  stoppingResponse = false;
+  if (!result.ok) {
+    pushSystem(
+      result.status === 404 ? "This chat is no longer available." : "Couldn't stop the response.",
+    );
+    return;
+  }
+  // The SSE status event is canonical; update locally as well so the control
+  // responds immediately if that event arrives just after this request.
+  state = reduceChat(state, { type: "status", state: "idle" });
+  render();
 }
 
 // --- migration --------------------------------------------------------------
@@ -562,6 +662,10 @@ async function migrateSession(targetAgent: string): Promise<void> {
   if (!source || source.agent === targetAgent) {
     selectedAgent = targetAgent;
     syncAgentSelection();
+    return;
+  }
+  if (responseIsActive()) {
+    pushSystem("Stop the current response before switching providers.");
     return;
   }
   const token = await getToken();
@@ -621,7 +725,10 @@ function renderAgentAvailability(agents: Awaited<ReturnType<typeof chatAgents>>)
   agentAvailability.replaceChildren();
   for (const status of agents) {
     const line = document.createElement("div");
-    line.textContent = `${status.agent}: ${status.available ? "available" : (status.reason ?? "unavailable")}`;
+    const label = agentLabel(status.agent);
+    line.textContent = status.available
+      ? `${label}: ready`
+      : agentAvailabilityMessage(label, status.reason);
     if (!status.available) line.className = "unavailable";
     agentAvailability.appendChild(line);
   }
@@ -776,6 +883,7 @@ async function takeoverTerminal(): Promise<void> {
 }
 
 function newSession(): void {
+  if (responseIsActive()) return;
   closeStream();
   closeTerminal();
   state = initialChatState();
@@ -804,6 +912,12 @@ messageEl.addEventListener("keydown", (e) => {
   }
 });
 newSessionBtn.addEventListener("click", newSession);
+stopResponseBtn.addEventListener("click", () => void stopResponse());
+agentSwitchCancel.addEventListener("click", dismissAgentSwitch);
+agentSwitchConfirm.addEventListener("click", () => void confirmAgentSwitch());
+agentSwitchDialog.addEventListener("cancel", () => {
+  pendingAgentSwitch = undefined;
+});
 termMirrorBtn.addEventListener("click", () => {
   void setView(view === "terminal" ? "chat" : "terminal");
 });

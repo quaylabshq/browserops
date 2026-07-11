@@ -238,6 +238,24 @@ describe("ClaudePtyDriver", () => {
     );
   });
 
+  it("cancel sends Ctrl+C but keeps the interactive session usable", async () => {
+    const { driver, fake } = make();
+    const ref = await driver.start({ page, cwd });
+    const events: ChatEvent[] = [];
+    driver.subscribe(ref, (e) => events.push(e));
+
+    await driver.cancel(ref);
+
+    expect(fake.writes).toContain("\u0003");
+    expect(fake.killed).toBe(false);
+    expect(events.some((e) => e.type === "status" && e.state === "idle")).toBe(true);
+    fake.emitData("rendered");
+    await sleep(30);
+    expect(fake.writes).toEqual(["\u0003"]);
+    await driver.send(ref, "try again");
+    expect(fake.writes).toEqual(["\u0003", "try again", "\r"]);
+  });
+
   it("pre-seeds workspace folder-trust in ~/.claude.json", async () => {
     const { driver } = make();
     await driver.start({ page, cwd });

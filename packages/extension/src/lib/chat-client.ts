@@ -73,6 +73,8 @@ export interface ChatState {
   session?: SessionRef;
   messages: ChatMessage[];
   status: ChatStatusState;
+  /** Provider/bridge detail for a failed status, capped by the bridge. */
+  statusDetail?: string;
   ejected: boolean;
   capabilities: ChatSessionCapabilities;
 }
@@ -81,6 +83,7 @@ export interface ToolActivityItem {
   id: string;
   name: string;
   label: string;
+  detail?: string;
   input?: string;
   result?: string;
   ok?: boolean;
@@ -96,7 +99,8 @@ export interface ToolActivity {
 
 function compactToolValue(value: unknown, cap = 360): string {
   let text: string;
-  if (typeof value === "string") text = value;
+  if (value === undefined || value === null) text = "";
+  else if (typeof value === "string") text = value;
   else {
     try {
       text = JSON.stringify(value);
@@ -108,23 +112,144 @@ function compactToolValue(value: unknown, cap = 360): string {
   return flat.length > cap ? flat.slice(0, cap) + "…" : flat;
 }
 
-export function friendlyToolLabel(name: string): string {
-  const clean = name.replace(/^mcp__browserops(?:__|_)?/, "").replace(/^browser_/, "");
-  const labels: Record<string, string> = {
-    observe: "Inspecting the page",
-    read: "Reading page details",
-    quick_read: "Finding page controls",
-    navigate: "Navigating",
-    click: "Clicking a control",
-    click_at: "Clicking the page",
-    click_by_text: "Selecting text",
-    type: "Typing",
-    press: "Using the keyboard",
-    hover: "Inspecting a menu",
-    screenshot: "Capturing the page",
-    execute_js: "Running a page action",
-  };
-  return labels[clean] ?? clean.replace(/[_-]+/g, " ").replace(/^./, (c) => c.toUpperCase());
+function asInputRecord(value: unknown): Record<string, unknown> {
+  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  if (typeof value === "string") {
+    try {
+      const parsed: unknown = JSON.parse(value);
+      if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      // Plain-text arguments get the generic fallback below.
+    }
+  }
+  return {};
+}
+
+function displayToolInput(name: string, input: unknown): string {
+  const normalized = name.replace(/^mcp__browserops(?:__|_)?/, "").toLowerCase();
+  const args = asInputRecord(input);
+  if (normalized === "browser_type" || normalized === "type") {
+    const length = typeof args["text"] === "string" ? args["text"].length : 0;
+    return length > 0 ? `Text input · ${length} characters` : "Text input";
+  }
+  if (normalized === "browser_execute_js" || normalized === "execute_js") {
+    return "Custom page action";
+  }
+  return compactToolValue(input);
+}
+
+function shortText(value: unknown, cap = 72): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const flat = value.replace(/\s+/g, " ").trim();
+  return flat ? (flat.length > cap ? `${flat.slice(0, cap)}…` : flat) : undefined;
+}
+
+function toolPresentation(
+  name: string,
+  input: unknown,
+): Pick<ToolActivityItem, "label" | "detail"> {
+  const args = asInputRecord(input);
+  const isBrowserOps = name.startsWith("browser_") || name.startsWith("mcp__browserops");
+  const raw = name.replace(/^mcp__browserops(?:__|_)?/, "");
+  const clean = raw
+    .replace(/^browser_/, "")
+    .replace(/ToolCall$/, "")
+    .replace(/([a-z])([A-Z])/g, "$1_$2")
+    .toLowerCase();
+  const text = shortText(args["text"] ?? args["query"]);
+  const path = shortText(args["file_path"] ?? args["path"] ?? args["filePath"]);
+  const command = shortText(args["command"]);
+
+  if (name.startsWith("mcp__") && !name.startsWith("mcp__browserops")) {
+    const [, server = "MCP", tool = "tool"] = name.split("__");
+    return { label: `Using ${server}`, detail: tool.replace(/[_-]+/g, " ") };
+  }
+  switch (clean) {
+    case "observe":
+      return {
+        label: "Inspecting the page",
+        detail: shortText(args["mode"]) ?? "Adaptive page view",
+      };
+    case "read":
+      return isBrowserOps
+        ? {
+            label: "Reading page content",
+            detail: shortText(args["mode"]) ?? "Accessible page structure",
+          }
+        : { label: path ? `Reading ${path}` : "Reading a file" };
+    case "quick_read":
+      return {
+        label: text ? `Finding “${text}”` : "Finding page controls",
+        detail: shortText(args["role"]),
+      };
+    case "navigate": {
+      const url = shortText(args["url"]);
+      try {
+        return url
+          ? { label: `Opening ${new URL(url).host}`, detail: new URL(url).pathname || "/" }
+          : { label: "Opening a page" };
+      } catch {
+        return { label: "Opening a page", detail: url };
+      }
+    }
+    case "click_by_text":
+      return {
+        label: text ? `Clicking “${text}”` : "Clicking a page control",
+        detail: shortText(args["role"]),
+      };
+    case "click":
+    case "click_at":
+      return {
+        label: "Clicking a page control",
+        detail: args["ref"] !== undefined ? `Control ${String(args["ref"])}` : undefined,
+      };
+    case "type":
+      return {
+        label: "Entering text",
+        detail: typeof args["text"] === "string" ? `${args["text"].length} characters` : undefined,
+      };
+    case "press":
+      return {
+        label: "Using the keyboard",
+        detail: Array.isArray(args["keys"]) ? args["keys"].join(" + ") : undefined,
+      };
+    case "hover":
+      return { label: "Inspecting a menu" };
+    case "screenshot":
+      return { label: "Capturing the page" };
+    case "execute_js":
+      return { label: "Running a custom page action" };
+    case "procedures_execute":
+      return { label: "Running a saved browser workflow", detail: shortText(args["name"]) };
+    case "procedures_search":
+      return { label: "Finding a saved browser workflow" };
+    case "command_execution":
+    case "bash":
+    case "shell":
+      return { label: "Running a command", detail: command };
+    case "read_file":
+      return { label: path ? `Reading ${path}` : "Reading a file" };
+    case "write":
+    case "write_file":
+      return { label: path ? `Writing ${path}` : "Writing a file" };
+    case "edit":
+    case "edit_file":
+      return { label: path ? `Editing ${path}` : "Editing a file" };
+    case "file_change": {
+      const changes = Array.isArray(args["changes"]) ? args["changes"] : [];
+      return {
+        label: `Updating ${changes.length || "some"} file${changes.length === 1 ? "" : "s"}`,
+      };
+    }
+    case "web_search":
+      return { label: text ? `Searching for “${text}”` : "Searching the web" };
+    default:
+      return { label: clean.replace(/[_-]+/g, " ").replace(/^./, (c) => c.toUpperCase()) };
+  }
 }
 
 /** Collapse provider-specific tool blocks into one panel-level activity feed. */
@@ -134,11 +259,12 @@ export function collectToolActivity(messages: readonly ChatMessage[]): ToolActiv
   for (const message of messages) {
     for (const block of message.blocks) {
       if (block.kind === "tool_use") {
+        const presentation = toolPresentation(block.name, block.input);
         const item: ToolActivityItem = {
           id: block.id,
           name: block.name,
-          label: friendlyToolLabel(block.name),
-          input: compactToolValue(block.input),
+          ...presentation,
+          input: displayToolInput(block.name, block.input),
           active: true,
         };
         items.push(item);
@@ -210,14 +336,40 @@ function upsertMessage(messages: ChatMessage[], incoming: ChatMessage): ChatMess
     return next;
   }
   if (incoming.role === "user" && !isOptimistic(incoming.id)) {
-    const pending = messages.findIndex((m) => m.role === "user" && isOptimistic(m.id));
+    const incomingText = userMessageText(incoming);
+    const pending = messages.findIndex(
+      (m) => m.role === "user" && isOptimistic(m.id) && userMessageText(m) === incomingText,
+    );
     if (pending >= 0) {
       const next = messages.slice();
       next[pending] = { ...messages[pending]!, id: incoming.id };
       return next;
     }
+    // Cursor and other CLIs can replay a submitted prompt in their stream.
+    // BrowserOps already rendered the canonical user event, so ignore an exact
+    // replay instead of adding a second user bubble.
+    if (
+      incomingText.length > 0 &&
+      messages.some(
+        (m) => m.role === "user" && !isOptimistic(m.id) && userMessageText(m) === incomingText,
+      )
+    ) {
+      return messages;
+    }
   }
   return [...messages, incoming];
+}
+
+function userMessageText(message: ChatMessage): string {
+  return message.blocks
+    .filter(
+      (block): block is Extract<ChatMessage["blocks"][number], { kind: "text" }> =>
+        block.kind === "text",
+    )
+    .map((block) => block.text)
+    .join("\n")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 export function reduceChat(state: ChatState, event: ChatEvent): ChatState {
@@ -230,6 +382,7 @@ export function reduceChat(state: ChatState, event: ChatEvent): ChatState {
       return {
         ...state,
         status: event.state,
+        statusDetail: event.state === "error" ? event.detail : undefined,
         ejected: state.ejected || event.state === "ejected",
         // Ejected to an external terminal → the daemon no longer owns a pty, so
         // the embedded-terminal toggle is no longer available.
@@ -254,18 +407,32 @@ export function appendUserMessage(state: ChatState, text: string): ChatState {
     role: "user",
     blocks: [{ kind: "text", text }],
   };
-  return { ...state, messages: [...state.messages, message], status: "thinking" };
+  return {
+    ...state,
+    messages: [...state.messages, message],
+    status: "thinking",
+    statusDetail: undefined,
+  };
 }
 
-export function statusLabel(status: ChatStatusState, ejected: boolean): string {
+export function statusLabel(
+  status: ChatStatusState,
+  ejected: boolean,
+  detail?: string,
+  agent?: string,
+): string {
   if (ejected) return "Controlled in your terminal";
+  const provider = agent === "codex" ? "Codex" : agent === "cursor" ? "Cursor" : "Claude";
   switch (status) {
     case "starting":
       return "Starting…";
     case "thinking":
       return "Working…";
     case "error":
-      return "Something went wrong";
+      if (detail === "agent_not_found") {
+        return `${provider} CLI is unavailable. Install or sign in, then retry.`;
+      }
+      return detail ? `${provider} couldn’t start: ${detail}` : "Something went wrong";
     default:
       return "";
   }
@@ -339,6 +506,26 @@ export async function chatSend(
   const data = await readJson(res);
   return {
     ok: res.ok,
+    status: res.status,
+    error: typeof data["error"] === "string" ? data["error"] : undefined,
+  };
+}
+
+/** Interrupt the current answer without ending or discarding the conversation. */
+export async function chatCancel(
+  token: string,
+  sessionId: string,
+  endpoint?: ChatEndpoint,
+): Promise<{ ok: boolean; status: number; error?: string }> {
+  let res: Response;
+  try {
+    res = await postJson("/chat/cancel", { token, session_id: sessionId }, endpoint);
+  } catch {
+    return { ok: false, status: 0, error: "unreachable" };
+  }
+  const data = await readJson(res);
+  return {
+    ok: res.ok && data["ok"] !== false,
     status: res.status,
     error: typeof data["error"] === "string" ? data["error"] : undefined,
   };

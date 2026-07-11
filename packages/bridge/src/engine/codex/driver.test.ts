@@ -80,4 +80,46 @@ describe("codexLineToEvents", () => {
       },
     ]);
   });
+
+  it("retains MCP server/tool/arguments so the UI can describe the action", () => {
+    const start = codexLineToEvents({
+      type: "item.started",
+      item: {
+        id: "mcp-1",
+        type: "mcp_tool_call",
+        server: "browserops",
+        tool: "browser_click_by_text",
+        arguments: '{"text":"Sign in"}',
+        status: "in_progress",
+      },
+    });
+    const completed = codexLineToEvents({
+      type: "item.completed",
+      item: {
+        id: "mcp-1",
+        type: "mcp_tool_call",
+        server: "browserops",
+        tool: "browser_click_by_text",
+        result: { clicked: true },
+        status: "completed",
+      },
+    });
+    expect(start.events[0]).toMatchObject({
+      type: "message",
+      message: {
+        blocks: [
+          {
+            kind: "tool_use",
+            id: "mcp-1",
+            name: "mcp__browserops__browser_click_by_text",
+            input: { text: "Sign in" },
+          },
+        ],
+      },
+    });
+    expect(completed.events[0]).toMatchObject({
+      type: "message",
+      message: { blocks: [{ kind: "tool_result", id: "mcp-1", ok: true }] },
+    });
+  });
 });

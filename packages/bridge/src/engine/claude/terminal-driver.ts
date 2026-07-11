@@ -68,6 +68,9 @@ interface PtyState {
   events: ChatEvent[];
   queue: Promise<void>;
   ready: Promise<void>;
+  readyResolved: boolean;
+  /** Stop can arrive before the interactive TUI accepts the initial seed. */
+  seedCancelled: boolean;
   session?: PtySession;
   tailer?: TranscriptTailer;
   stopped: boolean;
@@ -168,6 +171,8 @@ export class ClaudePtyDriver implements AgentDriver, TerminalAttachable {
       events: [],
       queue: Promise.resolve(),
       ready: Promise.resolve(),
+      readyResolved: false,
+      seedCancelled: false,
       stopped: false,
       ejected: false,
     };
@@ -195,11 +200,13 @@ export class ClaudePtyDriver implements AgentDriver, TerminalAttachable {
     state.tailer = tailer;
     tailer.start();
 
-    state.ready = session.waitUntilReady(this.readyOpts);
+    state.ready = session.waitUntilReady(this.readyOpts).then(() => {
+      state.readyResolved = true;
+    });
     tailer.markThinking(); // show "working" while the pty boots + the seed turn lands
 
     const seed = this.buildPrompt(opts.page, opts.instruction);
-    void this.enqueue(state, () => this.submitTurn(state, seed)).catch(() => {});
+    void this.enqueue(state, () => this.submitTurn(state, seed, true)).catch(() => {});
     return ref;
   }
 
@@ -239,6 +246,16 @@ export class ClaudePtyDriver implements AgentDriver, TerminalAttachable {
     state.tailer?.stop();
     state.session?.kill();
     this.dispatch(state, { type: "end", reason: "stopped" });
+  }
+
+  async cancel(ref: SessionRef): Promise<void> {
+    const state = this.requireLive(ref);
+    // Ctrl+C interrupts Claude's current Ink turn while preserving this pty,
+    // native session, and transcript tailer for the next message.
+    if (!state.readyResolved) state.seedCancelled = true;
+    state.session!.interrupt();
+    if (state.tailer) state.tailer.markIdle();
+    else this.dispatch(state, { type: "status", state: "idle" });
   }
 
   /**
@@ -328,9 +345,10 @@ export class ClaudePtyDriver implements AgentDriver, TerminalAttachable {
     return args;
   }
 
-  private async submitTurn(state: PtyState, text: string): Promise<void> {
+  private async submitTurn(state: PtyState, text: string, seed = false): Promise<void> {
     if (state.stopped || state.ejected || !state.session) throw new EngineError("unknown_session");
     await state.ready; // gate the first turn on the TUI being mounted
+    if (seed && state.seedCancelled) return;
     state.tailer?.markThinking();
     await state.session.submit(text, this.submitOpts);
   }

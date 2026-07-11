@@ -16,7 +16,7 @@ import { chatDir as defaultChatDir, workspaceDir } from "../paths.js";
 import type { Logger } from "../logger.js";
 import type { AgentDriver, ChatEventListener, StartOpts, Unsubscribe } from "./driver.js";
 import { EngineError } from "./errors.js";
-import { resolveAgentBin } from "./bin.js";
+import { resetAgentBinCache, resolveAgentBin } from "./bin.js";
 import { resolveLoginEnv } from "./claude/bin.js";
 import { appendMirror, mirrorEventLine, mirrorHeader } from "./claude/mirror.js";
 import {
@@ -71,7 +71,10 @@ export interface ProcessDriverState {
   events: ChatEvent[];
   partialMessages: Map<string, ChatMessage>;
   queue: Promise<void>;
+  activeTurn?: Promise<void>;
   abort?: AbortController;
+  /** Set before the child exists too, so an early Stop still interrupts its turn. */
+  cancelRequested: boolean;
   turnSeq: number;
 }
 
@@ -100,7 +103,9 @@ export interface BuildArgsInput {
 export abstract class HeadlessProcessDriver implements AgentDriver {
   readonly id: AgentId;
 
-  private readonly bin: string | null;
+  private bin: string | null;
+  private readonly binName: string;
+  private readonly hasExplicitBin: boolean;
   private readonly env: NodeJS.ProcessEnv;
   private readonly spawn?: SpawnLike;
   private readonly chatDir: string;
@@ -114,6 +119,8 @@ export abstract class HeadlessProcessDriver implements AgentDriver {
 
   constructor(id: AgentId, binName: string, deps: HeadlessProcessDriverDeps = {}) {
     this.id = id;
+    this.binName = binName;
+    this.hasExplicitBin = deps.bin !== undefined;
     this.bin = resolveAgentBin(binName, deps.bin);
     this.env = deps.env ?? resolveLoginEnv();
     this.spawn = deps.spawn;
@@ -126,7 +133,7 @@ export abstract class HeadlessProcessDriver implements AgentDriver {
   }
 
   async start(opts: StartOpts): Promise<SessionRef> {
-    if (!this.bin) throw new EngineError("agent_not_found");
+    if (!this.resolveBin()) throw new EngineError("agent_not_found");
     // The manager supplies a private driver handle. The public BrowserOps
     // conversation id never reaches provider process state.
     const sessionId = opts.sessionId ?? this.randomUUID();
@@ -160,14 +167,18 @@ export abstract class HeadlessProcessDriver implements AgentDriver {
       opts.migratedFrom !== undefined
         ? `Continue conversation migrated from ${opts.migrationSourceAgent ?? "another agent"}.`
         : visibleSeed;
-    void this.enqueue(state, () => this.runTurn(state, seed, true, displaySeed)).catch(() => {});
+    const turn = this.enqueue(state, () => this.runTurn(state, seed, true, displaySeed));
+    state.activeTurn = turn;
+    void turn.catch(() => {});
     return ref;
   }
 
   async send(ref: SessionRef, text: string): Promise<void> {
     const state = this.ensureState(ref);
     if (state.ejected || state.stopped) throw new EngineError("session_ejected");
-    return this.enqueue(state, () => this.runTurn(state, text, false));
+    const turn = this.enqueue(state, () => this.runTurn(state, text, false));
+    state.activeTurn = turn;
+    return turn;
   }
 
   subscribe(ref: SessionRef, listener: ChatEventListener): Unsubscribe {
@@ -198,12 +209,24 @@ export abstract class HeadlessProcessDriver implements AgentDriver {
     this.dispatch(state, { type: "end", reason: "stopped" });
   }
 
+  async cancel(ref: SessionRef): Promise<void> {
+    const state = this.sessions.get(ref.sessionId);
+    if (!state || state.ejected || state.stopped) return;
+    state.cancelRequested = true;
+    state.abort?.abort();
+    // Wait until the child has actually exited before releasing the panel to
+    // switch providers or send another turn.
+    await state.activeTurn?.catch(() => {});
+  }
+
   capabilities(_ref: SessionRef): ChatSessionCapabilities {
     return { ...DEFAULT_CHAT_SESSION_CAPABILITIES };
   }
 
   availability(): { available: boolean; reason?: string } {
-    return this.bin ? { available: true } : { available: false, reason: "agent_not_found" };
+    return this.resolveBin()
+      ? { available: true }
+      : { available: false, reason: "agent_not_found" };
   }
 
   onSessionUpdated(listener: (ref: SessionRef) => void): Unsubscribe {
@@ -248,6 +271,7 @@ export abstract class HeadlessProcessDriver implements AgentDriver {
       events: [],
       partialMessages: new Map(),
       queue: Promise.resolve(),
+      cancelRequested: false,
       turnSeq: 0,
     };
   }
@@ -260,6 +284,18 @@ export abstract class HeadlessProcessDriver implements AgentDriver {
       this.sessions.set(ref.sessionId, state);
     }
     return state;
+  }
+
+  /**
+   * A desktop daemon can start before a CLI is installed or added to PATH. Do
+   * not make that first miss permanent: retry automatic discovery whenever the
+   * provider is queried or started. Explicit test/user overrides remain fixed.
+   */
+  private resolveBin(): string | null {
+    if (this.bin || this.hasExplicitBin) return this.bin;
+    resetAgentBinCache();
+    this.bin = resolveAgentBin(this.binName);
+    return this.bin;
   }
 
   private enqueue(state: ProcessDriverState, fn: () => Promise<void>): Promise<void> {
@@ -282,6 +318,7 @@ export abstract class HeadlessProcessDriver implements AgentDriver {
     displayText: string = text,
   ): Promise<void> {
     if (state.ejected || state.stopped) throw new EngineError("session_ejected");
+    state.cancelRequested = false;
     if (!this.bin) {
       this.dispatch(state, { type: "status", state: "error", detail: "agent_not_found" });
       return;
@@ -308,6 +345,7 @@ export abstract class HeadlessProcessDriver implements AgentDriver {
         : {}),
     });
     state.abort = new AbortController();
+    if (state.cancelRequested) state.abort.abort();
     let stderr = "";
     const code = await this.runProcess({
       args,
@@ -318,11 +356,21 @@ export abstract class HeadlessProcessDriver implements AgentDriver {
         stderr += chunk;
       },
     });
+    const cancelled = state.cancelRequested || state.abort.signal.aborted;
     state.abort = undefined;
     if (state.ejected || state.stopped) return;
 
+    if (cancelled) {
+      this.dispatch(state, { type: "status", state: "idle" });
+      return;
+    }
+
     if (code !== 0) {
-      this.dispatch(state, { type: "status", state: "error", detail: `exit_${code}` });
+      this.dispatch(state, {
+        type: "status",
+        state: "error",
+        detail: processFailureDetail(code, stderr),
+      });
       if (this.logger && stderr.trim().length > 0) {
         void this.logger.write({
           dir: "system",
@@ -364,19 +412,30 @@ export abstract class HeadlessProcessDriver implements AgentDriver {
 
       let child: ChildLike;
       try {
-        child = spawn(this.bin!, params.args, {
+        const bin = this.resolveBin();
+        if (!bin) {
+          this.dispatch(params.state, {
+            type: "status",
+            state: "error",
+            detail: "agent_not_found",
+          });
+          done(-1);
+          return;
+        }
+        child = spawn(bin, params.args, {
           cwd: params.state.ref.cwd,
           env: this.env,
           stdio: ["ignore", "pipe", "pipe"],
           signal: params.signal,
         });
       } catch (err) {
-        params.state.ejected = false;
-        this.dispatch(params.state, {
-          type: "status",
-          state: "error",
-          detail: err instanceof Error ? err.message : String(err),
-        });
+        if (!(err instanceof Error && err.name === "AbortError")) {
+          this.dispatch(params.state, {
+            type: "status",
+            state: "error",
+            detail: err instanceof Error ? err.message : String(err),
+          });
+        }
         done(-1);
         return;
       }
@@ -488,4 +547,13 @@ export abstract class HeadlessProcessDriver implements AgentDriver {
     state.partialMessages.set(message.id, merged);
     return { type: "message", message: merged };
   }
+}
+
+/** A concise, panel-safe process failure reason (never raw unlimited stderr). */
+function processFailureDetail(code: number, stderr: string): string {
+  const clean = stderr
+    .replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return clean ? `exit_${code}: ${clean.slice(-280)}` : `exit_${code}`;
 }

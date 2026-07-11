@@ -146,6 +146,7 @@ export async function bootDaemonRuntime(opts: BootDaemonRuntimeOptions): Promise
       });
     },
     send: (sessionId, text) => chatEngine.send(sessionId, text),
+    cancel: (sessionId) => chatEngine.cancel(sessionId),
     subscribe: (sessionId, listener) => chatEngine.subscribe(sessionId, listener),
     history: (sessionId) => chatEngine.history(sessionId),
     listSessions: () => chatEngine.listSessions(),

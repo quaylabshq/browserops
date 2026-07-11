@@ -225,6 +225,11 @@ export class PtySession {
     return submitText((d) => this.pty.write(d), text, opts);
   }
 
+  /** Send the terminal interrupt character without terminating the pty/session. */
+  interrupt(): void {
+    this.pty.write("\u0003");
+  }
+
   resize(cols: number, rows: number): void {
     this.pty.resize(cols, rows);
   }
