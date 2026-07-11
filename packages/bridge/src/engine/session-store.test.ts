@@ -71,4 +71,48 @@ describe("SessionStore", () => {
       { id: "u", role: "user", blocks: [{ kind: "text", text: "hello" }] },
     ]);
   });
+
+  it("orders a repeated provider id by its latest durable event, after newer user turns", async () => {
+    const sessions = await store();
+    await sessions.append(
+      "chat-1",
+      {
+        type: "message",
+        message: { id: "item_0", role: "assistant", blocks: [{ kind: "text", text: "first" }] },
+      },
+      "codex",
+    );
+    await sessions.append(
+      "chat-1",
+      {
+        type: "message",
+        message: { id: "user-2", role: "user", blocks: [{ kind: "text", text: "next" }] },
+      },
+      "panel",
+    );
+    await sessions.append(
+      "chat-1",
+      {
+        type: "message",
+        message: { id: "item_0", role: "assistant", blocks: [{ kind: "text", text: "second" }] },
+      },
+      "codex",
+    );
+    // A v2 snapshot used Map insertion order and loses the chronology. The
+    // v3 reader must rebuild old sessions from the durable journal instead.
+    await fs.writeFile(
+      join(dirs[0]!, "sessions", "chat-1", "snapshot.json"),
+      JSON.stringify({ version: 2, lastSequence: 3, messages: [] }),
+      "utf8",
+    );
+
+    expect((await sessions.history("chat-1")).map((message) => message.id)).toEqual([
+      "item_0",
+      "user-2",
+      "item_0-legacy-3",
+    ]);
+    expect((await sessions.history("chat-1"))[2]?.blocks).toEqual([
+      { kind: "text", text: "second" },
+    ]);
+  });
 });

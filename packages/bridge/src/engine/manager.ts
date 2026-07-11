@@ -122,6 +122,29 @@ export class ChatEngine {
       listeners: new Set(),
     };
     this.runtime.set(sessionId, conversation);
+    // The provider receives a rich seed (BrowserOps connection contract + page
+    // context + user instruction), but the canonical panel transcript should
+    // contain exactly what the user typed. Persist that turn before subscribing
+    // to the driver's seed echo so the UI can reconcile its optimistic bubble
+    // and keep every later assistant answer after the correct user message.
+    const initialInstruction = req.instruction?.trim();
+    if (initialInstruction) {
+      const userEvent = await this.store.append(
+        sessionId,
+        {
+          type: "message",
+          message: {
+            id: `user-${this.newId()}`,
+            role: "user",
+            blocks: [{ kind: "text", text: initialInstruction }],
+            ts: this.now(),
+          },
+        },
+        "panel",
+      );
+      binding.binding.lastProjectedSequence = userEvent.sequence ?? 0;
+      this.emit(conversation, userEvent);
+    }
     this.bindProviderEvents(sessionId, binding);
     await this.persist(sessionId, conversation);
     await this.store.append(sessionId, { type: "session", ref }, "system");
@@ -422,7 +445,10 @@ export class ChatEngine {
       binding,
       ref,
       driver: owner,
-      suppressProviderUserMessages: migrationSourceAgent ? 1 : 0,
+      // Every driver emits (or tails) the seed it sends to its provider. The
+      // canonical store already has the plain user instruction for a normal
+      // start, while migration's projection is intentionally internal.
+      suppressProviderUserMessages: 1,
     };
   }
 

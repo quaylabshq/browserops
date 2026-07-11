@@ -22,7 +22,8 @@ interface StoredEvent {
 }
 
 interface SessionSnapshot {
-  version: 2;
+  /** Version 3 orders latest message snapshots by their durable event sequence. */
+  version: 3;
   lastSequence: number;
   messages: ChatMessage[];
 }
@@ -47,14 +48,34 @@ function isStoredEvent(value: unknown): value is StoredEvent {
 }
 
 function materialize(records: readonly StoredEvent[]): ChatMessage[] {
-  const messages = new Map<string, ChatMessage>();
+  const messages = new Map<string, { message: ChatMessage; sequence: number; userEpoch: number }>();
+  let userEpoch = 0;
   for (const record of records) {
     if (record.event.type !== "message") continue;
+    const message = record.event.message;
+    if (message.role === "user") userEpoch++;
     // Partial deltas and the final message intentionally share an id. The
     // latest snapshot is the renderable state of that message.
-    messages.set(record.event.message.id, record.event.message);
+    let key = message.id;
+    const prior = messages.get(key);
+    // Older Codex exec builds reused item_0/item_1 on every invocation. A
+    // repeated id after a user turn (or with a different role) is a distinct
+    // message, not a partial update. Keep it under a durable synthetic key so
+    // old conversations regain their real chronology when read from v2.
+    if (prior && (prior.userEpoch !== userEpoch || prior.message.role !== message.role)) {
+      key = `${message.id}-legacy-${record.sequence}`;
+    }
+    messages.set(key, {
+      message: key === message.id ? message : { ...message, id: key },
+      sequence: record.sequence,
+      userEpoch,
+    });
   }
-  return [...messages.values()];
+  // Map#set preserves the first insertion position. Order snapshots from their
+  // durable event sequence rather than their insertion key.
+  return [...messages.values()]
+    .sort((a, b) => a.sequence - b.sequence)
+    .map((entry) => entry.message);
 }
 
 /** Versioned, per-conversation event journal. */
@@ -100,7 +121,7 @@ export class SessionStore {
       });
       records.push(record);
       await this.writeSnapshot(sessionId, {
-        version: 2,
+        version: 3,
         lastSequence: sequence,
         messages: materialize(records),
       });
@@ -118,7 +139,7 @@ export class SessionStore {
     try {
       const parsed: unknown = JSON.parse(await fs.readFile(this.snapshotPath(sessionId), "utf8"));
       const snapshot = asObject(parsed);
-      if (snapshot?.["version"] === 2 && Array.isArray(snapshot["messages"])) {
+      if (snapshot?.["version"] === 3 && Array.isArray(snapshot["messages"])) {
         return snapshot["messages"] as ChatMessage[];
       }
     } catch {

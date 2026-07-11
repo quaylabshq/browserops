@@ -159,6 +159,29 @@ describe("ChatEngine", () => {
     expect(sessions[0]).toMatchObject({ lastActive: 1000, title: "hi" });
   });
 
+  it("records the plain initial user instruction before suppressing the provider seed echo", async () => {
+    const ref = await engine.start({
+      agent: "claude",
+      page: { url: "https://x" },
+      instruction: "read my email",
+    });
+    driver.emit("s1", {
+      type: "message",
+      message: {
+        id: "provider-seed",
+        role: "user",
+        blocks: [{ kind: "text", text: "BrowserOps browser connection:\n...\nread my email" }],
+      },
+    });
+    for (let i = 0; i < 20; i++) {
+      if ((await engine.history(ref.sessionId)).length === 1) break;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect(await engine.history(ref.sessionId)).toMatchObject([
+      { role: "user", blocks: [{ kind: "text", text: "read my email" }] },
+    ]);
+  });
+
   it("subscribe fans driver events to the listener", async () => {
     const ref = await engine.start({ agent: "claude", page: { url: "x" } });
     const got: ChatEvent[] = [];

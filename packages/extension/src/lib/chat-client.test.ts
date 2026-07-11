@@ -197,6 +197,23 @@ describe("appendUserMessage", () => {
   });
 });
 
+describe("initial user-turn reconciliation", () => {
+  it("replaces the optimistic bubble with the plain canonical instruction, not the provider seed", () => {
+    let state = appendUserMessage(initialChatState(), "read my email");
+    state = reduceChat(state, {
+      type: "message",
+      message: {
+        id: "user-canonical",
+        role: "user",
+        blocks: [{ kind: "text", text: "read my email" }],
+      },
+    });
+    expect(state.messages).toEqual([
+      { id: "user-canonical", role: "user", blocks: [{ kind: "text", text: "read my email" }] },
+    ]);
+  });
+});
+
 describe("statusLabel", () => {
   it("prefers the ejected message, else maps status to copy", () => {
     expect(statusLabel("thinking", true)).toBe("Controlled in your terminal");

@@ -81,9 +81,18 @@ function isActionItem(type: string): boolean {
   return ["commandexecution", "mcptoolcall", "filechange", "websearch"].includes(type);
 }
 
-function toolBlock(o: Record<string, unknown>): ChatBlock | null {
+function scopedId(turnId: string | undefined, id: string): string {
+  return turnId ? `${turnId}-${id}` : id;
+}
+
+function messageId(turnId: string | undefined, kind: string, o: Record<string, unknown>): string {
+  const id = eventId(o, `codex-${kind}`);
+  return turnId ? `${turnId}-${kind}-${id}` : id;
+}
+
+function toolBlock(o: Record<string, unknown>, turnId?: string): ChatBlock | null {
   const type = normalizedItemType(o);
-  const id = pickString(o, ["id", "call_id", "tool_call_id"]) ?? type;
+  const id = scopedId(turnId, pickString(o, ["id", "call_id", "tool_call_id"]) ?? type);
   if (type === "mcptoolcall") {
     const server = pickString(o, ["server", "server_name", "serverName"]) ?? "mcp";
     const tool = pickString(o, ["tool", "name", "tool_name", "toolName"]) ?? "tool";
@@ -113,7 +122,7 @@ function toolBlock(o: Record<string, unknown>): ChatBlock | null {
   return { kind: "tool_use", id, name, input: o["input"] ?? o["args"] ?? o["arguments"] };
 }
 
-function toolResultBlock(o: Record<string, unknown>): ChatBlock {
+function toolResultBlock(o: Record<string, unknown>, turnId?: string): ChatBlock {
   const type = normalizedItemType(o);
   const raw =
     type === "commandexecution"
@@ -128,7 +137,7 @@ function toolResultBlock(o: Record<string, unknown>): ChatBlock {
   const preview = typeof raw === "string" ? raw : JSON.stringify(raw);
   return {
     kind: "tool_result",
-    id: pickString(o, ["id", "call_id", "tool_call_id"]) ?? (type || "tool"),
+    id: scopedId(turnId, pickString(o, ["id", "call_id", "tool_call_id"]) ?? (type || "tool")),
     ok:
       o["is_error"] !== true &&
       o["error"] === undefined &&
@@ -138,7 +147,7 @@ function toolResultBlock(o: Record<string, unknown>): ChatBlock {
   };
 }
 
-export function codexLineToEvents(raw: unknown): NormalizedLine {
+export function codexLineToEvents(raw: unknown, turnId?: string): NormalizedLine {
   const o = asObject(raw);
   if (!o) return { events: [] };
   const type = asString(o["type"]) || asString(o["event"]) || asString(o["kind"]);
@@ -158,7 +167,7 @@ export function codexLineToEvents(raw: unknown): NormalizedLine {
         events.push({
           type: "message",
           message: {
-            id: eventId(item, "codex-assistant"),
+            id: messageId(turnId, "assistant", item),
             role: "assistant",
             blocks: [{ kind: "text", text }],
           },
@@ -168,9 +177,9 @@ export function codexLineToEvents(raw: unknown): NormalizedLine {
       events.push({
         type: "message",
         message: {
-          id: eventId(item, "codex-tool-result"),
+          id: messageId(turnId, "tool-result", item),
           role: "tool",
-          blocks: [toolResultBlock(item)],
+          blocks: [toolResultBlock(item, turnId)],
         },
       });
     }
@@ -187,7 +196,9 @@ export function codexLineToEvents(raw: unknown): NormalizedLine {
       events.push({
         type: "message",
         message: {
-          id: pickString(o, ["item_id", "itemId"]) ?? eventId(o, "codex-assistant"),
+          id: turnId
+            ? `${turnId}-assistant-${pickString(o, ["item_id", "itemId"]) ?? "stream"}`
+            : (pickString(o, ["item_id", "itemId"]) ?? eventId(o, "codex-assistant")),
           role: "assistant",
           blocks: [{ kind: "text", text }],
           partial: true,
@@ -202,11 +213,15 @@ export function codexLineToEvents(raw: unknown): NormalizedLine {
     item &&
     isActionItem(normalizedItemType(item))
   ) {
-    const block = toolBlock(item);
+    const block = toolBlock(item, turnId);
     if (block) {
       events.push({
         type: "message",
-        message: { id: eventId(item, "codex-tool"), role: "assistant", blocks: [block] },
+        message: {
+          id: messageId(turnId, "tool", item),
+          role: "assistant",
+          blocks: [block],
+        },
       });
     }
     return native ? { events, nativeSessionId: native } : { events };
@@ -216,27 +231,28 @@ export function codexLineToEvents(raw: unknown): NormalizedLine {
     const text = extractText(o);
     if (text.trim()) {
       const message: ChatMessage = {
-        id: eventId(o, "codex-assistant"),
+        id: messageId(turnId, "assistant", o),
         role: "assistant",
         blocks: [{ kind: "text", text }],
       };
       events.push({ type: "message", message });
     }
   } else if (type.includes("tool") && (subtype === "started" || type.includes("started"))) {
-    const block = toolBlock(asObject(o["tool_call"]) ?? o);
+    const tool = asObject(o["tool_call"]) ?? o;
+    const block = toolBlock(tool, turnId);
     if (block) {
       events.push({
         type: "message",
-        message: { id: eventId(o, "codex-tool"), role: "assistant", blocks: [block] },
+        message: { id: messageId(turnId, "tool", o), role: "assistant", blocks: [block] },
       });
     }
   } else if (type.includes("tool") && (subtype === "completed" || type.includes("completed"))) {
     events.push({
       type: "message",
       message: {
-        id: eventId(o, "codex-tool-result"),
+        id: messageId(turnId, "tool-result", o),
         role: "tool",
-        blocks: [toolResultBlock(asObject(o["tool_call"]) ?? o)],
+        blocks: [toolResultBlock(asObject(o["tool_call"]) ?? o, turnId)],
       },
     });
   } else if (type === "result" || type === "turn.completed" || type === "turn/completed") {
@@ -245,7 +261,7 @@ export function codexLineToEvents(raw: unknown): NormalizedLine {
       events.push({
         type: "message",
         message: {
-          id: eventId(o, "codex-result"),
+          id: messageId(turnId, "result", o),
           role: "assistant",
           blocks: [{ kind: "text", text }],
         },

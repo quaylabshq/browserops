@@ -24,6 +24,7 @@ import { registerLocateHandler } from "./handlers/locate.js";
 import { registerProposeLocatorHandler } from "./handlers/propose-locator.js";
 import { registerSafetyHandler, resolveSafetyDecision } from "./handlers/safety.js";
 import { registerSessionGroupHandlers } from "./handlers/session-groups.js";
+import { syncExistingTabs } from "./tab-sync.js";
 
 // Yellow icon variants — `?url` suffix forces vite to emit them as files
 // (the small PNGs would otherwise be inlined as base64, which
@@ -181,6 +182,18 @@ function onConnectionChange(connected: boolean): void {
   chrome.storage.local.set({ connected }).catch(() => {});
 }
 
+async function syncOpenTabsToBridge(): Promise<void> {
+  try {
+    await syncExistingTabs(
+      () => chrome.tabs.query({}),
+      (name, payload) => ctx.emitEvent(name, payload),
+    );
+  } catch {
+    // A transient Chrome API failure is recovered on the next websocket
+    // reconnect or tab event; it must not break the bridge connection.
+  }
+}
+
 // Sync auto-approve state on SW boot. The popup writes `requireApproval=true`
 // to session storage when the user ticks the "Require approval" checkbox; an
 // absent key means default YOLO (auto-approve on).
@@ -251,7 +264,10 @@ async function startClient(): Promise<void> {
     token,
     extensionVersion: EXTENSION_VERSION,
     onRequest: (req: Request): Promise<Response> => router.dispatch(req, ctx),
-    onConnectionChange,
+    onConnectionChange: (connected) => {
+      onConnectionChange(connected);
+      if (connected) void syncOpenTabsToBridge();
+    },
     onFeatures: (features) => {
       void persistFeatures(features);
     },

@@ -17,6 +17,19 @@ export function buildCodexArgs(input: BuildArgsInput & { legacyFullAuto?: boolea
   const args = ["exec"];
   const resuming = !input.first && input.nativeSessionId !== undefined;
   if (resuming) args.push("resume", input.nativeSessionId!);
+  // `codex exec` is non-interactive. Without an explicit approval policy,
+  // Codex cancels MCP calls because there is no TUI available to answer its
+  // confirmation. BrowserOps has its own risky-action gate, so outside safe
+  // mode we let Codex invoke its BrowserOps MCP server and preserve the bridge
+  // as the final authority for browser-side sensitive actions.
+  if (!input.safeMode) {
+    args.push(
+      "-c",
+      'approval_policy="never"',
+      "-c",
+      'mcp_servers.browserops.default_tools_approval_mode="auto"',
+    );
+  }
   // Current Codex resume accepts a smaller flag surface than initial exec:
   // no sandbox, working-directory, or old ask-for-approval flags.
   if (input.model) args.push("--model", input.model);
@@ -44,7 +57,7 @@ export class CodexDriver extends HeadlessProcessDriver {
   }
 
   protected normalizeLine(raw: unknown, _context: NormalizeContext): NormalizedLine {
-    return codexLineToEvents(raw);
+    return codexLineToEvents(raw, _context.turnId);
   }
 
   protected override async buildTurnPrompt(

@@ -3,7 +3,7 @@ import { buildCodexArgs } from "./driver.js";
 import { codexLineToEvents } from "./normalize.js";
 
 describe("CodexDriver args", () => {
-  it("uses only flags supported by the current initial Codex exec contract", () => {
+  it("auto-approves BrowserOps MCP calls outside safe mode", () => {
     expect(
       buildCodexArgs({
         prompt: "do it",
@@ -13,6 +13,10 @@ describe("CodexDriver args", () => {
       }),
     ).toEqual([
       "exec",
+      "-c",
+      'approval_policy="never"',
+      "-c",
+      'mcp_servers.browserops.default_tools_approval_mode="auto"',
       "--json",
       "--skip-git-repo-check",
       "--sandbox",
@@ -24,7 +28,7 @@ describe("CodexDriver args", () => {
     ]);
   });
 
-  it("resumes with the intentionally smaller resume flag surface", () => {
+  it("keeps safe-mode resumes approval-gated", () => {
     expect(
       buildCodexArgs({
         prompt: "next",
@@ -120,6 +124,64 @@ describe("codexLineToEvents", () => {
     expect(completed.events[0]).toMatchObject({
       type: "message",
       message: { blocks: [{ kind: "tool_result", id: "mcp-1", ok: true }] },
+    });
+  });
+
+  it("scopes recycled Codex item ids to their BrowserOps turn", () => {
+    const first = codexLineToEvents(
+      { type: "item.completed", item: { id: "item_0", type: "agent_message", text: "first" } },
+      "turn-1",
+    );
+    const second = codexLineToEvents(
+      { type: "item.completed", item: { id: "item_0", type: "agent_message", text: "second" } },
+      "turn-2",
+    );
+    expect(first.events[0]).toMatchObject({
+      type: "message",
+      message: { id: "turn-1-assistant-item_0" },
+    });
+    expect(second.events[0]).toMatchObject({
+      type: "message",
+      message: { id: "turn-2-assistant-item_0" },
+    });
+  });
+
+  it("keeps a tool call and its result as separate messages with one scoped tool id", () => {
+    const start = codexLineToEvents(
+      {
+        type: "item.started",
+        item: {
+          id: "item_1",
+          type: "mcp_tool_call",
+          server: "browserops",
+          tool: "browser_list_tabs",
+        },
+      },
+      "turn-1",
+    );
+    const result = codexLineToEvents(
+      {
+        type: "item.completed",
+        item: {
+          id: "item_1",
+          type: "mcp_tool_call",
+          server: "browserops",
+          tool: "browser_list_tabs",
+          result: { tabs: [] },
+        },
+      },
+      "turn-1",
+    );
+    expect(start.events[0]).toMatchObject({
+      type: "message",
+      message: { id: "turn-1-tool-item_1", blocks: [{ kind: "tool_use", id: "turn-1-item_1" }] },
+    });
+    expect(result.events[0]).toMatchObject({
+      type: "message",
+      message: {
+        id: "turn-1-tool-result-item_1",
+        blocks: [{ kind: "tool_result", id: "turn-1-item_1" }],
+      },
     });
   });
 });
