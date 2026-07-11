@@ -96,6 +96,7 @@ export {
   type SessionRef,
   type ChatSettings,
   type ChatAgentStatus,
+  type ChatAgentSetupState,
   DEFAULT_CHAT_SETTINGS,
   type ChatSessionCapabilities,
   DEFAULT_CHAT_SESSION_CAPABILITIES,

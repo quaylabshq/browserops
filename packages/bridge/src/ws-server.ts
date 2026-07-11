@@ -90,6 +90,8 @@ export interface ChatService {
   settings(): Promise<ChatSettings>;
   updateSettings(update: Partial<ChatSettings>): Promise<ChatSettings>;
   agents(): Promise<ChatAgentStatus[]>;
+  /** Register BrowserOps' MCP shim for one installed provider after a user click. */
+  configureAgent?(agent: AgentId): Promise<ChatAgentStatus>;
   /** Open a read-only terminal mirror, or eject the session into a terminal. */
   terminal(sessionId: string, mode: TerminalMode): Promise<ChatTerminalOutcome>;
   /** Bind a live raw-terminal handle for the embedded xterm pane (via /chat/pty). */
@@ -462,7 +464,8 @@ export class WSBridge {
       urlPath === "/chat/cancel" ||
       urlPath === "/chat/terminal" ||
       urlPath === "/chat/migrate" ||
-      urlPath === "/chat/settings"
+      urlPath === "/chat/settings" ||
+      urlPath === "/chat/agents/configure"
     ) {
       void this.handleChatPost(req, res, origin, urlPath);
       return;
@@ -712,6 +715,7 @@ export class WSBridge {
       case "session_ejected":
         return 409;
       case "agent_unavailable":
+      case "agent_not_configured":
         return 422;
       case "agent_not_found":
       case "claude_not_found":
@@ -885,6 +889,29 @@ export class WSBridge {
           update.reasoningEfforts = body["reasoning_efforts"] as ChatSettings["reasoningEfforts"];
         }
         this.endJson(res, 200, { ok: true, settings: await this.chat.updateSettings(update) });
+        return;
+      }
+
+      if (path === "/chat/agents/configure") {
+        const agent = capField(body["agent"], 32);
+        if (!agent || !canChatAgent(agent)) {
+          this.endJson(res, 422, { ok: false, error: "agent_unavailable" });
+          return;
+        }
+        if (!this.chat.configureAgent) {
+          this.endJson(res, 503, { ok: false, error: "agent_configuration_unavailable" });
+          return;
+        }
+        const status = await this.chat.configureAgent(agent);
+        if (!status.available) {
+          this.endJson(res, 422, {
+            ok: false,
+            error: status.reason ?? "agent_not_configured",
+            status,
+          });
+          return;
+        }
+        this.endJson(res, 200, { ok: true, agent: status });
         return;
       }
 

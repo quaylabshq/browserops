@@ -13,6 +13,7 @@ import {
   DEFAULT_WS_HOST,
   DEFAULT_WS_PORT,
   ENV,
+  canChatAgent,
   type AgentId,
   type FeatureName,
 } from "@browserops/shared";
@@ -27,6 +28,12 @@ import { WSBridge, type ChatService } from "./ws-server.js";
 import { launchAgent, openSessionTerminal } from "./launch-agent.js";
 import { ChatEngine } from "./engine/manager.js";
 import { createChatEngineDrivers } from "./engine/factory.js";
+import {
+  configureChatAgent,
+  inspectChatAgent,
+  inspectChatAgents,
+} from "./engine/provider-setup.js";
+import { EngineError } from "./engine/errors.js";
 import { ensureIndex } from "./procedures/index-builder.js";
 import { proceduresRoot } from "./procedures/paths.js";
 import {
@@ -133,7 +140,16 @@ export async function bootDaemonRuntime(opts: BootDaemonRuntimeOptions): Promise
   const chatService: ChatService = {
     start: async (params) => {
       const settings = await loadChatSettings();
+      if (!canChatAgent(params.agent)) throw new EngineError("agent_unavailable");
       const agent = params.agent as AgentId;
+      const readiness = await inspectChatAgent(
+        chatEngine.agentStatuses().find((status) => status.agent === agent) ?? {
+          agent,
+          available: false,
+          reason: "driver_unavailable",
+        },
+      );
+      if (!readiness.available) throw new EngineError("agent_not_configured");
       return chatEngine.start({
         agent,
         page: params.page,
@@ -153,6 +169,14 @@ export async function bootDaemonRuntime(opts: BootDaemonRuntimeOptions): Promise
     capabilities: (sessionId) => chatEngine.capabilities(sessionId),
     migrate: async (sessionId, targetAgent) => {
       const settings = await loadChatSettings();
+      const readiness = await inspectChatAgent(
+        chatEngine.agentStatuses().find((status) => status.agent === targetAgent) ?? {
+          agent: targetAgent,
+          available: false,
+          reason: "driver_unavailable",
+        },
+      );
+      if (!readiness.available) throw new EngineError("agent_not_configured");
       return chatEngine.migrate(sessionId, targetAgent, {
         safeMode: settings.safeMode,
         ...(settings.models[targetAgent] ? { model: settings.models[targetAgent] } : {}),
@@ -163,7 +187,12 @@ export async function bootDaemonRuntime(opts: BootDaemonRuntimeOptions): Promise
     },
     settings: () => loadChatSettings(),
     updateSettings: (update) => updateChatSettings(update),
-    agents: () => Promise.resolve(chatEngine.agentStatuses()),
+    agents: () => inspectChatAgents(chatEngine.agentStatuses()),
+    configureAgent: async (agent) => {
+      const base = chatEngine.agentStatuses().find((status) => status.agent === agent);
+      if (!base) return { agent, available: false, reason: "driver_unavailable" };
+      return configureChatAgent(base);
+    },
     terminal: async (sessionId, mode) => {
       const meta = await chatEngine.getSession(sessionId);
       if (!meta) return { ok: false, error: "unknown_session" };

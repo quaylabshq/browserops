@@ -683,6 +683,29 @@ export async function chatAgents(
   }
 }
 
+export async function chatConfigureAgent(
+  token: string,
+  agent: string,
+  endpoint?: ChatEndpoint,
+): Promise<{ ok: boolean; status: number; error?: string; agent?: ChatAgentStatus }> {
+  try {
+    const res = await postJson("/chat/agents/configure", { token, agent }, endpoint);
+    const data = await readJson(res);
+    return {
+      ok: res.ok && data["ok"] === true,
+      status: res.status,
+      ...(typeof data["error"] === "string" ? { error: data["error"] } : {}),
+      ...(isAgentStatus(data["agent"]) ? { agent: data["agent"] } : {}),
+    };
+  } catch {
+    return { ok: false, status: 0 };
+  }
+}
+
+function isAgentStatus(value: unknown): value is ChatAgentStatus {
+  return typeof value === "object" && value !== null && "agent" in value && "available" in value;
+}
+
 /** Client→server pty frames. Raw pty output comes back the other way, unframed. */
 export function ptyInputFrame(data: string): string {
   return JSON.stringify({ type: "input", data });

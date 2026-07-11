@@ -683,6 +683,7 @@ describe("WSBridge /chat/*", () => {
     const ptyWrites: string[] = [];
     const ptyResizes: { cols: number; rows: number }[] = [];
     const streamAfter: number[] = [];
+    const configured: string[] = [];
     const chat: ChatService = {
       async start(params) {
         const ref: SessionRef = {
@@ -763,6 +764,15 @@ describe("WSBridge /chat/*", () => {
           { agent: "cursor", available: true },
         ];
       },
+      async configureAgent(agent) {
+        configured.push(agent);
+        return {
+          agent,
+          available: true,
+          setupState: "ready",
+          canConfigure: false,
+        };
+      },
       async terminal(id, mode) {
         terminals.push({ id, mode });
         return { ok: true };
@@ -782,7 +792,17 @@ describe("WSBridge /chat/*", () => {
         return id !== "noterm"; // a "noterm" session is headless/cold → no toggle
       },
     };
-    return { chat, sent, cancelled, terminals, sessions, ptyWrites, ptyResizes, streamAfter };
+    return {
+      chat,
+      sent,
+      cancelled,
+      terminals,
+      sessions,
+      ptyWrites,
+      ptyResizes,
+      streamAfter,
+      configured,
+    };
   }
 
   function postChat(
@@ -1055,6 +1075,31 @@ describe("WSBridge /chat/*", () => {
       const agents = await getChat(fixture.port, `/chat/agents?token=${VALID_TOKEN}`);
       expect(agents.status).toBe(200);
       expect(((await agents.json()) as { agents: { agent: string }[] }).agents).toHaveLength(3);
+    } finally {
+      await fixture.bridge.stop();
+    }
+  });
+
+  it("configures an installed provider only through the token-and-origin-gated chat route", async () => {
+    const f = fakeChat();
+    const fixture = await startBridge({ pinnedExtensionId: PIN, chat: f.chat });
+    try {
+      const rejected = await postChat(fixture.port, "/chat/agents/configure", {
+        token: "wrong",
+        agent: "codex",
+      });
+      expect(rejected.status).toBe(401);
+
+      const configured = await postChat(fixture.port, "/chat/agents/configure", {
+        token: VALID_TOKEN,
+        agent: "codex",
+      });
+      expect(configured.status).toBe(200);
+      expect(await configured.json()).toMatchObject({
+        ok: true,
+        agent: { agent: "codex", available: true, setupState: "ready" },
+      });
+      expect(f.configured).toEqual(["codex"]);
     } finally {
       await fixture.bridge.stop();
     }

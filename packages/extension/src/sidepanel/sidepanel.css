@@ -123,6 +123,11 @@ body {
   background: var(--color-brand);
   color: #fff;
 }
+.agent-chip--needs-setup:not([aria-checked="true"]) {
+  border-color: #b7791f;
+  color: #8a5300;
+  background: #fff9ed;
+}
 .agent-chip:disabled {
   cursor: not-allowed;
   color: var(--color-ink-45);
@@ -133,6 +138,48 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.04em;
   margin-left: 6px;
+  opacity: 0.7;
+}
+
+.provider-setup {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-top: 12px;
+  padding: 11px;
+  border: 1px solid #e1ad55;
+  border-radius: 9px;
+  color: #704300;
+  background: #fff9ed;
+  text-align: left;
+}
+.provider-setup strong {
+  font-size: 12px;
+}
+.provider-setup p {
+  margin: 0;
+  font-size: 11px;
+  color: #805a1d;
+}
+.provider-setup .provider-setup-path {
+  overflow-wrap: anywhere;
+  color: var(--color-ink-45);
+  font-size: 10px;
+}
+.provider-setup button {
+  align-self: flex-start;
+  padding: 6px 9px;
+  border: none;
+  border-radius: 7px;
+  background: var(--color-brand);
+  color: #fff;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.provider-setup button:disabled {
+  cursor: wait;
   opacity: 0.7;
 }
 

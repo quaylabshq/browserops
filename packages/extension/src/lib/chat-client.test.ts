@@ -5,6 +5,7 @@ import {
   buildNewBody,
   chatBase,
   chatCancel,
+  chatConfigureAgent,
   collectToolActivity,
   initialChatState,
   ptyInputFrame,
@@ -231,6 +232,33 @@ describe("chatCancel", () => {
       expect(await request?.text()).toBe(
         JSON.stringify({ token: "token", session_id: "session-1" }),
       );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+describe("chatConfigureAgent", () => {
+  it("posts an explicit provider setup request and returns the refreshed status", async () => {
+    const originalFetch = globalThis.fetch;
+    let request: Request | undefined;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      request = new Request(input, init);
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          agent: { agent: "codex", available: true, setupState: "ready" },
+        }),
+        { status: 200 },
+      );
+    }) as typeof fetch;
+    try {
+      await expect(chatConfigureAgent("token", "codex")).resolves.toMatchObject({
+        ok: true,
+        agent: { agent: "codex", available: true, setupState: "ready" },
+      });
+      expect(request?.url).toContain("/chat/agents/configure");
+      expect(await request?.text()).toBe(JSON.stringify({ token: "token", agent: "codex" }));
     } finally {
       globalThis.fetch = originalFetch;
     }

@@ -12,6 +12,7 @@ import {
   appendUserMessage,
   chatAgents,
   chatCancel,
+  chatConfigureAgent,
   chatHistory,
   chatMigrate,
   chatNew,
@@ -49,6 +50,12 @@ const agentsEl = $<HTMLDivElement>("agents");
 const sessionsEl = $<HTMLDivElement>("sessions");
 const transcriptEl = $<HTMLDivElement>("transcript");
 const emptyEl = $<HTMLDivElement>("empty");
+const emptyCopyEl = $<HTMLParagraphElement>("empty-copy");
+const providerSetupEl = $<HTMLElement>("provider-setup");
+const providerSetupTitle = $<HTMLElement>("provider-setup-title");
+const providerSetupCopy = $<HTMLParagraphElement>("provider-setup-copy");
+const providerSetupPath = $<HTMLParagraphElement>("provider-setup-path");
+const providerSetupAction = $<HTMLButtonElement>("provider-setup-action");
 const agentStatusEl = $<HTMLDivElement>("agent-status");
 const contextEl = $<HTMLDivElement>("context");
 const composerForm = $<HTMLFormElement>("composer");
@@ -91,6 +98,9 @@ let toolActivityExpanded = false;
 let toolActivitySessionId: string | undefined;
 let pendingAgentSwitch: string | undefined;
 let stoppingResponse = false;
+let configuringAgent = false;
+let providerSetupError: string | undefined;
+let agentReadinessLoaded = false;
 
 function sessionCaps(value: {
   capabilities?: ChatState["capabilities"];
@@ -142,11 +152,16 @@ function renderAgents(): void {
       chip.appendChild(note);
     }
     const availability = agentAvailabilityById.get(a.id);
-    if (a.caps.chat && availability?.available !== false) {
+    const needsSetup = availability?.available === false;
+    if (needsSetup) {
+      chip.classList.add("agent-chip--needs-setup");
+      chip.title = agentAvailabilityMessage(a.label, availability?.reason);
+    }
+    if (a.caps.chat && (!state.session || !needsSetup)) {
       chip.addEventListener("click", () => selectAgent(a.id));
     } else {
       chip.disabled = true;
-      chip.title = agentAvailabilityMessage(a.label, availability?.reason);
+      if (!chip.title) chip.title = agentAvailabilityMessage(a.label, availability?.reason);
     }
     agentsEl.appendChild(chip);
   }
@@ -158,8 +173,14 @@ function agentLabel(id: string): string {
 }
 
 function agentAvailabilityMessage(label: string, reason?: string): string {
-  if (reason === "agent_not_found") {
+  if (reason === "agent_not_found" || reason === "claude_not_found") {
     return `${label} CLI was not found by BrowserOps. Install or sign in, then reopen Chat.`;
+  }
+  if (reason === "mcp_missing") {
+    return `${label} needs its BrowserOps MCP connection before a chat can start.`;
+  }
+  if (reason === "config_invalid") {
+    return `${label}'s BrowserOps MCP entry needs manual repair.`;
   }
   if (reason === "driver_unavailable") return `${label} is not enabled by this BrowserOps bridge.`;
   return reason ? `${label} is unavailable: ${reason}` : `${label} is unavailable.`;
@@ -191,7 +212,9 @@ function selectAgent(id: string): void {
     return;
   }
   selectedAgent = id;
+  providerSetupError = undefined;
   syncAgentSelection();
+  render();
 }
 
 function dismissAgentSwitch(): void {
@@ -210,6 +233,78 @@ function syncAgentSelection(): void {
   for (const chip of agentsEl.querySelectorAll<HTMLButtonElement>(".agent-chip")) {
     chip.setAttribute("aria-checked", String(chip.dataset["agent"] === selectedAgent));
   }
+}
+
+function renderProviderSetup(): void {
+  const status = agentAvailabilityById.get(selectedAgent);
+  const show =
+    connected &&
+    state.session === undefined &&
+    state.messages.length === 0 &&
+    status?.available === false;
+  providerSetupEl.hidden = !show;
+  if (!show || !status) {
+    emptyCopyEl.textContent =
+      "Send a message to start chatting. Replies stream here, and the agent can act on the page you’re viewing.";
+    return;
+  }
+
+  const label = agentLabel(status.agent);
+  const setupState = status.setupState;
+  providerSetupPath.hidden = !status.configPath;
+  providerSetupPath.textContent = status.configPath
+    ? `BrowserOps MCP configuration · ${status.configPath}`
+    : "";
+  providerSetupAction.hidden = !status.canConfigure;
+  providerSetupAction.disabled = configuringAgent;
+
+  if (setupState === "cli_missing") {
+    emptyCopyEl.textContent = "Choose a configured provider to start a chat.";
+    providerSetupTitle.textContent = `${label} CLI is not available`;
+    providerSetupCopy.textContent = `Install and sign in to ${label}, then restart the BrowserOps bridge and reopen Chat.`;
+    return;
+  }
+  if (setupState === "config_invalid") {
+    emptyCopyEl.textContent = "Choose a configured provider to start a chat.";
+    providerSetupTitle.textContent = `${label} needs configuration repair`;
+    providerSetupCopy.textContent =
+      "Its BrowserOps MCP entry is malformed. BrowserOps will not overwrite it automatically; repair the entry, then reopen Chat.";
+    return;
+  }
+
+  emptyCopyEl.textContent = `Connect ${label} before starting this chat.`;
+  providerSetupTitle.textContent = `Configure ${label} for BrowserOps`;
+  providerSetupCopy.textContent = providerSetupError
+    ? providerSetupError
+    : `Add BrowserOps’ local MCP connection to ${label}. This lets the provider use your live Chrome session from its first message.`;
+  providerSetupAction.textContent = configuringAgent ? "Configuring…" : `Configure ${label}`;
+}
+
+async function configureSelectedAgent(): Promise<void> {
+  const status = agentAvailabilityById.get(selectedAgent);
+  if (!status?.canConfigure || configuringAgent) return;
+  const token = await getToken();
+  if (!token) {
+    providerSetupError = "Run BrowserOps setup first (no connection token).";
+    render();
+    return;
+  }
+
+  configuringAgent = true;
+  providerSetupError = undefined;
+  render();
+  const result = await chatConfigureAgent(token, selectedAgent, await getEndpoint());
+  configuringAgent = false;
+  if (!result.ok) {
+    providerSetupError =
+      result.status === 0
+        ? "The BrowserOps bridge is not reachable."
+        : result.error === "mcp_config_invalid"
+          ? "The existing BrowserOps MCP entry needs manual repair."
+          : "BrowserOps could not configure this provider.";
+  }
+  await loadAgentAvailability();
+  render();
 }
 
 // --- transcript render ------------------------------------------------------
@@ -351,6 +446,7 @@ function render(): void {
   for (const node of transcriptEl.querySelectorAll(".msg, .thinking-dots, .tool-activity"))
     node.remove();
   emptyEl.hidden = state.messages.length > 0;
+  renderProviderSetup();
   for (const m of state.messages) {
     const bubble = document.createElement("div");
     bubble.className = `msg msg--${m.role}${m.partial ? " msg--streaming" : ""}`;
@@ -522,20 +618,29 @@ async function capturePageMeta(): Promise<PageMeta> {
 // --- connection + composer state -------------------------------------------
 
 function syncComposer(): void {
-  const canSend = connected && !state.ejected && !responseIsActive();
+  const needsSetup =
+    !state.session && agentAvailabilityById.get(selectedAgent)?.available === false;
+  const checkingReadiness = !state.session && !agentReadinessLoaded;
+  const canSend =
+    connected && !state.ejected && !responseIsActive() && !needsSetup && !checkingReadiness;
   messageEl.disabled = !canSend;
   sendBtn.disabled = !canSend;
   messageEl.placeholder = !connected
     ? "Connect the bridge to start…"
-    : state.ejected
-      ? "This session is now controlled in your terminal"
-      : responseIsActive()
-        ? "Wait for the current reply or stop it…"
-        : "Message…";
+    : checkingReadiness
+      ? "Checking provider setup…"
+      : needsSetup
+        ? `Configure ${agentLabel(selectedAgent)} to start…`
+        : state.ejected
+          ? "This session is now controlled in your terminal"
+          : responseIsActive()
+            ? "Wait for the current reply or stop it…"
+            : "Message…";
 }
 
 function renderConnection(isConnected: boolean): void {
   connected = isConnected;
+  if (!isConnected) agentReadinessLoaded = false;
   statusPill.textContent = isConnected ? "Connected" : "Disconnected";
   statusPill.className = `pill ${isConnected ? "pill--on" : "pill--off"}`;
   disconnectedEl.style.display = isConnected ? "none" : "block";
@@ -559,6 +664,7 @@ async function loadChatDefaults(): Promise<void> {
   savedChatSettings = settings;
   selectedAgent = settings.defaultAgent;
   syncAgentSelection();
+  render();
 }
 
 async function loadAgentAvailability(): Promise<void> {
@@ -566,13 +672,20 @@ async function loadAgentAvailability(): Promise<void> {
   if (!token) return;
   const statuses = await chatAgents(token, await getEndpoint());
   agentAvailabilityById = new Map(statuses.map((status) => [status.agent, status]));
+  agentReadinessLoaded = statuses.length > 0;
   renderAgents();
+  render();
 }
 
 // --- send -------------------------------------------------------------------
 
 async function sendMessage(): Promise<void> {
   if (!connected || state.ejected) return;
+  if (!state.session && !agentReadinessLoaded) return;
+  if (!state.session && agentAvailabilityById.get(selectedAgent)?.available === false) {
+    render();
+    return;
+  }
   const text = messageEl.value.trim();
   if (text.length === 0) return;
   messageEl.value = "";
@@ -615,6 +728,9 @@ function newError(status: number, error?: string): string {
   if (status === 401 || status === 403) return "Not authorized — re-run setup.";
   if (error === "chat_unavailable") return "Chat isn't available on this bridge.";
   if (error === "agent_unavailable") return "That agent isn't available yet.";
+  if (error === "agent_not_configured") {
+    return "Configure that provider's BrowserOps connection before starting a chat.";
+  }
   if (error === "agent_not_found") {
     return "That provider's CLI is unavailable. Install or sign in, then retry.";
   }
@@ -918,6 +1034,7 @@ agentSwitchConfirm.addEventListener("click", () => void confirmAgentSwitch());
 agentSwitchDialog.addEventListener("cancel", () => {
   pendingAgentSwitch = undefined;
 });
+providerSetupAction.addEventListener("click", () => void configureSelectedAgent());
 termMirrorBtn.addEventListener("click", () => {
   void setView(view === "terminal" ? "chat" : "terminal");
 });

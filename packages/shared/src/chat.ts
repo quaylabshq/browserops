@@ -129,12 +129,22 @@ export const DEFAULT_CHAT_SETTINGS: ChatSettings = {
   transport: "terminal",
 };
 
+/** Readiness of a provider for BrowserOps panel chat. */
+export type ChatAgentSetupState = "ready" | "cli_missing" | "mcp_missing" | "config_invalid";
+
 /** Runtime availability, surfaced before the panel lets a user choose an agent. */
 export interface ChatAgentStatus {
   agent: AgentId;
+  /** True only when the provider CLI and its BrowserOps MCP registration are ready. */
   available: boolean;
   /** Installed CLI version when cheaply available; never a credential. */
   version?: string;
+  /** Stable setup classification for the pre-chat configuration UI. */
+  setupState?: ChatAgentSetupState;
+  /** User-level config file BrowserOps inspected for this provider. */
+  configPath?: string;
+  /** True when BrowserOps can safely add its MCP entry after an explicit user click. */
+  canConfigure?: boolean;
   reason?: string;
 }
 
