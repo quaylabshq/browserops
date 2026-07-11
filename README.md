@@ -1,6 +1,27 @@
-# browserops
+<p align="center">
+  <img src="assets/banner.png" alt="BrowserOps. Your browser, fully autonomous." width="100%">
+</p>
 
-An MCP server that drives your live Chrome browser. Any MCP-compatible client (Claude Code, Cursor, Zed, Continue, Windsurf, custom SDK agents, …) calls `browser_*` tools → a local Node bridge forwards them to a Chrome MV3 extension over WebSocket → the extension uses `chrome.tabs` / `chrome.scripting` / `chrome.debugger` to control your real browsing session (including logged-in sites).
+<p align="center"><b>The fastest way to give your AI agent a real browser. Yours.</b></p>
+
+<p align="center">
+  <a href="https://www.npmjs.com/package/browserops"><img src="https://img.shields.io/npm/v/browserops" alt="npm version"></a>
+  <a href="https://chromewebstore.google.com/detail/browserops/fcjcldlmaoincljnghkbhhalnjfmbhnp"><img src="https://img.shields.io/badge/chrome-web%20store-blue" alt="Chrome Web Store"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT license"></a>
+</p>
+
+BrowserOps is an MCP server that lets any AI client drive your already-running, already-logged-in Chrome. Not a headless clone: the same authenticated session you use every day, so there is no re-auth, no fingerprint mismatch, and no bot-detection wall. Works behind 2FA and Cloudflare.
+
+How it works: any MCP-compatible client (Claude Code, Cursor, Zed, Continue, Windsurf, custom SDK agents) calls `browser_*` tools → a local Node bridge forwards them to a Chrome MV3 extension over WebSocket → the extension uses `chrome.tabs` / `chrome.scripting` / `chrome.debugger` to control your real browsing session, logged-in sites included.
+
+**Why BrowserOps**
+
+- **Your Chrome, not a headless clone.** Agents act in the session you're already signed into.
+- **MCP-native.** One server, every MCP client. Register once, use it from any editor or agent.
+- **Open source, free forever.** MIT-licensed, local-first; the bridge binds to `127.0.0.1` only.
+- **Reusable procedures.** Flows learned once replay deterministically, shared across every client.
+
+Validated use cases: QA-testing your own frontend, multi-MCP orchestration, social-media chores on your real accounts, scraping behind login or Cloudflare.
 
 ## Prerequisites
 
