@@ -15,6 +15,9 @@ import {
   ENV,
   canChatAgent,
   type AgentId,
+  type ChatAgentMcpConnectionState,
+  type ChatAgentMcpStatus,
+  type ChatAgentStatus,
   type FeatureName,
 } from "@browserops/shared";
 import { createTraceWriter, type TraceWriter } from "./trace-writer.js";
@@ -34,6 +37,7 @@ import {
   inspectChatAgents,
 } from "./engine/provider-setup.js";
 import { EngineError } from "./engine/errors.js";
+import { McpConnectionMonitor } from "./mcp-connection-monitor.js";
 import { ensureIndex } from "./procedures/index-builder.js";
 import { proceduresRoot } from "./procedures/paths.js";
 import {
@@ -52,6 +56,8 @@ export interface DaemonRuntime {
   safety: Safety;
   enabledFeatures: { current: Set<FeatureName> };
   riskyMatcher: RiskyDomainMatcher;
+  /** Live provider-shim connections, owned by the daemon socket lifecycle. */
+  mcpConnections: McpConnectionMonitor;
   pairCode: string;
   /**
    * Mutable fan-out point invoked when the extension reports a closed
@@ -101,6 +107,7 @@ export async function bootDaemonRuntime(opts: BootDaemonRuntimeOptions): Promise
   };
   const extensionReadyListeners: Array<() => void> = [];
   let lastExtensionConnected = false;
+  const mcpConnections = new McpConnectionMonitor();
 
   const enabledFeatures: { current: Set<FeatureName> } = { current: new Set() };
   try {
@@ -187,11 +194,20 @@ export async function bootDaemonRuntime(opts: BootDaemonRuntimeOptions): Promise
     },
     settings: () => loadChatSettings(),
     updateSettings: (update) => updateChatSettings(update),
-    agents: () => inspectChatAgents(chatEngine.agentStatuses()),
+    agents: async () => {
+      const statuses = await inspectChatAgents(chatEngine.agentStatuses());
+      return statuses.map((status) =>
+        withMcpConnectionStatus(status, mcpConnections, lastExtensionConnected),
+      );
+    },
     configureAgent: async (agent) => {
       const base = chatEngine.agentStatuses().find((status) => status.agent === agent);
       if (!base) return { agent, available: false, reason: "driver_unavailable" };
-      return configureChatAgent(base);
+      return withMcpConnectionStatus(
+        await configureChatAgent(base),
+        mcpConnections,
+        lastExtensionConnected,
+      );
     },
     terminal: async (sessionId, mode) => {
       const meta = await chatEngine.getSession(sessionId);
@@ -328,6 +344,7 @@ export async function bootDaemonRuntime(opts: BootDaemonRuntimeOptions): Promise
     safety,
     enabledFeatures,
     riskyMatcher,
+    mcpConnections,
     pairCode: wsBridge.pairCode,
     get onTabClosed() {
       return hooks.onTabClosed;
@@ -363,6 +380,42 @@ export async function bootDaemonRuntime(opts: BootDaemonRuntimeOptions): Promise
     },
   };
   return runtime;
+}
+
+function withMcpConnectionStatus(
+  status: ChatAgentStatus,
+  monitor: McpConnectionMonitor,
+  extensionConnected: boolean,
+): ChatAgentStatus {
+  const activeSessions = monitor.activeSessions(status.agent);
+  const mcp: ChatAgentMcpStatus = {
+    extensionConnected,
+    state: mcpConnectionState(status, activeSessions),
+    activeSessions,
+    ...(monitor.lastSeen(status.agent) !== undefined
+      ? { lastConnectedAt: monitor.lastSeen(status.agent) }
+      : {}),
+  };
+  return { ...status, mcp };
+}
+
+function mcpConnectionState(
+  status: ChatAgentStatus,
+  activeSessions: number,
+): ChatAgentMcpConnectionState {
+  // A real attached shim wins over a stale config read: `connected` means an
+  // MCP channel exists now, never merely that a config entry was found.
+  if (activeSessions > 0) return "connected";
+  switch (status.setupState) {
+    case "ready":
+      return "configured";
+    case "config_invalid":
+      return "configuration_invalid";
+    case "cli_missing":
+      return "cli_unavailable";
+    default:
+      return "not_configured";
+  }
 }
 
 function parseLogLevel(v: string | undefined): LogLevel {

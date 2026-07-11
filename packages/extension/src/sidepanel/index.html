@@ -44,6 +44,13 @@
 
       <div id="agents" class="agents" role="radiogroup" aria-label="Agent"></div>
 
+      <section id="provider-setup" class="provider-setup" hidden aria-live="polite">
+        <strong id="provider-setup-title"></strong>
+        <p id="provider-setup-copy"></p>
+        <p id="provider-setup-path" class="provider-setup-path" hidden></p>
+        <button id="provider-setup-action" type="button" hidden></button>
+      </section>
+
       <dialog
         id="agent-switch-dialog"
         class="agent-switch-dialog"
@@ -129,12 +136,6 @@
             Send a message to start chatting. Replies stream here, and the agent can act on the page
             you’re viewing.
           </p>
-          <section id="provider-setup" class="provider-setup" hidden aria-live="polite">
-            <strong id="provider-setup-title"></strong>
-            <p id="provider-setup-copy"></p>
-            <p id="provider-setup-path" class="provider-setup-path" hidden></p>
-            <button id="provider-setup-action" type="button" hidden></button>
-          </section>
         </div>
       </div>
 

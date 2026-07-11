@@ -78,13 +78,41 @@ async function main(): Promise<void> {
   const common = buildCommonProps({ bridgeVersion: VERSION });
   let totalSessions = 0;
 
-  captureEvent(telemetry, "root.daemon_started", {
-    approval_mode: process.env[ENV.APPROVAL] === "gate" ? "gate" : "auto",
-    enabled_features: [...runtime.enabledFeatures.current],
-    extension_connected: runtime.wsBridge.isConnected(),
-  }, common);
+  captureEvent(
+    telemetry,
+    "root.daemon_started",
+    {
+      approval_mode: process.env[ENV.APPROVAL] === "gate" ? "gate" : "auto",
+      enabled_features: [...runtime.enabledFeatures.current],
+      extension_connected: runtime.wsBridge.isConnected(),
+    },
+    common,
+  );
 
   const active = new Map<string, ActiveSession>();
+
+  // The side panel obtains authoritative detail from /chat/agents, while this
+  // reverse RPC lets the extension immediately invalidate its cached health
+  // when an MCP subprocess connects or exits. This makes the extension ↔ MCP
+  // relationship explicitly bidirectional instead of inferring it from a
+  // provider binary or PID.
+  const publishMcpHealth = (): void => {
+    if (!runtime.wsBridge.isConnected()) return;
+    runtime.wsBridge
+      .callExtension(
+        "mcp_connection_state",
+        { providers: runtime.mcpConnections.snapshot() },
+        3_000,
+      )
+      .catch(
+        (err: unknown) =>
+          void runtime.logger.write({
+            dir: "system",
+            event: "mcp_health_publish_failed",
+            error: err instanceof Error ? err.message : String(err),
+          }),
+      );
+  };
 
   // Fan tab_closed → forgetTab across every active session's bucket so a
   // closed tab can't continue eating quota. Buckets are otherwise fully
@@ -97,20 +125,18 @@ async function main(): Promise<void> {
 
   const broadcast = (method: string, params: Record<string, unknown>): void => {
     if (!runtime.wsBridge.isConnected()) return;
-    runtime.wsBridge
-      .callExtension(method, params, 3_000)
-      .catch((err: unknown) => {
-        // Extension may pre-date the session-group handlers — log and
-        // keep going; nothing in the daemon's correctness depends on
-        // the broadcast succeeding.
-        void runtime.logger.write({
-          dir: "system",
-          event: "session_broadcast_failed",
-          method,
-          params,
-          error: err instanceof Error ? err.message : String(err),
-        });
+    runtime.wsBridge.callExtension(method, params, 3_000).catch((err: unknown) => {
+      // Extension may pre-date the session-group handlers — log and
+      // keep going; nothing in the daemon's correctness depends on
+      // the broadcast succeeding.
+      void runtime.logger.write({
+        dir: "system",
+        event: "session_broadcast_failed",
+        method,
+        params,
+        error: err instanceof Error ? err.message : String(err),
       });
+    });
   };
 
   const sessions = new SessionRegistry({
@@ -123,10 +149,15 @@ async function main(): Promise<void> {
         color: s.color,
       });
       totalSessions += 1;
-      captureEvent(telemetry, "root.session_started", {
-        client_name: s.client_info.name || "unknown",
-        client_version: s.client_info.version || "",
-      }, common);
+      captureEvent(
+        telemetry,
+        "root.session_started",
+        {
+          client_name: s.client_info.name || "unknown",
+          client_version: s.client_info.version || "",
+        },
+        common,
+      );
       broadcast("session_started", {
         session_id: s.id,
         name: s.name,
@@ -177,6 +208,7 @@ async function main(): Promise<void> {
     }
   };
   runtime.onExtensionReady(replaySessionState);
+  runtime.onExtensionReady(publishMcpHealth);
 
   const socketPath = daemonSocketPath();
   const socket = new DaemonSocketServer({
@@ -198,21 +230,34 @@ async function main(): Promise<void> {
           };
           const entry = await attachMcpSession(conn, session, runtime, renameSession);
           active.set(session.id, entry);
+          runtime.mcpConnections.markConnected(session.id, session.client_info.name);
+          publishMcpHealth();
           conn.onClose(async (reason) => {
             const e = active.get(session.id);
             if (e) {
               active.delete(session.id);
-              try { await e.mcp.stop(); } catch { /* ignore */ }
+              try {
+                await e.mcp.stop();
+              } catch {
+                /* ignore */
+              }
             }
+            runtime.mcpConnections.markDisconnected(session.id);
+            publishMcpHealth();
             // Orphan this session's claimed tabs back to user-owned
             // BEFORE destroying the session. The release_tab broadcast
             // resets each tab's Chrome group; the subsequent
             // session_ended cleans up the now-empty group.
             runtime.tabs.releaseAll(session.id);
-            captureEvent(telemetry, "root.session_ended", {
-              client_name: session.client_info.name || "unknown",
-              duration_ms: Date.now() - session.created_at_ms,
-            }, common);
+            captureEvent(
+              telemetry,
+              "root.session_ended",
+              {
+                client_name: session.client_info.name || "unknown",
+                duration_ms: Date.now() - session.created_at_ms,
+              },
+              common,
+            );
             sessions.destroy(session.id);
             void runtime.logger.write({
               dir: "system",
@@ -235,20 +280,41 @@ async function main(): Promise<void> {
   const shutdown = (reason: string): void => {
     void (async () => {
       await runtime.logger.write({ dir: "system", event: "daemon_shutdown", reason });
-      captureEvent(telemetry, "root.daemon_shutdown", {
-        reason,
-        uptime_ms: Date.now() - startedAtMs,
-        total_sessions: totalSessions,
-      }, common);
+      captureEvent(
+        telemetry,
+        "root.daemon_shutdown",
+        {
+          reason,
+          uptime_ms: Date.now() - startedAtMs,
+          total_sessions: totalSessions,
+        },
+        common,
+      );
       // Tear down active sessions first so MCP servers don't try to send
       // responses through a half-closed socket.
       for (const [, entry] of active) {
-        try { await entry.mcp.stop(); } catch { /* ignore */ }
+        try {
+          await entry.mcp.stop();
+        } catch {
+          /* ignore */
+        }
       }
       active.clear();
-      try { await socket.stop(); } catch { /* ignore */ }
-      try { await runtime.shutdown(); } catch { /* ignore */ }
-      try { await telemetry?.shutdown(TELEMETRY_DRAIN_MS); } catch { /* ignore */ }
+      try {
+        await socket.stop();
+      } catch {
+        /* ignore */
+      }
+      try {
+        await runtime.shutdown();
+      } catch {
+        /* ignore */
+      }
+      try {
+        await telemetry?.shutdown(TELEMETRY_DRAIN_MS);
+      } catch {
+        /* ignore */
+      }
       await releasePidfile(pidfile);
       await bootLogger.close();
       process.exit(0);

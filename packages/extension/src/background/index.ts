@@ -24,6 +24,7 @@ import { registerLocateHandler } from "./handlers/locate.js";
 import { registerProposeLocatorHandler } from "./handlers/propose-locator.js";
 import { registerSafetyHandler, resolveSafetyDecision } from "./handlers/safety.js";
 import { registerSessionGroupHandlers } from "./handlers/session-groups.js";
+import { registerMcpHealthHandlers } from "./handlers/mcp-health.js";
 import { syncExistingTabs } from "./tab-sync.js";
 
 // Yellow icon variants — `?url` suffix forces vite to emit them as files
@@ -99,6 +100,7 @@ registerProposeLocatorHandler(router, { tabIdMap: tabIdToChromeId, refCache });
 registerSafetyHandler(router, { restoreBadge: () => setBadge(currentConnected) });
 
 registerSessionGroupHandlers(router);
+registerMcpHealthHandlers(router);
 
 router.register("assign_tab_id", async (params) => {
   const chromeTabId = params["chrome_tab_id"];

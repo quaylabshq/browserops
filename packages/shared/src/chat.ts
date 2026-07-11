@@ -132,6 +132,30 @@ export const DEFAULT_CHAT_SETTINGS: ChatSettings = {
 /** Readiness of a provider for BrowserOps panel chat. */
 export type ChatAgentSetupState = "ready" | "cli_missing" | "mcp_missing" | "config_invalid";
 
+/** The live BrowserOps-MCP state for a provider, distinct from its CLI setup. */
+export type ChatAgentMcpConnectionState =
+  | "connected"
+  | "configured"
+  | "not_configured"
+  | "configuration_invalid"
+  | "cli_unavailable";
+
+/**
+ * A provider can be configured without its MCP subprocess being live. The
+ * panel uses this shape to avoid calling a provider "connected" until its
+ * shim has actually completed a connection to the BrowserOps daemon.
+ */
+export interface ChatAgentMcpStatus {
+  /** Whether the BrowserOps extension currently has its authenticated bridge link. */
+  extensionConnected: boolean;
+  /** `connected` only while the provider's MCP shim is currently attached. */
+  state: ChatAgentMcpConnectionState;
+  /** Number of currently attached MCP shim sessions for this provider. */
+  activeSessions: number;
+  /** Most recent time a provider shim attached, retained after it exits. */
+  lastConnectedAt?: number;
+}
+
 /** Runtime availability, surfaced before the panel lets a user choose an agent. */
 export interface ChatAgentStatus {
   agent: AgentId;
@@ -145,6 +169,8 @@ export interface ChatAgentStatus {
   configPath?: string;
   /** True when BrowserOps can safely add its MCP entry after an explicit user click. */
   canConfigure?: boolean;
+  /** Live extension and MCP-shim health, populated by the BrowserOps daemon. */
+  mcp?: ChatAgentMcpStatus;
   reason?: string;
 }
 
