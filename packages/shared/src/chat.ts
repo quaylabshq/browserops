@@ -64,6 +64,8 @@ export interface SessionRef {
   /** Working dir the agent ran in — needed to locate Claude's transcript. */
   cwd: string;
   title?: string;
+  /** Most recent side-panel page snapshot, persisted independently of any provider transcript. */
+  pageContext?: ChatPageContext;
   createdAt: number;
   /** Source BrowserOps session id when this session was migrated from another agent. */
   migratedFrom?: string;
@@ -198,8 +200,9 @@ export type ChatEvent =
   | ({ type: "end"; reason: string } & ChatEventMeta);
 
 /**
- * Lightweight context about the tab the user launched from. Sent with the first
- * turn and woven into the agent's seed prompt; the agent decides relevance.
+ * Lightweight context about the active tab when a user submits a chat turn.
+ * BrowserOps keeps this separate from the visible user message and refreshes it
+ * on every side-panel send; the agent decides relevance.
  */
 export interface ChatPageContext {
   url: string;

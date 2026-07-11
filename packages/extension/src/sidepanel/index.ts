@@ -42,6 +42,7 @@ const $ = <T extends HTMLElement>(id: string): T => {
 };
 
 const statusPill = $<HTMLSpanElement>("status");
+const mcpBadge = $<HTMLSpanElement>("mcp-badge");
 const newSessionBtn = $<HTMLButtonElement>("new-session");
 const stopResponseBtn = $<HTMLButtonElement>("stop-response");
 const termMirrorBtn = $<HTMLButtonElement>("term-mirror");
@@ -51,12 +52,6 @@ const agentsEl = $<HTMLDivElement>("agents");
 const sessionsEl = $<HTMLDivElement>("sessions");
 const transcriptEl = $<HTMLDivElement>("transcript");
 const emptyEl = $<HTMLDivElement>("empty");
-const emptyCopyEl = $<HTMLParagraphElement>("empty-copy");
-const providerSetupEl = $<HTMLElement>("provider-setup");
-const providerSetupTitle = $<HTMLElement>("provider-setup-title");
-const providerSetupCopy = $<HTMLParagraphElement>("provider-setup-copy");
-const providerSetupPath = $<HTMLParagraphElement>("provider-setup-path");
-const providerSetupAction = $<HTMLButtonElement>("provider-setup-action");
 const agentStatusEl = $<HTMLDivElement>("agent-status");
 const contextEl = $<HTMLDivElement>("context");
 const composerForm = $<HTMLFormElement>("composer");
@@ -100,7 +95,6 @@ let toolActivitySessionId: string | undefined;
 let pendingAgentSwitch: string | undefined;
 let stoppingResponse = false;
 let configuringAgent: string | undefined;
-let providerSetupError: string | undefined;
 let agentReadinessLoaded = false;
 
 function sessionCaps(value: {
@@ -206,6 +200,19 @@ function mcpConnectionMessage(status: ChatAgentStatus): string {
   return "BrowserOps MCP has not been configured.";
 }
 
+/** A compact, always-visible summary; configuration details stay in Settings. */
+function renderMcpBadge(): void {
+  const status = agentAvailabilityById.get(selectedAgent);
+  const show = connected && status !== undefined;
+  mcpBadge.hidden = !show;
+  if (!show || !status) return;
+
+  const state = status.mcp?.state ?? (status.available ? "configured" : "not_configured");
+  mcpBadge.className = `mcp-badge mcp-badge--${state}`;
+  mcpBadge.textContent = `MCP · ${agentLabel(status.agent)}`;
+  mcpBadge.title = mcpConnectionMessage(status);
+}
+
 function responseIsActive(): boolean {
   return state.status === "starting" || state.status === "thinking";
 }
@@ -232,7 +239,6 @@ function selectAgent(id: string): void {
     return;
   }
   selectedAgent = id;
-  providerSetupError = undefined;
   syncAgentSelection();
   render();
 }
@@ -255,81 +261,28 @@ function syncAgentSelection(): void {
   }
 }
 
-function renderProviderSetup(): void {
-  const status = agentAvailabilityById.get(selectedAgent);
-  const show = connected && status !== undefined;
-  providerSetupEl.hidden = !show;
-  if (!show || !status) {
-    emptyCopyEl.textContent =
-      "Send a message to start chatting. Replies stream here, and the agent can act on the page you’re viewing.";
-    return;
-  }
-
-  const label = agentLabel(status.agent);
-  const setupState = status.setupState;
-  providerSetupEl.classList.toggle("provider-setup--ready", status.available);
-  providerSetupPath.hidden = !status.configPath;
-  providerSetupPath.textContent = status.configPath
-    ? `BrowserOps MCP configuration · ${status.configPath}`
-    : "";
-  providerSetupAction.hidden = !status.canConfigure;
-  providerSetupAction.disabled = configuringAgent !== undefined;
-
-  if (setupState === "cli_missing") {
-    emptyCopyEl.textContent = "Choose a configured provider to start a chat.";
-    providerSetupTitle.textContent = `${label} CLI is not available`;
-    providerSetupCopy.textContent = `Install and sign in to ${label}, then restart the BrowserOps bridge and reopen Chat.`;
-    return;
-  }
-  if (setupState === "config_invalid") {
-    emptyCopyEl.textContent = "Choose a configured provider to start a chat.";
-    providerSetupTitle.textContent = `${label} needs configuration repair`;
-    providerSetupCopy.textContent =
-      "Its BrowserOps MCP entry is malformed. BrowserOps will not overwrite it automatically; repair the entry, then reopen Chat.";
-    return;
-  }
-
-  if (status.available) {
-    providerSetupTitle.textContent = `${label} is ready to use`;
-    providerSetupCopy.textContent = `CLI ready · ${mcpConnectionMessage(status)}`;
-    return;
-  }
-
-  emptyCopyEl.textContent = `Connect ${label} before starting this chat.`;
-  providerSetupTitle.textContent = `Configure ${label} for BrowserOps`;
-  providerSetupCopy.textContent = providerSetupError
-    ? providerSetupError
-    : `Add BrowserOps’ local MCP connection to ${label}. This lets the provider use your live Chrome session from its first message.`;
-  providerSetupAction.textContent =
-    configuringAgent === status.agent ? "Configuring…" : `Configure ${label}`;
-}
-
 async function configureAgent(agent: string): Promise<void> {
   const status = agentAvailabilityById.get(agent);
   if (!status?.canConfigure || configuringAgent !== undefined) return;
   const token = await getToken();
   if (!token) {
-    if (agent === selectedAgent)
-      providerSetupError = "Run BrowserOps setup first (no connection token).";
+    settingsSaved.textContent = "Run BrowserOps setup first (no connection token).";
     render();
     return;
   }
 
   configuringAgent = agent;
-  if (agent === selectedAgent) providerSetupError = undefined;
+  settingsSaved.textContent = "";
   render();
   const result = await chatConfigureAgent(token, agent, await getEndpoint());
   configuringAgent = undefined;
-  if (!result.ok) {
-    if (agent === selectedAgent) {
-      providerSetupError =
-        result.status === 0
-          ? "The BrowserOps bridge is not reachable."
-          : result.error === "mcp_config_invalid"
-            ? "The existing BrowserOps MCP entry needs manual repair."
-            : "BrowserOps could not configure this provider.";
-    }
-  }
+  settingsSaved.textContent = result.ok
+    ? `${agentLabel(agent)} is configured for BrowserOps.`
+    : result.status === 0
+      ? "The BrowserOps bridge is not reachable."
+      : result.error === "mcp_config_invalid"
+        ? "The existing BrowserOps MCP entry needs manual repair."
+        : `BrowserOps could not configure ${agentLabel(agent)}.`;
   await loadAgentAvailability();
   renderAgentAvailability([...agentAvailabilityById.values()]);
   render();
@@ -474,7 +427,7 @@ function render(): void {
   for (const node of transcriptEl.querySelectorAll(".msg, .thinking-dots, .tool-activity"))
     node.remove();
   emptyEl.hidden = state.messages.length > 0;
-  renderProviderSetup();
+  renderMcpBadge();
   for (const m of state.messages) {
     const bubble = document.createElement("div");
     bubble.className = `msg msg--${m.role}${m.partial ? " msg--streaming" : ""}`;
@@ -746,7 +699,8 @@ async function sendMessage(): Promise<void> {
     render();
     await loadSessions();
   } else {
-    const res = await chatSend(token, state.session.sessionId, text, endpoint);
+    const meta = await capturePageMeta();
+    const res = await chatSend(token, state.session.sessionId, text, endpoint, meta);
     if (!res.ok) {
       state = { ...state, status: "idle" };
       pushSystem(sendError(res.status, res.error));
@@ -882,6 +836,12 @@ function renderAgentAvailability(agents: Awaited<ReturnType<typeof chatAgents>>)
       ? `CLI ready · ${mcpConnectionMessage(status)}`
       : agentAvailabilityMessage(label, status.reason);
     copy.append(title, detail);
+    if (status.configPath) {
+      const path = document.createElement("small");
+      path.className = "agent-availability-path";
+      path.textContent = `BrowserOps MCP configuration · ${status.configPath}`;
+      copy.append(path);
+    }
     line.appendChild(copy);
     if (!status.available) line.classList.add("unavailable");
     if (status.canConfigure) {
@@ -1086,7 +1046,6 @@ agentSwitchConfirm.addEventListener("click", () => void confirmAgentSwitch());
 agentSwitchDialog.addEventListener("cancel", () => {
   pendingAgentSwitch = undefined;
 });
-providerSetupAction.addEventListener("click", () => void configureAgent(selectedAgent));
 termMirrorBtn.addEventListener("click", () => {
   void setView(view === "terminal" ? "chat" : "terminal");
 });

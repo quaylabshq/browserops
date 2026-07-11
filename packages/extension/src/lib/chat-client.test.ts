@@ -3,6 +3,7 @@ import type { ChatEvent, ChatMessage } from "@browserops/shared";
 import {
   appendUserMessage,
   buildNewBody,
+  buildSendBody,
   chatBase,
   chatCancel,
   chatConfigureAgent,
@@ -32,6 +33,26 @@ describe("buildNewBody", () => {
       instruction: "do it",
       title: "T",
       site_name: "S",
+    });
+  });
+});
+
+describe("buildSendBody", () => {
+  it("carries the fresh active-page snapshot with a canonical user turn", () => {
+    expect(
+      buildSendBody({
+        token: "t",
+        sessionId: "s1",
+        text: "  read my email  ",
+        meta: { url: "https://mail.example/inbox", title: "Inbox", siteName: "Mail" },
+      }),
+    ).toEqual({
+      token: "t",
+      session_id: "s1",
+      text: "read my email",
+      url: "https://mail.example/inbox",
+      title: "Inbox",
+      site_name: "Mail",
     });
   });
 });

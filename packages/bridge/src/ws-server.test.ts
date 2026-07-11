@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
-import { CloseCode, HELLO_TIMEOUT_MS, PROTOCOL_VERSION, type SessionRef } from "@browserops/shared";
+import {
+  CloseCode,
+  HELLO_TIMEOUT_MS,
+  PROTOCOL_VERSION,
+  type ChatPageContext,
+  type SessionRef,
+} from "@browserops/shared";
 import {
   WSBridge,
   type ChatService,
@@ -676,7 +682,7 @@ describe("WSBridge POST /launch", () => {
 
 describe("WSBridge /chat/*", () => {
   function fakeChat() {
-    const sent: { id: string; text: string }[] = [];
+    const sent: { id: string; text: string; page?: ChatPageContext }[] = [];
     const cancelled: string[] = [];
     const terminals: { id: string; mode: string }[] = [];
     const sessions: (SessionRef & { lastActive: number })[] = [];
@@ -696,10 +702,10 @@ describe("WSBridge /chat/*", () => {
         sessions.unshift({ ...ref, lastActive: 1 });
         return ref;
       },
-      async send(id, text) {
+      async send(id, text, page) {
         if (id === "missing") throw new EngineError("unknown_session");
         if (id === "noterm") throw new EngineError("pty_unavailable");
-        sent.push({ id, text });
+        sent.push({ id, text, ...(page ? { page } : {}) });
       },
       async cancel(id) {
         if (id === "missing") throw new EngineError("unknown_session");
@@ -928,10 +934,18 @@ describe("WSBridge /chat/*", () => {
             token: VALID_TOKEN,
             session_id: "s1",
             text: "hi",
+            url: "https://mail.example/inbox",
+            title: "Inbox",
           })
         ).status,
       ).toBe(200);
-      expect(f.sent).toEqual([{ id: "s1", text: "hi" }]);
+      expect(f.sent).toEqual([
+        {
+          id: "s1",
+          text: "hi",
+          page: { url: "https://mail.example/inbox", title: "Inbox" },
+        },
+      ]);
       expect(
         (await postChat(fixture.port, "/chat/send", { token: VALID_TOKEN, session_id: "s1" }))
           .status,

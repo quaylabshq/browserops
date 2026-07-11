@@ -121,27 +121,42 @@ export function buildSystemPrompt(): string {
   ].join("\n");
 }
 
-/**
- * The first, VISIBLE prompt: the page the user was on followed by their typed
- * request. Passed as the positional arg so the agent shows it as the opening
- * turn — that's how the user sees the page context took effect.
- */
-export function buildPrompt(page: PageContext, instruction?: string): string {
+function buildBrowserContext(page: PageContext, heading: string): string {
   const lines = [
     "BrowserOps browser connection:",
     "- This chat has a BrowserOps MCP connection to the user's live Chrome profile.",
     "- For browser work, use the browser_* tools (often exposed as mcp__browserops__browser_*) and rely on their live results.",
     "- If the request is not about the browser, continue normally.",
     "",
-    "Current page when I launched you:",
+    heading,
     `- URL: ${page.url || "(unknown)"}`,
   ];
   if (page.title) lines.push(`- Title: ${page.title}`);
   if (page.description) lines.push(`- Description: ${page.description}`);
   if (page.siteName) lines.push(`- Site: ${page.siteName}`);
-  const context = lines.join("\n");
+  return lines.join("\n");
+}
+
+/**
+ * The first, VISIBLE prompt: the page the user was on followed by their typed
+ * request. Passed as the positional arg so the agent shows it as the opening
+ * turn — that's how the user sees the page context took effect.
+ */
+export function buildPrompt(page: PageContext, instruction?: string): string {
+  const context = buildBrowserContext(page, "Current page when I launched you:");
   const instr = (instruction ?? "").trim();
   return instr.length > 0 ? `${context}\n\n${instr}` : context;
+}
+
+/**
+ * Provider-only envelope for every follow-up turn. It makes browser intent
+ * explicit even when a provider resumes a native conversation in a new CLI
+ * process, while the canonical panel transcript continues to show only the
+ * user's typed message.
+ */
+export function buildTurnPrompt(page: PageContext, instruction: string): string {
+  const context = buildBrowserContext(page, "Current page for this message:");
+  return `${context}\n\nUser request:\n${instruction}`;
 }
 
 /** POSIX single-quote a string so it is safe to embed in a bash script. */

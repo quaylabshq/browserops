@@ -67,6 +67,29 @@ export function buildNewBody(input: {
   return body;
 }
 
+/** Build a follow-up turn without losing the active BrowserOps page context. */
+export function buildSendBody(input: {
+  token: string;
+  sessionId: string;
+  text: string;
+  meta: PageMeta;
+}): Record<string, string> {
+  const text = clampText(input.text, 8000) ?? "";
+  const body: Record<string, string> = {
+    token: input.token,
+    session_id: input.sessionId,
+    text,
+    url: input.meta.url,
+  };
+  const title = clampText(input.meta.title);
+  if (title) body["title"] = title;
+  const description = clampText(input.meta.description);
+  if (description) body["description"] = description;
+  const siteName = clampText(input.meta.siteName);
+  if (siteName) body["site_name"] = siteName;
+  return body;
+}
+
 // --- pure: state reducer ----------------------------------------------------
 
 export interface ChatState {
@@ -496,10 +519,17 @@ export async function chatSend(
   sessionId: string,
   text: string,
   endpoint?: ChatEndpoint,
+  meta?: PageMeta,
 ): Promise<{ ok: boolean; status: number; error?: string }> {
   let res: Response;
   try {
-    res = await postJson("/chat/send", { token, session_id: sessionId, text }, endpoint);
+    res = await postJson(
+      "/chat/send",
+      meta
+        ? buildSendBody({ token, sessionId, text, meta })
+        : { token, session_id: sessionId, text },
+      endpoint,
+    );
   } catch {
     return { ok: false, status: 0, error: "unreachable" };
   }

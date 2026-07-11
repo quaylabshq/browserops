@@ -19,6 +19,7 @@ import {
   type SessionRef,
 } from "@browserops/shared";
 import type { Logger } from "../logger.js";
+import { buildTurnPrompt as buildBrowserOpsTurnPrompt } from "../launch-agent.js";
 import { chatDir as defaultChatDir } from "../paths.js";
 import { isTerminalAttachable } from "./driver.js";
 import type {
@@ -114,6 +115,7 @@ export class ChatEngine {
     const binding = await this.startBinding(sessionId, req.agent, req, undefined);
     const ref: SessionRef = {
       ...this.publicRef(sessionId, binding.binding),
+      pageContext: req.page,
       ...(binding.ref.title !== undefined ? { title: binding.ref.title } : {}),
     };
     const conversation: ConversationRuntime = {
@@ -152,10 +154,12 @@ export class ChatEngine {
     return ref;
   }
 
-  async send(sessionId: string, text: string): Promise<void> {
+  async send(sessionId: string, text: string, page?: ChatPageContext): Promise<void> {
     const conversation = await this.resolve(sessionId);
     const active = this.activeBinding(conversation);
     if (active.binding.mode !== "bridge") throw new EngineError("session_ejected");
+    const pageContext = page ?? conversation.ref.pageContext ?? { url: "" };
+    if (page !== undefined) conversation.ref = { ...conversation.ref, pageContext };
     const missed = (
       await this.store.events(sessionId, active.binding.lastProjectedSequence)
     ).flatMap((event) => (event.type === "message" ? [event.message] : []));
@@ -180,10 +184,8 @@ export class ChatEngine {
       active.suppressProviderUserMessages++;
       active.binding.lastProjectedSequence =
         userEvent.sequence ?? active.binding.lastProjectedSequence;
-      await active.driver.send(
-        active.ref,
-        missed.length > 0 ? this.syncProjection(missed, text) : text,
-      );
+      const providerText = missed.length > 0 ? this.syncProjection(missed, text) : text;
+      await active.driver.send(active.ref, buildBrowserOpsTurnPrompt(pageContext, providerText));
     }
     await this.persist(sessionId, conversation);
   }
@@ -257,6 +259,9 @@ export class ChatEngine {
     conversation.ref = {
       ...this.publicRef(sessionId, target.binding, source.binding.agent),
       createdAt: conversation.ref.createdAt,
+      ...(conversation.ref.pageContext !== undefined
+        ? { pageContext: conversation.ref.pageContext }
+        : {}),
       ...(conversation.ref.title !== undefined ? { title: conversation.ref.title } : {}),
     };
     await this.persist(sessionId, conversation);
@@ -504,7 +509,10 @@ export class ChatEngine {
       deferred.binding.agent,
       {
         agent: deferred.binding.agent,
-        page: { url: "", title: `Switched from ${bootstrap.migrationSourceAgent}` },
+        page: conversation.ref.pageContext ?? {
+          url: "",
+          title: `Switched from ${bootstrap.migrationSourceAgent}`,
+        },
         instruction: this.projection(bootstrap.migrationSourceAgent, messages),
         cwd: deferred.binding.cwd,
         ...(bootstrap.safeMode !== undefined ? { safeMode: bootstrap.safeMode } : {}),
@@ -520,6 +528,9 @@ export class ChatEngine {
     conversation.ref = {
       ...this.publicRef(sessionId, started.binding, bootstrap.migrationSourceAgent),
       createdAt: conversation.ref.createdAt,
+      ...(conversation.ref.pageContext !== undefined
+        ? { pageContext: conversation.ref.pageContext }
+        : {}),
       ...(conversation.ref.title !== undefined ? { title: conversation.ref.title } : {}),
     };
     this.bindProviderEvents(sessionId, started);
@@ -634,6 +645,7 @@ export class ChatEngine {
       cwd: active.binding.cwd,
       createdAt: meta.createdAt,
       ...(meta.title !== undefined ? { title: meta.title } : {}),
+      ...(meta.pageContext !== undefined ? { pageContext: meta.pageContext } : {}),
       ...(active.binding.model !== undefined ? { model: active.binding.model } : {}),
       ...(active.binding.reasoningEffort !== undefined
         ? { reasoningEffort: active.binding.reasoningEffort }
@@ -699,7 +711,12 @@ export class ChatEngine {
         runtime.ref = providerRef;
         runtime.binding.nativeSessionId = providerRef.nativeSessionId ?? providerRef.sessionId;
         if (conversation.ref.bindingId === runtime.binding.id) {
-          conversation.ref = this.publicRef(sessionId, runtime.binding);
+          conversation.ref = {
+            ...this.publicRef(sessionId, runtime.binding),
+            ...(conversation.ref.pageContext !== undefined
+              ? { pageContext: conversation.ref.pageContext }
+              : {}),
+          };
         }
         await this.persist(sessionId, conversation);
         return;

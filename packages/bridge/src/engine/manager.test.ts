@@ -194,7 +194,7 @@ describe("ChatEngine", () => {
     expect(got.at(-1)).toMatchObject({ type: "status", state: "thinking", sequence: 2 });
   });
 
-  it("send routes through and bumps lastActive", async () => {
+  it("sends the latest page envelope while retaining only the raw user message canonically", async () => {
     const ref = await engine.start({ agent: "claude", page: { url: "x" } });
     const engine2 = new ChatEngine({
       drivers: { claude: driver },
@@ -202,8 +202,22 @@ describe("ChatEngine", () => {
       store,
       now: () => 2000,
     });
-    await engine2.send(ref.sessionId, "next");
-    expect(driver.sent).toEqual([{ id: "s1", text: "next" }]);
+    await engine2.send(ref.sessionId, "next", {
+      url: "https://mail.example/inbox",
+      title: "Inbox",
+    });
+    expect(driver.sent).toHaveLength(1);
+    expect(driver.sent[0]).toMatchObject({ id: "s1" });
+    expect(driver.sent[0]?.text).toContain("BrowserOps browser connection:");
+    expect(driver.sent[0]?.text).toContain("- URL: https://mail.example/inbox");
+    expect(driver.sent[0]?.text).toContain("User request:\nnext");
+    expect(await engine2.history(ref.sessionId)).toMatchObject([
+      { role: "user", blocks: [{ kind: "text", text: "next" }] },
+    ]);
+    expect((await index.get(ref.sessionId))?.pageContext).toEqual({
+      url: "https://mail.example/inbox",
+      title: "Inbox",
+    });
     expect((await index.get(ref.sessionId))!.lastActive).toBe(2000);
   });
 
@@ -301,12 +315,19 @@ describe("ChatEngine", () => {
     expect(migrated.sessionId).toBe(ref.sessionId);
     expect(migrated.migrationSourceAgent).toBe("claude");
     expect(target.started).toHaveLength(0);
-    await e.send(ref.sessionId, "continue with a shorter version");
+    await e.send(ref.sessionId, "continue with a shorter version", {
+      url: "https://docs.example/current",
+      title: "Current docs",
+    });
     expect(target.started).toHaveLength(1);
     expect(target.started[0]?.instruction).toContain("Canonical transcript");
     expect(target.started[0]?.instruction).toContain("user: summarize this");
     expect(target.started[0]?.instruction).toContain("assistant: done");
     expect(target.started[0]?.instruction).toContain("continue with a shorter version");
+    expect(target.started[0]?.page).toEqual({
+      url: "https://docs.example/current",
+      title: "Current docs",
+    });
     expect(target.sent).toEqual([]); // the real user turn is the target's seed, not a duplicate send
     const back = await e.migrate(ref.sessionId, "claude");
     expect(back.sessionId).toBe(ref.sessionId);
@@ -394,7 +415,10 @@ describe("ChatEngine", () => {
       now: () => 3000,
     });
     await engine2.send(ref.sessionId, "cold");
-    expect(driver2.sent).toEqual([{ id: "s1", text: "cold" }]);
+    expect(driver2.sent).toHaveLength(1);
+    expect(driver2.sent[0]?.text).toContain("Current page for this message:");
+    expect(driver2.sent[0]?.text).toContain("- URL: x");
+    expect(driver2.sent[0]?.text).toContain("User request:\ncold");
   });
 
   it("surfaces engine error codes for unknown sessions and unavailable agents", async () => {
@@ -417,7 +441,8 @@ describe("ChatEngine", () => {
     const ref = await e.start({ agent: "claude", page: { url: "x" }, instruction: "hi" });
     expect(fallback.started).toHaveLength(1);
     await e.send(ref.sessionId, "next");
-    expect(fallback.sent).toEqual([{ id: "s1", text: "next" }]);
+    expect(fallback.sent).toHaveLength(1);
+    expect(fallback.sent[0]?.text).toContain("User request:\nnext");
   });
 
   it("does not fall back for non-pty errors", async () => {

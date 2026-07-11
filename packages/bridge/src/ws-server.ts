@@ -23,6 +23,7 @@ import {
   type Response as WireResponse,
   type ChatEvent,
   type ChatAgentStatus,
+  type ChatPageContext,
   type ChatMessage,
   type ChatSettings,
   type ChatSessionCapabilities,
@@ -74,7 +75,8 @@ export type ChatTerminalOutcome = { ok: true } | { ok: false; error: string };
  */
 export interface ChatService {
   start(params: ChatStartParams): Promise<SessionRef>;
-  send(sessionId: string, text: string): Promise<void>;
+  /** The side panel supplies a fresh active-page snapshot for every turn. */
+  send(sessionId: string, text: string, page?: ChatPageContext): Promise<void>;
   /** Interrupt an in-flight response while preserving the chat for later turns. */
   cancel(sessionId: string): Promise<void>;
   /** Attach a live listener; the implementation replays buffered events first. */
@@ -832,7 +834,7 @@ export class WSBridge {
           this.endJson(res, 400, { ok: false, error: "bad_request" });
           return;
         }
-        await this.chat.send(sessionId, text);
+        await this.chat.send(sessionId, text, chatPageFromBody(body));
         this.endJson(res, 200, { ok: true });
         return;
       }
@@ -1467,6 +1469,27 @@ export class WSBridge {
       /* ignore */
     }
   }
+}
+
+function chatPageFromBody(body: Record<string, unknown>): ChatPageContext | undefined {
+  const url = capField(body["url"]);
+  const title = capField(body["title"]);
+  const description = capField(body["description"]);
+  const siteName = capField(body["site_name"]);
+  if (
+    url === undefined &&
+    title === undefined &&
+    description === undefined &&
+    siteName === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    url: url ?? "",
+    ...(title !== undefined ? { title } : {}),
+    ...(description !== undefined ? { description } : {}),
+    ...(siteName !== undefined ? { siteName } : {}),
+  };
 }
 
 function makeAbortError(): Error {

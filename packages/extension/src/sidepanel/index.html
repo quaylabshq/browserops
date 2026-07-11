@@ -39,17 +39,11 @@
           <button id="stop-response" type="button" class="link-btn" hidden>■ Stop</button>
           <button id="new-session" type="button" class="link-btn" hidden>↻ New</button>
           <span id="status" class="pill pill--off" aria-live="polite">Disconnected</span>
+          <span id="mcp-badge" class="mcp-badge" aria-live="polite" hidden></span>
         </div>
       </header>
 
       <div id="agents" class="agents" role="radiogroup" aria-label="Agent"></div>
-
-      <section id="provider-setup" class="provider-setup" hidden aria-live="polite">
-        <strong id="provider-setup-title"></strong>
-        <p id="provider-setup-copy"></p>
-        <p id="provider-setup-path" class="provider-setup-path" hidden></p>
-        <button id="provider-setup-action" type="button" hidden></button>
-      </section>
 
       <dialog
         id="agent-switch-dialog"

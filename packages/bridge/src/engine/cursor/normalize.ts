@@ -99,23 +99,44 @@ function nativeSessionId(o: Record<string, unknown>): string | undefined {
   return undefined;
 }
 
-export function cursorLineToEvents(raw: unknown, turnId?: string): NormalizedLine {
+export interface CursorNormalizeOptions {
+  /**
+   * Cursor pauses prose while it runs a tool, then starts a fresh assistant
+   * stream. Keep contiguous deltas together but give each resumed stream its
+   * own durable BrowserOps message id.
+   */
+  streamSegment?: number;
+  /** Cursor's terminal result is an aggregate of already-streamed prose. */
+  suppressResultText?: boolean;
+}
+
+function assistantMessageId(turnId: string | undefined, segment: number, fallback: string): string {
+  if (!turnId) return fallback;
+  return segment === 0 ? `${turnId}-assistant` : `${turnId}-assistant-${segment + 1}`;
+}
+
+export function cursorLineToEvents(
+  raw: unknown,
+  turnId?: string,
+  options: CursorNormalizeOptions = {},
+): NormalizedLine {
   const o = asObject(raw);
   if (!o) return { events: [] };
   const type = asString(o["type"]);
   const subtype = asString(o["subtype"]);
   const native = nativeSessionId(o);
   const events: ChatEvent[] = [];
+  const segment = options.streamSegment ?? 0;
 
   if (type === "assistant") {
     const text = textFromEvent(o);
     if (text.trim()) {
       // Cursor documents assistant output as deltas that must be concatenated.
-      // The process driver supplies a unique id per turn, so each answer keeps
-      // one streaming bubble until its terminal result arrives.
+      // A resumed stream after a tool pause receives a new segment id from the
+      // driver, so it becomes a new bubble instead of extending old prose.
       const partial = turnId !== undefined || o["timestamp_ms"] !== undefined;
       const message: ChatMessage = {
-        id: turnId ? `${turnId}-assistant` : eventId(o, "cursor-assistant"),
+        id: assistantMessageId(turnId, segment, eventId(o, "cursor-assistant")),
         role: "assistant",
         blocks: [{ kind: "text", text }],
         ...(partial ? { partial: true } : {}),
@@ -146,11 +167,11 @@ export function cursorLineToEvents(raw: unknown, turnId?: string): NormalizedLin
     }
   } else if (type === "result") {
     const text = textFromEvent(o);
-    if (text.trim()) {
+    if (text.trim() && !options.suppressResultText) {
       events.push({
         type: "message",
         message: {
-          id: turnId ? `${turnId}-assistant` : eventId(o, "cursor-result"),
+          id: assistantMessageId(turnId, segment, eventId(o, "cursor-result")),
           role: "assistant",
           blocks: [{ kind: "text", text }],
         },

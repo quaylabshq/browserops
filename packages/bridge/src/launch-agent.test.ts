@@ -8,6 +8,7 @@ import {
   buildMacTailScript,
   buildPrompt,
   buildSystemPrompt,
+  buildTurnPrompt,
   buildWindowsResumeScript,
   buildWindowsScript,
   buildWindowsTailScript,
@@ -89,6 +90,19 @@ describe("buildPrompt (visible first message)", () => {
     expect(p).toContain("- URL: (unknown)");
     expect(p).not.toContain("- Title:");
     expect(p.trim().endsWith("(unknown)")).toBe(true);
+  });
+});
+
+describe("buildTurnPrompt (provider follow-up envelope)", () => {
+  it("repeats BrowserOps' live-page contract without changing the canonical panel turn", () => {
+    const p = buildTurnPrompt(
+      { url: "https://mail.example/inbox", title: "Inbox" },
+      "Read my last email.",
+    );
+    expect(p).toContain("BrowserOps browser connection:");
+    expect(p).toContain("Current page for this message:");
+    expect(p).toContain("- URL: https://mail.example/inbox");
+    expect(p).toContain("User request:\nRead my last email.");
   });
 });
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildCursorArgs } from "./driver.js";
+import { buildCursorArgs, CursorDriver } from "./driver.js";
 import { cursorLineToEvents } from "./normalize.js";
 
 describe("CursorDriver args", () => {
@@ -93,7 +93,7 @@ describe("cursorLineToEvents", () => {
     });
   });
 
-  it("keeps Cursor partial output in one assistant bubble for a turn", () => {
+  it("keeps each contiguous Cursor stream in one assistant bubble", () => {
     const partial = cursorLineToEvents(
       { type: "assistant", timestamp_ms: 1, message: { content: [{ text: "hel" }] } },
       "turn-1",
@@ -109,6 +109,53 @@ describe("cursorLineToEvents", () => {
     });
     const final = complete.events[0];
     expect(final?.type === "message" ? final.message.partial : undefined).toBeUndefined();
+  });
+
+  it("assigns a resumed stream to a new assistant message after a tool pause", () => {
+    const driver = new CursorDriver({ bin: "agent" });
+    const normalize = (
+      driver as unknown as {
+        normalizeLine(
+          raw: unknown,
+          context: { turnId: string },
+        ): ReturnType<typeof cursorLineToEvents>;
+      }
+    ).normalizeLine.bind(driver);
+
+    const first = normalize(
+      { type: "assistant", message: { content: [{ text: "Before the tool." }] } },
+      { turnId: "turn-1" },
+    );
+    const tool = normalize(
+      {
+        type: "tool_call",
+        subtype: "started",
+        call_id: "tool-1",
+        tool_call: { browserAction: { args: { task: "read" } } },
+      },
+      { turnId: "turn-1" },
+    );
+    const resumed = normalize(
+      { type: "assistant", message: { content: [{ text: "After the tool." }] } },
+      { turnId: "turn-1" },
+    );
+    const terminal = normalize(
+      { type: "result", result: "Before the tool. After the tool." },
+      { turnId: "turn-1" },
+    );
+
+    expect(first.events[0]).toMatchObject({
+      type: "message",
+      message: { id: "turn-1-assistant", partial: true },
+    });
+    expect(tool.events[0]).toMatchObject({ type: "message", message: { role: "assistant" } });
+    expect(resumed.events[0]).toMatchObject({
+      type: "message",
+      message: { id: "turn-1-assistant-2", partial: true },
+    });
+    // The terminal Cursor result aggregates already-streamed text, so it must
+    // not replace the second bubble with a duplicate of both streams.
+    expect(terminal.events).toEqual([{ type: "status", state: "idle" }]);
   });
 
   it("treats unlabelled assistant output as turn-scoped stream content", () => {

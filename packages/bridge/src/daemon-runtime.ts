@@ -168,7 +168,7 @@ export async function bootDaemonRuntime(opts: BootDaemonRuntimeOptions): Promise
         ...(params.instruction !== undefined ? { instruction: params.instruction } : {}),
       });
     },
-    send: (sessionId, text) => chatEngine.send(sessionId, text),
+    send: (sessionId, text, page) => chatEngine.send(sessionId, text, page),
     cancel: (sessionId) => chatEngine.cancel(sessionId),
     subscribe: (sessionId, listener) => chatEngine.subscribe(sessionId, listener),
     history: (sessionId) => chatEngine.history(sessionId),

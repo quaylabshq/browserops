@@ -498,7 +498,23 @@ export abstract class HeadlessProcessDriver implements AgentDriver {
   }
 
   private dispatch(state: ProcessDriverState, event: ChatEvent): void {
-    const normalized = this.coalescePartial(state, event);
+    // A tool invocation suspends assistant prose. Finalize its current partial
+    // snapshot before recording the tool event so a resumed provider stream
+    // can start a genuinely separate bubble. Terminal states likewise clear
+    // the streaming marker without needing a provider to re-send its text.
+    if (isToolBoundary(event) || isTerminalStatus(event)) this.finalizePartialMessages(state);
+    this.record(state, this.coalescePartial(state, event));
+  }
+
+  private finalizePartialMessages(state: ProcessDriverState): void {
+    const snapshots = [...state.partialMessages.values()];
+    state.partialMessages.clear();
+    for (const message of snapshots) {
+      this.record(state, { type: "message", message: { ...message, partial: undefined } });
+    }
+  }
+
+  private record(state: ProcessDriverState, normalized: ChatEvent): void {
     state.events.push(normalized);
     if (state.events.length > EVENT_BUFFER_CAP) state.events.shift();
     const line = mirrorEventLine(normalized);
@@ -547,6 +563,20 @@ export abstract class HeadlessProcessDriver implements AgentDriver {
     state.partialMessages.set(message.id, merged);
     return { type: "message", message: merged };
   }
+}
+
+function isToolBoundary(event: ChatEvent): boolean {
+  return (
+    event.type === "message" &&
+    event.message.blocks.some((block) => block.kind === "tool_use" || block.kind === "tool_result")
+  );
+}
+
+function isTerminalStatus(event: ChatEvent): boolean {
+  return (
+    event.type === "status" &&
+    (event.state === "idle" || event.state === "error" || event.state === "ejected")
+  );
 }
 
 /** A concise, panel-safe process failure reason (never raw unlimited stderr). */
