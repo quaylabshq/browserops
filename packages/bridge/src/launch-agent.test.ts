@@ -49,14 +49,18 @@ describe("buildSystemPrompt", () => {
   it("carries operational guidance and is page-agnostic", () => {
     const sys = buildSystemPrompt();
     expect(sys).toContain("browser_*");
+    expect(sys).toContain("BrowserOps MCP connection");
+    expect(sys).toContain("mcp__browserops__browser_*");
     expect(sys).toContain("/browserops");
     expect(sys).toContain("browser_list_tabs");
+    expect(sys).toContain("browser_observe");
+    expect(sys).toContain("do not claim the browser action happened");
     expect(sys).not.toContain("- URL:"); // page facts live in the visible prompt
   });
 });
 
 describe("buildPrompt (visible first message)", () => {
-  it("leads with the page facts, then the instruction", () => {
+  it("leads with BrowserOps connection guidance, then page facts and the instruction", () => {
     const p = buildPrompt(
       {
         url: "https://example.com/a",
@@ -65,6 +69,12 @@ describe("buildPrompt (visible first message)", () => {
         siteName: "Example Inc",
       },
       "summarize this",
+    );
+    expect(p).toContain("BrowserOps browser connection:");
+    expect(p).toContain("live Chrome profile");
+    expect(p).toContain("mcp__browserops__browser_*");
+    expect(p.indexOf("BrowserOps browser connection:")).toBeLessThan(
+      p.indexOf("Current page when I launched you:"),
     );
     expect(p).toContain("Current page when I launched you:");
     expect(p).toContain("- URL: https://example.com/a");
