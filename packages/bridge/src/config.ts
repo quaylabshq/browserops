@@ -29,13 +29,12 @@ import {
 import { configPath } from "./paths.js";
 
 /**
- * Which transport the in-panel chat engine uses to drive Claude:
- *  - `terminal` (default): a real INTERACTIVE `claude` session on a pty — input
- *    injected at the TTY, output read from Claude's own transcript — which is
- *    indistinguishable from hand-usage (no `--print`, no skip-permissions).
- *  - `headless`: the `claude --print` stream-json driver (one process per turn).
- * Driver selection degrades `terminal` → `headless` automatically when node-pty
- * can't load, so this is a preference, not a hard requirement.
+ * Which transport the in-panel chat engine uses for every provider:
+ *  - `terminal` (default): a real INTERACTIVE provider TUI on a hidden PTY —
+ *    input injected at the TTY, output read from the provider's own transcript.
+ *  - `headless`: one non-interactive stream process per turn.
+ * Driver selection degrades `terminal` → `headless` per provider when node-pty
+ * can't load or start, so this is a preference, not a hard requirement.
  */
 export type ChatTransport = "terminal" | "headless";
 
