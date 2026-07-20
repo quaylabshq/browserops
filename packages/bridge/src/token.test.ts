@@ -7,16 +7,21 @@ import { loadOrCreateToken } from "./token.js";
 describe("loadOrCreateToken", () => {
   let tmp: string;
   let originalHome: string | undefined;
+  let originalUserProfile: string | undefined;
 
   beforeEach(() => {
     tmp = mkdtempSync(join(tmpdir(), "browserops-token-"));
     originalHome = process.env["HOME"];
+    originalUserProfile = process.env["USERPROFILE"];
     process.env["HOME"] = tmp;
+    process.env["USERPROFILE"] = tmp;
   });
 
   afterEach(() => {
     if (originalHome !== undefined) process.env["HOME"] = originalHome;
     else delete process.env["HOME"];
+    if (originalUserProfile !== undefined) process.env["USERPROFILE"] = originalUserProfile;
+    else delete process.env["USERPROFILE"];
     rmSync(tmp, { recursive: true, force: true });
   });
 

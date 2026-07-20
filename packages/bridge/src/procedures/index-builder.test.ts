@@ -2,20 +2,12 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import YAML from "yaml";
-import {
-  buildIndex,
-  ensureIndex,
-  readIndex,
-  scanTree,
-  writeIndex,
-} from "./index-builder.js";
+import { buildIndex, ensureIndex, readIndex, scanTree, writeIndex } from "./index-builder.js";
 
 let tmpDir: string;
 
 beforeEach(async () => {
-  tmpDir = await fs.mkdtemp(
-    path.join(import.meta.dirname ?? __dirname, ".pbidx-test-"),
-  );
+  tmpDir = await fs.mkdtemp(path.join(import.meta.dirname ?? __dirname, ".pbidx-test-"));
 });
 
 afterEach(async () => {
@@ -50,7 +42,9 @@ describe("scanTree", () => {
     const manifest = await scanTree(tmpDir);
     expect(Object.keys(manifest.procedures).sort()).toEqual(["demo.a", "demo.b"]);
     expect(manifest.procedures["demo.a"]!.kind).toBe("leaf");
-    expect(manifest.procedures["demo.a"]!.path).toBe("shared/demo_a/procedure.yaml");
+    expect(manifest.procedures["demo.a"]!.path).toBe(
+      path.join("shared", "demo_a", "procedure.yaml"),
+    );
   });
 
   it("picks up composite + subs", async () => {
@@ -60,24 +54,15 @@ describe("scanTree", () => {
       description: "x composite",
       kind: "composite",
       uses: ["composite.x.sub1"],
-      steps: [
-        { id: "s1", do: "procedure_call", with: { name: "composite.x.sub1" } },
-      ],
+      steps: [{ id: "s1", do: "procedure_call", with: { name: "composite.x.sub1" } }],
     });
-    await writeYaml(
-      "composite_x/subs/sub1/procedure.yaml",
-      leaf("composite.x.sub1"),
-    );
+    await writeYaml("composite_x/subs/sub1/procedure.yaml", leaf("composite.x.sub1"));
 
     const manifest = await scanTree(tmpDir);
     expect(manifest.procedures["composite.x"]?.kind).toBe("composite");
-    expect(manifest.procedures["composite.x"]?.subs).toEqual([
-      "composite.x.sub1",
-    ]);
+    expect(manifest.procedures["composite.x"]?.subs).toEqual(["composite.x.sub1"]);
     expect(manifest.procedures["composite.x.sub1"]?.owner).toBe("composite.x");
-    expect(manifest.procedures["composite.x.sub1"]?.usedBy).toEqual([
-      "composite.x",
-    ]);
+    expect(manifest.procedures["composite.x.sub1"]?.usedBy).toEqual(["composite.x"]);
   });
 
   it("status defaults to draft", async () => {
