@@ -1343,6 +1343,61 @@ const hover: ToolDef = {
   errorCodes: [...BASE_CODES, ...TAB_CODES, ...REF_CODES, ...MUTATING_CODES] as const,
 } as const;
 
+const drag: ToolDef = {
+  name: "browser_drag",
+  description:
+    "Drag from a source element or viewport coordinate to a target element or viewport coordinate. " +
+    "Fires pointer/mouse events (mousePressed -> mouseMoved with optional steps -> mouseReleased). " +
+    "Response includes a `page_effect` envelope describing what changed during the action window.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["tab_id"] as const,
+    properties: {
+      tab_id: tabIdSchema,
+      from_ref: refSchema,
+      from_x: { type: "number" },
+      from_y: { type: "number" },
+      to_ref: refSchema,
+      to_x: { type: "number" },
+      to_y: { type: "number" },
+      steps: { type: "integer", minimum: 1, maximum: 100, default: 5 },
+      coord_space: {
+        description:
+          "Coordinate space for from_x/from_y and to_x/to_y. 'css' (default) treats them as CSS pixels relative to the viewport. 'screenshot:<token>' treats them as pixels inside the screenshot.",
+        type: "string",
+        pattern: "^(css|screenshot:.+)$",
+        default: "css",
+      },
+      observe_effects: observeEffectsInputSchema,
+      expect_effect: expectEffectInputSchema,
+      expected: actionExpectationSchema,
+    },
+  },
+  outputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["dragged"] as const,
+    properties: {
+      dragged: { const: true },
+      page_effect: pageEffectSchema,
+      effect: effectSchema,
+      ...expectationOutputSchema,
+      warnings: warningsOutputSchema,
+    },
+  },
+  action_weight: 1,
+  risky: "conditional",
+  errorCodes: [
+    ...BASE_CODES,
+    ...TAB_CODES,
+    ...REF_CODES,
+    ...MUTATING_CODES,
+    ...RISKY_CODES,
+    "CDP_ATTACH_FAILED",
+  ] as const,
+} as const;
+
 const describeRef: ToolDef = {
   name: "browser_describe_ref",
   description:
@@ -2497,6 +2552,7 @@ export const TOOL_DEFS: readonly ToolDef[] = [
   press,
   scroll,
   hover,
+  drag,
   waitFor,
   waitForIdle,
   describeRef,
