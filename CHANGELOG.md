@@ -9,6 +9,7 @@ Before 1.0, the `0.MINOR.PATCH` line follows: `MINOR` for breaking changes, `PAT
 ### Added
 
 - Public OSS launch: root `LICENSE`, `SECURITY.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, GitHub issue + PR templates, `CODEOWNERS`.
+- **Drag-and-drop interaction support.** New `browser_drag` MCP tool enabling drag-and-drop interactions across web elements or viewport coordinates. Supports both CDP-trusted input path (mouseMoved -> mousePressed -> interpolated mouseMoved steps -> mouseReleased) and a pointer/mouse event-based synthetic fallback. Includes coordinate space conversion (CSS vs screenshot space), adjustable drag speed (`steps`), and observation/expectation validation.
 - **Cross-agent lore.** New experimental `lore` feature gates four MCP tools (`lore_save`, `lore_search`, `lore_get`, `lore_delete`) over a markdown-frontmatter store at `~/browserops/lore/<name>.md`. Visible to every MCP client connected to the same browserops bridge, so a lesson saved from one session is reusable in another. Names match `^[a-z][a-z0-9._-]{0,79}$`; entry types are `user | feedback | project | reference`. Storage root is overridable via `BROWSEROPS_LORE_DIR`. Sits alongside (not on top of) Claude Code's auto-memory at `~/.claude/projects/.../memory/`.
 - Telemetry consent surface: `BROWSEROPS_TELEMETRY=0` env to disable, `BROWSEROPS_ALIAS_EMAIL=1` env required to alias the install-id to the user's email (default: never aliased).
 - Dedicated `## Telemetry` README section documenting the exact field allowlist and disable channels.

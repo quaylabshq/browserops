@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>BrowserOps Drag Demo — Kanban Board</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Inter', sans-serif;
+    background: #0f1117;
+    color: #e2e8f0;
+    min-height: 100vh;
+    padding: 32px;
+  }
+
+  header {
+    text-align: center;
+    margin-bottom: 40px;
+  }
+
+  header h1 {
+    font-size: 28px;
+    font-weight: 700;
+    background: linear-gradient(135deg, #6366f1, #a855f7, #ec4899);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin-bottom: 8px;
+  }
+
+  header p {
+    color: #64748b;
+    font-size: 14px;
+  }
+
+  .board {
+    display: flex;
+    gap: 20px;
+    justify-content: center;
+    align-items: flex-start;
+    max-width: 900px;
+    margin: 0 auto;
+  }
+
+  .column {
+    flex: 1;
+    background: #1e2130;
+    border-radius: 16px;
+    padding: 20px;
+    border: 1px solid #2d3148;
+    min-height: 400px;
+  }
+
+  .column-header {
+    font-size: 13px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .col-todo .column-header { color: #94a3b8; }
+  .col-progress .column-header { color: #fbbf24; }
+  .col-done .column-header { color: #4ade80; }
+
+  .badge {
+    background: #2d3148;
+    border-radius: 999px;
+    padding: 2px 8px;
+    font-size: 11px;
+    font-weight: 600;
+    color: #94a3b8;
+  }
+
+  .card {
+    background: #262b40;
+    border: 1px solid #353a55;
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 12px;
+    cursor: grab;
+    user-select: none;
+    transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+    position: relative;
+  }
+
+  .card:active { cursor: grabbing; }
+
+  .card:hover {
+    border-color: #6366f1;
+    box-shadow: 0 0 0 2px rgba(99,102,241,0.15), 0 8px 24px rgba(0,0,0,0.4);
+    transform: translateY(-2px);
+  }
+
+  .card.dragging {
+    opacity: 0.4;
+    border-color: #6366f1;
+    transform: scale(0.97);
+  }
+
+  .card.drag-over {
+    border-color: #a855f7;
+    box-shadow: 0 0 0 2px rgba(168,85,247,0.3);
+  }
+
+  .card-tag {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 600;
+    border-radius: 6px;
+    padding: 2px 8px;
+    margin-bottom: 8px;
+  }
+
+  .tag-feature { background: rgba(99,102,241,0.2); color: #818cf8; }
+  .tag-bug { background: rgba(239,68,68,0.2); color: #f87171; }
+  .tag-infra { background: rgba(251,191,36,0.2); color: #fbbf24; }
+
+  .card-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: #e2e8f0;
+    margin-bottom: 6px;
+    line-height: 1.4;
+  }
+
+  .card-desc {
+    font-size: 12px;
+    color: #64748b;
+    line-height: 1.5;
+  }
+
+  .column.drop-active {
+    background: #1a1f35;
+    border-color: #6366f1;
+    box-shadow: inset 0 0 0 2px rgba(99,102,241,0.2);
+  }
+
+  #status {
+    text-align: center;
+    margin-top: 32px;
+    font-size: 13px;
+    color: #475569;
+    min-height: 24px;
+    transition: all 0.3s;
+  }
+
+  #status.active {
+    color: #a855f7;
+    font-weight: 600;
+  }
+
+  #status.success {
+    color: #4ade80;
+    font-weight: 600;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🤖 BrowserOps — AI Kanban Demo</h1>
+  <p>Watch the AI agent drag cards between columns autonomously</p>
+</header>
+
+<div class="board">
+  <!-- TO DO -->
+  <div class="column col-todo" id="col-todo" data-col="todo">
+    <div class="column-header">
+      📋 To Do <span class="badge" id="badge-todo">3</span>
+    </div>
+
+    <div class="card" id="card-1" draggable="true" data-col="todo">
+      <span class="card-tag tag-feature">Feature</span>
+      <div class="card-title">browser_drag implementation</div>
+      <div class="card-desc">Add drag-and-drop support via CDP mouse events</div>
+    </div>
+
+    <div class="card" id="card-2" draggable="true" data-col="todo">
+      <span class="card-tag tag-infra">Infra</span>
+      <div class="card-title">Windows socket fix</div>
+      <div class="card-desc">Fix EACCES error with Named Pipes on win32</div>
+    </div>
+
+    <div class="card" id="card-3" draggable="true" data-col="todo">
+      <span class="card-tag tag-bug">Bug</span>
+      <div class="card-title">CDP drag button flag</div>
+      <div class="card-desc">Fix buttons:1 missing from mouseMoved events</div>
+    </div>
+  </div>
+
+  <!-- IN PROGRESS -->
+  <div class="column col-progress" id="col-progress" data-col="progress">
+    <div class="column-header">
+      ⚡ In Progress <span class="badge" id="badge-progress">0</span>
+    </div>
+  </div>
+
+  <!-- DONE -->
+  <div class="column col-done" id="col-done" data-col="done">
+    <div class="column-header">
+      ✅ Done <span class="badge" id="badge-done">0</span>
+    </div>
+  </div>
+</div>
+
+<div id="status">Waiting for AI agent...</div>
+
+<script>
+// ── Drag and drop logic (pointer-event based) ──────────────────────
+let dragged = null;
+
+document.querySelectorAll('.card').forEach(card => {
+  card.addEventListener('pointerdown', e => {
+    dragged = card;
+    card.classList.add('dragging');
+    document.getElementById('status').textContent = 'AI is dragging: ' + card.querySelector('.card-title').textContent;
+    document.getElementById('status').className = 'active';
+  });
+  card.addEventListener('pointerup', () => {
+    if(card.classList.contains('dragging')) card.classList.remove('dragging');
+  });
+});
+
+document.querySelectorAll('.column').forEach(col => {
+  col.addEventListener('pointerenter', () => {
+    if(dragged) col.classList.add('drop-active');
+  });
+  col.addEventListener('pointerleave', () => {
+    col.classList.remove('drop-active');
+  });
+  col.addEventListener('pointerup', () => {
+    if(!dragged) return;
+    col.classList.remove('drop-active');
+    // Move the card into this column (before the first card if any)
+    const firstCard = col.querySelector('.card');
+    if(firstCard) {
+      col.insertBefore(dragged, firstCard);
+    } else {
+      col.appendChild(dragged);
+    }
+    dragged.classList.remove('dragging');
+    dragged.dataset.col = col.dataset.col;
+    dragged = null;
+    updateBadges();
+    // Mark success if card lands in Done
+    const doneCards = document.querySelectorAll('#col-done .card');
+    if(doneCards.length > 0) {
+      document.getElementById('status').textContent = '✅ AI agent successfully moved card to Done!';
+      document.getElementById('status').className = 'success';
+    }
+  });
+});
+
+// HTML5 drag events (fallback)
+document.querySelectorAll('.card').forEach(card => {
+  card.addEventListener('dragstart', () => { dragged = card; card.classList.add('dragging'); });
+  card.addEventListener('dragend', () => card.classList.remove('dragging'));
+});
+document.querySelectorAll('.column').forEach(col => {
+  col.addEventListener('dragover', e => { e.preventDefault(); col.classList.add('drop-active'); });
+  col.addEventListener('dragleave', () => col.classList.remove('drop-active'));
+  col.addEventListener('drop', e => {
+    e.preventDefault();
+    col.classList.remove('drop-active');
+    if(!dragged) return;
+    const firstCard = col.querySelector('.card');
+    firstCard ? col.insertBefore(dragged, firstCard) : col.appendChild(dragged);
+    dragged.classList.remove('dragging');
+    dragged = null;
+    updateBadges();
+    const doneCards = document.querySelectorAll('#col-done .card');
+    if(doneCards.length > 0) {
+      document.getElementById('status').textContent = '✅ AI agent successfully moved card to Done!';
+      document.getElementById('status').className = 'success';
+    }
+  });
+});
+
+function updateBadges() {
+  ['todo','progress','done'].forEach(col => {
+    const count = document.querySelectorAll('#col-' + col + ' .card').length;
+    document.getElementById('badge-' + col).textContent = count;
+  });
+}
+</script>
+</body>
+</html>
