@@ -31,6 +31,9 @@ export function riskyDomainsPath(): string {
 }
 
 export function daemonSocketPath(): string {
+  if (process.platform === "win32") {
+    return "\\\\.\\pipe\\browserops-daemon.sock";
+  }
   return join(stateDir(), DAEMON_SOCKET_FILENAME);
 }
 

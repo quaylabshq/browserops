@@ -21,7 +21,12 @@ export const daemonLogPath = (): string => join(STATE_DIR, "daemon.log");
  * reads it for `status` / `stop`; we no longer track our own.
  */
 export const daemonPidPath = (): string => join(STATE_DIR, DAEMON_PIDFILE_FILENAME);
-export const daemonSocketPath = (): string => join(STATE_DIR, DAEMON_SOCKET_FILENAME);
+export const daemonSocketPath = (): string => {
+  if (process.platform === "win32") {
+    return "\\\\.\\pipe\\browserops-daemon.sock";
+  }
+  return join(STATE_DIR, DAEMON_SOCKET_FILENAME);
+};
 export const configPath = (): string => join(STATE_DIR, "config.json");
 
 /**
