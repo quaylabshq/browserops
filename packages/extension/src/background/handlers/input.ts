@@ -531,6 +531,62 @@ async function cdpHover(cdp: CdpManager, chromeId: number, x: number, y: number)
   });
 }
 
+async function cdpDrag(
+  cdp: CdpManager,
+  chromeId: number,
+  fromX: number,
+  fromY: number,
+  toX: number,
+  toY: number,
+  steps: number,
+): Promise<void> {
+  // Move to source position first
+  await cdp.send(chromeId, "Input.dispatchMouseEvent", {
+    type: "mouseMoved",
+    x: fromX,
+    y: fromY,
+    button: "none",
+    modifiers: 0,
+  });
+
+  // Press down at source
+  await cdp.send(chromeId, "Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    x: fromX,
+    y: fromY,
+    button: "left",
+    buttons: 1,
+    clickCount: 1,
+    modifiers: 0,
+  });
+
+  // Move in steps
+  for (let i = 1; i <= steps; i++) {
+    const fraction = i / steps;
+    const x = fromX + (toX - fromX) * fraction;
+    const y = fromY + (toY - fromY) * fraction;
+    await cdp.send(chromeId, "Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x,
+      y,
+      button: "none",
+      buttons: 1,
+      modifiers: 0,
+    });
+  }
+
+  // Release mouse at destination
+  await cdp.send(chromeId, "Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    x: toX,
+    y: toY,
+    button: "left",
+    buttons: 0,
+    clickCount: 1,
+    modifiers: 0,
+  });
+}
+
 /** Scroll an element into view and return its viewport center. MAIN world. */
 function injectedElementCenter(selector: string): { x: number; y: number } | null {
   const el = document.querySelector(selector) as HTMLElement | null;
@@ -1259,6 +1315,116 @@ function injectedHover(selector: string): { found: boolean } {
   el.dispatchEvent(new MouseEvent("mouseover", init));
   el.dispatchEvent(new MouseEvent("mouseenter", { ...init, bubbles: false }));
   el.dispatchEvent(new MouseEvent("mousemove", init));
+  return { found: true };
+}
+
+function injectedDragSynthetic(
+  fromSelector: string | null,
+  fromX: number | null,
+  fromY: number | null,
+  toSelector: string | null,
+  toX: number | null,
+  toY: number | null,
+  steps: number,
+): { found: boolean } {
+  let fromEl: HTMLElement | null = null;
+  if (fromSelector) {
+    fromEl = document.querySelector(fromSelector) as HTMLElement | null;
+    if (fromEl === null) return { found: false };
+    try {
+      fromEl.scrollIntoView({ block: "center", inline: "center" });
+    } catch {
+      /* ignore */
+    }
+  }
+
+  let toEl: HTMLElement | null = null;
+  if (toSelector) {
+    toEl = document.querySelector(toSelector) as HTMLElement | null;
+    if (toEl === null) return { found: false };
+  }
+
+  const fromRect = fromEl ? fromEl.getBoundingClientRect() : null;
+  const startX = fromRect ? fromRect.left + fromRect.width / 2 : (fromX ?? 0);
+  const startY = fromRect ? fromRect.top + fromRect.height / 2 : (fromY ?? 0);
+
+  const toRect = toEl ? toEl.getBoundingClientRect() : null;
+  const endX = toRect ? toRect.left + toRect.width / 2 : (toX ?? 0);
+  const endY = toRect ? toRect.top + toRect.height / 2 : (toY ?? 0);
+
+  const startEl =
+    fromEl || (document.elementFromPoint(startX, startY) as HTMLElement | null) || document.body;
+
+  const downInit: MouseEventInit = {
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+    view: window,
+    button: 0,
+    buttons: 1,
+    clientX: startX,
+    clientY: startY,
+  };
+
+  const pointerDownInit: PointerEventInit = {
+    ...downInit,
+    pointerId: 1,
+    pointerType: "mouse",
+    isPrimary: true,
+  };
+
+  startEl.dispatchEvent(new PointerEvent("pointerdown", pointerDownInit));
+  startEl.dispatchEvent(new MouseEvent("mousedown", downInit));
+
+  for (let i = 1; i <= steps; i++) {
+    const fraction = i / steps;
+    const currX = startX + (endX - startX) * fraction;
+    const currY = startY + (endY - startY) * fraction;
+    const currEl = (document.elementFromPoint(currX, currY) as HTMLElement | null) || startEl;
+
+    const moveInit: MouseEventInit = {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      view: window,
+      clientX: currX,
+      clientY: currY,
+      buttons: 1,
+    };
+
+    const pointerMoveInit: PointerEventInit = {
+      ...moveInit,
+      pointerId: 1,
+      pointerType: "mouse",
+      isPrimary: true,
+    };
+
+    currEl.dispatchEvent(new PointerEvent("pointermove", pointerMoveInit));
+    currEl.dispatchEvent(new MouseEvent("mousemove", moveInit));
+  }
+
+  const endEl = toEl || (document.elementFromPoint(endX, endY) as HTMLElement | null) || startEl;
+  const upInit: MouseEventInit = {
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+    view: window,
+    button: 0,
+    buttons: 0,
+    clientX: endX,
+    clientY: endY,
+  };
+
+  const pointerUpInit: PointerEventInit = {
+    ...upInit,
+    pointerId: 1,
+    pointerType: "mouse",
+    isPrimary: true,
+  };
+
+  endEl.dispatchEvent(new PointerEvent("pointerup", pointerUpInit));
+  endEl.dispatchEvent(new MouseEvent("mouseup", upInit));
+
   return { found: true };
 }
 
@@ -1991,6 +2157,94 @@ function parseHover(raw: Record<string, unknown>): HoverParams {
       throw codedError("INVALID_PARAMS", "coord_space must be 'css' or 'screenshot:<token>'");
     }
   }
+  return out;
+}
+
+interface DragParams {
+  tab_id: string;
+  from_ref?: number;
+  from_x?: number;
+  from_y?: number;
+  to_ref?: number;
+  to_x?: number;
+  to_y?: number;
+  steps?: number;
+  coord_space?: "css" | { kind: "screenshot"; token: string };
+  observe_effects?: boolean;
+  expect_effect?: ExpectEffect;
+  expected?: ActionExpectation;
+}
+
+function parseDrag(raw: Record<string, unknown>): DragParams {
+  const tab_id = raw["tab_id"];
+  if (typeof tab_id !== "string") throw codedError("INVALID_PARAMS", "tab_id must be a string");
+
+  const from_ref = raw["from_ref"];
+  const from_x = raw["from_x"];
+  const from_y = raw["from_y"];
+
+  const hasFromRef = typeof from_ref === "number" && Number.isInteger(from_ref) && from_ref >= 1;
+  const hasFromXY = typeof from_x === "number" && typeof from_y === "number";
+
+  if (!hasFromRef && !hasFromXY) {
+    throw codedError("INVALID_PARAMS", "drag requires either from_ref or (from_x,from_y)");
+  }
+
+  const to_ref = raw["to_ref"];
+  const to_x = raw["to_x"];
+  const to_y = raw["to_y"];
+
+  const hasToRef = typeof to_ref === "number" && Number.isInteger(to_ref) && to_ref >= 1;
+  const hasToXY = typeof to_x === "number" && typeof to_y === "number";
+
+  if (!hasToRef && !hasToXY) {
+    throw codedError("INVALID_PARAMS", "drag requires either to_ref or (to_x,to_y)");
+  }
+
+  const steps = raw["steps"];
+  if (
+    steps !== undefined &&
+    (typeof steps !== "number" || !Number.isInteger(steps) || steps < 1 || steps > 100)
+  ) {
+    throw codedError("INVALID_PARAMS", "steps must be an integer between 1 and 100");
+  }
+
+  const out: DragParams = {
+    tab_id,
+    steps: typeof steps === "number" ? steps : 5,
+  };
+
+  if (hasFromRef) out.from_ref = from_ref;
+  if (hasFromXY) {
+    out.from_x = from_x;
+    out.from_y = from_y;
+  }
+
+  if (hasToRef) out.to_ref = to_ref;
+  if (hasToXY) {
+    out.to_x = to_x;
+    out.to_y = to_y;
+  }
+
+  const coordRaw = raw["coord_space"];
+  if (coordRaw !== undefined) {
+    if (typeof coordRaw !== "string") {
+      throw codedError("INVALID_PARAMS", "coord_space must be a string");
+    }
+    if (coordRaw === "css") out.coord_space = "css";
+    else if (coordRaw.startsWith("screenshot:")) {
+      out.coord_space = { kind: "screenshot", token: coordRaw.slice("screenshot:".length) };
+    } else {
+      throw codedError("INVALID_PARAMS", "coord_space must be 'css' or 'screenshot:<token>'");
+    }
+  }
+
+  if (raw["observe_effects"] === false) out.observe_effects = false;
+  const expectEffect = parseExpectEffect(raw["expect_effect"]);
+  if (expectEffect !== undefined) out.expect_effect = expectEffect;
+  const expected = parseExpected(raw["expected"]);
+  if (expected !== undefined) out.expected = expected;
+
   return out;
 }
 
@@ -3323,6 +3577,135 @@ export function registerInputHandlers(router: Router, opts: InputOpts): void {
     });
     return { ...result, effect };
   });
+
+  router.register(
+    "browser_drag",
+    async (
+      raw,
+    ): Promise<{
+      dragged: true;
+      page_effect?: PageEffect;
+      effect?: Effect;
+      expectation_met?: boolean;
+      mismatch_reason?: string;
+      warnings?: string[];
+    }> => {
+      const params = parseDrag(raw as Record<string, unknown>);
+      const chromeId = resolveChromeId(tabIdMap, params.tab_id);
+
+      const { result: handlerResult, effect: dragEffect } = await captureEffect(
+        chromeId,
+        async () => {
+          const observeEffects = params.observe_effects !== false;
+          const expectEffect = params.expect_effect;
+          const steps = params.steps ?? 5;
+
+          const dispatch = async (): Promise<{ dragged: true }> => {
+            // Resolve from coords
+            let fromX: number;
+            let fromY: number;
+            let fromSelector: string | null = null;
+            if (params.from_ref !== undefined) {
+              fromSelector = resolveSelector(refCache, params.tab_id, params.from_ref);
+              const center = await execInTab(chromeId, injectedElementCenter, [
+                fromSelector,
+              ] as const);
+              if (center === null) {
+                throw codedError(
+                  "REF_STALE",
+                  `from_ref ${params.from_ref} no longer resolves in tab ${params.tab_id}`,
+                );
+              }
+              fromX = center.x;
+              fromY = center.y;
+            } else {
+              const coords = resolveCoords(params.coord_space, params.from_x!, params.from_y!);
+              fromX = coords.cssX;
+              fromY = coords.cssY;
+            }
+
+            // Resolve to coords
+            let toX: number;
+            let toY: number;
+            let toSelector: string | null = null;
+            if (params.to_ref !== undefined) {
+              toSelector = resolveSelector(refCache, params.tab_id, params.to_ref);
+              const center = await execInTab(chromeId, injectedElementCenter, [
+                toSelector,
+              ] as const);
+              if (center === null) {
+                throw codedError(
+                  "REF_STALE",
+                  `to_ref ${params.to_ref} no longer resolves in tab ${params.tab_id}`,
+                );
+              }
+              toX = center.x;
+              toY = center.y;
+            } else {
+              const coords = resolveCoords(params.coord_space, params.to_x!, params.to_y!);
+              toX = coords.cssX;
+              toY = coords.cssY;
+            }
+
+            if (cdp.isPersistent(chromeId)) {
+              await cdpDrag(cdp, chromeId, fromX, fromY, toX, toY, steps);
+            } else {
+              // Synthetic drag
+              const res = await execInTab(chromeId, injectedDragSynthetic, [
+                fromSelector,
+                params.from_x ?? null,
+                params.from_y ?? null,
+                toSelector,
+                params.to_x ?? null,
+                params.to_y ?? null,
+                steps,
+              ] as const);
+              if (res.found === false) {
+                throw codedError(
+                  "REF_STALE",
+                  `source or target ref no longer resolves in tab ${params.tab_id}`,
+                );
+              }
+            }
+
+            return { dragged: true };
+          };
+
+          if (observeEffects) {
+            const { result, effect } = await withEffectObservation(
+              { chromeTabId: chromeId, windowMs: 300, networkTracker: network },
+              dispatch,
+            );
+            const warning = checkEffectExpectation(effect, expectEffect);
+            const out: typeof result & { page_effect: PageEffect; warnings?: string[] } = {
+              ...result,
+              page_effect: effect,
+            };
+            if (warning !== null) out.warnings = [warning];
+            return out;
+          }
+          if (expectEffect !== undefined) {
+            const r = await dispatch();
+            return {
+              ...r,
+              warnings: [
+                "expect_effect set but observe_effects:false — no effect data to verify against",
+              ],
+            };
+          }
+          return dispatch();
+        },
+      );
+
+      let verification: { expectation_met?: boolean; mismatch_reason?: string } = {};
+      if (params.expected !== undefined) {
+        const v = await pollUntilMet(chromeId, dragEffect, params.expected);
+        verification.expectation_met = v.expectation_met;
+        if (v.mismatch_reason !== undefined) verification.mismatch_reason = v.mismatch_reason;
+      }
+      return { ...handlerResult, effect: dragEffect, ...verification };
+    },
+  );
 
   router.register("browser_find_and_replace", async (raw) => {
     const params = parseFindAndReplace(raw);
