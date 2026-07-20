@@ -93,6 +93,10 @@ export class Safety {
       };
     }
 
+    if (tool === "browser_drag" && sensitive) {
+      return { risky: true, reason: `drag on sensitive domain (${hostOf(url)})` };
+    }
+
     return { risky: false };
   }
 
