@@ -78,9 +78,10 @@ describe("TOOL_DEFS catalogue", () => {
     expect(exec?.risky).toBe("always");
   });
 
-  it("click and type are conditional risky", () => {
+  it("click, type, and drag are conditional risky", () => {
     expect(TOOL_DEF_MAP["browser_click"]?.risky).toBe("conditional");
     expect(TOOL_DEF_MAP["browser_type"]?.risky).toBe("conditional");
+    expect(TOOL_DEF_MAP["browser_drag"]?.risky).toBe("conditional");
   });
 
   it("read and screenshot cost 0.5", () => {
@@ -374,5 +375,32 @@ describe("procedures_delete", () => {
 
   it("force defaults to false", () => {
     expect(props?.force?.default).toBe(false);
+  });
+});
+
+describe("browser_drag schema", () => {
+  const tool = TOOL_DEF_MAP["browser_drag"];
+  const props = tool?.inputSchema.properties as Record<string, Record<string, unknown>> | undefined;
+
+  it("is registered", () => {
+    expect(tool).toBeDefined();
+  });
+
+  it("requires tab_id only as structural schema requirement", () => {
+    expect(tool?.inputSchema.required).toEqual(["tab_id"]);
+  });
+
+  it("steps defaults to 5", () => {
+    expect(props?.steps?.default).toBe(5);
+    expect(props?.steps?.minimum).toBe(1);
+    expect(props?.steps?.maximum).toBe(100);
+  });
+
+  it("coord_space defaults to css", () => {
+    expect(props?.coord_space?.default).toBe("css");
+  });
+
+  it("has action_weight 1", () => {
+    expect(tool?.action_weight).toBe(1);
   });
 });

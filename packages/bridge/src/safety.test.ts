@@ -81,6 +81,39 @@ describe("Safety.checkRisky for browser_find_and_replace", () => {
   });
 });
 
+describe("Safety.checkRisky for browser_drag", () => {
+  it("is risky on a sensitive domain", () => {
+    const s = makeSafety(["chase.com"]);
+    const v = s.checkRisky({
+      tool: "browser_drag",
+      params: { tab_id: "t_1", from_ref: 1, to_ref: 2 },
+      tab: { url: "https://www.chase.com/transfer" },
+    });
+    expect(v.risky).toBe(true);
+    expect(v.reason).toContain("drag");
+  });
+
+  it("is not risky on a non-sensitive domain", () => {
+    const s = makeSafety(["chase.com"]);
+    const v = s.checkRisky({
+      tool: "browser_drag",
+      params: { tab_id: "t_1", from_ref: 1, to_ref: 2 },
+      tab: { url: "https://example.com/" },
+    });
+    expect(v.risky).toBe(false);
+  });
+
+  it("is not risky without a tab (no URL to classify)", () => {
+    const s = makeSafety(["chase.com"]);
+    const v = s.checkRisky({
+      tool: "browser_drag",
+      params: { tab_id: "t_1", from_ref: 1, to_ref: 2 },
+      tab: undefined,
+    });
+    expect(v.risky).toBe(false);
+  });
+});
+
 describe("Safety.requireApproval — auto-approve default behavior", () => {
   it("auto-approves risky actions by default (no env var set)", async () => {
     const traceWriter = stubTraceWriter();
