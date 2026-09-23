@@ -68,7 +68,7 @@ From the terminal — `browserops` ensures the bridge is running and hands off t
 
 ```bash
 # Universal first run — works for everyone
-browserops "open hacker news and read me the top story"
+browserops "open Hacker News and read me the top story"
 
 # The capability demo — shows the live-profile advantage
 browserops "check my gmail and summarize my last 3 emails"
