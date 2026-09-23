@@ -5,7 +5,7 @@ description: Generate or substantially refresh Relay's feature-based architectur
 
 # Relay project map
 
-Create a one-time, evidence-backed explanation of how the project works. Relay renders a connected 3D graph of feature dependencies. Selecting a feature shows its components in a plain list grouped by software layer, with live agent activity highlighted through the relevant paths. This skill does the semantic analysis; Relay validates and displays the resulting artifact. Run it once per project and regenerate only when the product's feature architecture changes substantially. The user's requested generation authorizes the model cost for this pass.
+Create a one-time, evidence-backed explanation of how the project works. Relay renders a connected 3D graph of feature dependencies. Selecting a feature shows its components as simple connected cards in the map and in a plain list grouped by software layer, with live agent activity highlighted through the relevant paths. This skill does the semantic analysis; Relay validates and displays the resulting artifact. Run it once per project and regenerate only when the product's feature architecture changes substantially. The user's requested generation authorizes the model cost for this pass.
 
 ## Investigate
 
