@@ -5,7 +5,7 @@ description: Generate or substantially refresh Relay's feature-based architectur
 
 # Relay project map
 
-Create a one-time, evidence-backed explanation of how the project works. Relay renders a connected 3D graph of feature dependencies. Selecting a feature reveals its components on layer rings, with live agent activity highlighted through the relevant paths. This skill does the semantic analysis; Relay validates and displays the resulting artifact. Run it once per project and regenerate only when the product's feature architecture changes substantially. The user's requested generation authorizes the model cost for this pass.
+Create a one-time, evidence-backed explanation of how the project works. Relay renders a connected 3D graph of feature dependencies. Selecting a feature shows its components in a plain list grouped by software layer, with live agent activity highlighted through the relevant paths. This skill does the semantic analysis; Relay validates and displays the resulting artifact. Run it once per project and regenerate only when the product's feature architecture changes substantially. The user's requested generation authorizes the model cost for this pass.
 
 ## Investigate
 
@@ -43,6 +43,6 @@ Create `.relay/project-map.json` at the Git root using this schema. IDs should b
 
 The validator supports 1–8 layers, 1–24 features, 1–16 components per feature, and 1–10 evidence paths per component. Every component needs a description and evidence. Make dependencies accurate and avoid self or missing references. Keep the artifact below 220 KB. Preserve useful stable IDs when refreshing so people can follow the map over time.
 
-Choose one curated 3D visual for each feature: `gateway` for setup or entry, `workspace` for user-facing collaboration, `engine` for execution, `flow` for a pipeline, `network` for connections and integrations, `vault` for stored data or memory, `shield` for safeguards and policy, or `observatory` for monitoring and insights. Choose by what the feature does, not by its folder or implementation language. This field is optional for older maps; Relay infers a visual when it is missing.
+Choose one familiar symbol for each feature marker: `gateway` for setup or entry, `workspace` for user-facing collaboration, `engine` for execution, `flow` for a pipeline, `network` for connections and integrations, `vault` for stored data or memory, `shield` for safeguards and policy, or `observatory` for monitoring and insights. Choose by what the feature does, not by its folder or implementation language. This field is optional for older maps; Relay infers a symbol when it is missing.
 
 Validate the JSON and ensure every evidence path exists. If Relay's in-app Generate map button launched this skill, stop after writing the artifact; Relay validates and publishes it automatically and shows progress in Live work. Otherwise run `relay map refresh <linked-project-id>` on the linked host to publish it. If the project ID is unknown, inspect `relay status` to find the linked project. Report the feature count, any uncertainty, and the published result. Relay's companion will subsequently sync the same artifact by fingerprint without repeating the AI analysis.
