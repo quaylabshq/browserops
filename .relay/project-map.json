@@ -1,0 +1,470 @@
+{
+  "schemaVersion": 2,
+  "summary": "BrowserOps lets an AI coding agent work in a person's existing Chrome profile through MCP, including tabs where the person is already signed in. A local Node bridge connects the agent to a paired Chrome extension, which observes pages and performs verified browser actions. Optional procedures and lore let work carry across sessions and MCP clients.",
+  "architecture": "The CLI installs client integrations and pairs the extension. An MCP shim connects each agent client to one local daemon; the daemon validates tools, manages sessions and safety limits, then sends authenticated WebSocket requests to the extension. The extension's background worker uses Chrome APIs and CDP to read and act on real tabs. Shared schemas define the tool and wire contracts; optional procedures and lore persist in local files.",
+  "layers": [
+    {
+      "id": "entry",
+      "name": "Agent and CLI",
+      "description": "Commands, MCP tools, and skills used by people and agents"
+    },
+    {
+      "id": "bridge",
+      "name": "Local bridge",
+      "description": "Per-user daemon, MCP dispatch, session routing, and policy"
+    },
+    {
+      "id": "extension",
+      "name": "Chrome extension",
+      "description": "Browser-facing service worker, page handlers, and UI"
+    },
+    {
+      "id": "contracts",
+      "name": "Contracts and memory",
+      "description": "Shared schemas and locally stored reusable knowledge"
+    }
+  ],
+  "features": [
+    {
+      "id": "setup-pairing",
+      "name": "Setup and pairing",
+      "summary": "Installs BrowserOps for an MCP client, starts the local bridge, and pairs the Chrome extension.",
+      "journey": "A person runs browserops init. The CLI checks the environment, registers supported agent clients, installs skills, starts the daemon, and guides Chrome extension pairing. The extension stores its connection settings and reconnects to the bridge.",
+      "dependsOn": [],
+      "components": [
+        {
+          "id": "init-wizard",
+          "name": "Init workflow",
+          "layer": "entry",
+          "description": "Checks prerequisites and coordinates client, skill, daemon, and extension setup.",
+          "paths": [
+            "packages/cli/src/commands/init.ts"
+          ]
+        },
+        {
+          "id": "client-installers",
+          "name": "Client registration",
+          "layer": "entry",
+          "description": "Detects and configures supported MCP clients and installs agent guidance.",
+          "paths": [
+            "packages/cli/src/installers",
+            "packages/cli/src/commands/install-rules.ts"
+          ]
+        },
+        {
+          "id": "pairing-ui",
+          "name": "Extension onboarding",
+          "layer": "extension",
+          "description": "Shows pairing and connection controls in Chrome.",
+          "paths": [
+            "packages/extension/src/onboard",
+            "packages/extension/src/options"
+          ]
+        },
+        {
+          "id": "local-config",
+          "name": "Local configuration",
+          "layer": "contracts",
+          "description": "Stores launcher, feature, and connection preferences for the CLI and daemon.",
+          "paths": [
+            "packages/cli/src/lib/config.ts",
+            "packages/bridge/src/config.ts"
+          ]
+        }
+      ],
+      "visual": "gateway"
+    },
+    {
+      "id": "agent-bridge",
+      "name": "Agent-to-Chrome bridge",
+      "summary": "Keeps one local daemon and Chrome connection available to multiple MCP agent clients.",
+      "journey": "An agent calls a BrowserOps MCP tool through its stdio shim. The shim reaches the per-user daemon, which validates and routes a request over a token-authenticated local WebSocket. The extension responds with the browser result.",
+      "dependsOn": [
+        "setup-pairing"
+      ],
+      "components": [
+        {
+          "id": "mcp-shim",
+          "name": "MCP shim",
+          "layer": "entry",
+          "description": "Adapts each client's stdio MCP connection to the shared daemon.",
+          "paths": [
+            "packages/bridge/src/shim.ts",
+            "packages/bridge/src/socket-mcp-transport.ts"
+          ]
+        },
+        {
+          "id": "daemon",
+          "name": "Shared daemon",
+          "layer": "bridge",
+          "description": "Owns long-lived sessions, tool servers, and the extension connection.",
+          "paths": [
+            "packages/bridge/src/daemon.ts",
+            "packages/bridge/src/daemon-runtime.ts",
+            "packages/bridge/src/daemon-socket.ts"
+          ]
+        },
+        {
+          "id": "websocket-pair",
+          "name": "Authenticated channel",
+          "layer": "bridge",
+          "description": "Carries validated request and response envelopes between daemon and extension.",
+          "paths": [
+            "packages/bridge/src/ws-server.ts",
+            "packages/bridge/src/token.ts",
+            "packages/extension/src/background/ws-client.ts"
+          ]
+        },
+        {
+          "id": "wire-contract",
+          "name": "Wire protocol",
+          "layer": "contracts",
+          "description": "Defines shared message envelopes, errors, and tool declarations.",
+          "paths": [
+            "packages/shared/src/protocol.ts",
+            "packages/shared/src/errors.ts",
+            "packages/shared/src/tools.ts"
+          ]
+        }
+      ],
+      "visual": "network"
+    },
+    {
+      "id": "tab-context",
+      "name": "Tabs and agent sessions",
+      "summary": "Tracks real Chrome tabs and keeps concurrent agents' tab work separate.",
+      "journey": "The extension reports Chrome tabs, while the daemon assigns opaque tab IDs and associates them with MCP sessions. Agents list or select tabs and can release or name their work without stepping on another agent's session.",
+      "dependsOn": [
+        "agent-bridge"
+      ],
+      "components": [
+        {
+          "id": "tab-tools",
+          "name": "Tab tools",
+          "layer": "entry",
+          "description": "Expose listing, current-tab, creation, switching, release, and naming controls to agents.",
+          "paths": [
+            "packages/shared/src/tools.ts",
+            "packages/bridge/src/mcp-server.ts"
+          ]
+        },
+        {
+          "id": "tab-registry",
+          "name": "Session registry",
+          "layer": "bridge",
+          "description": "Tracks opaque tab IDs and ownership across simultaneous MCP clients.",
+          "paths": [
+            "packages/bridge/src/tab-registry.ts",
+            "packages/bridge/src/daemon-sessions.ts"
+          ]
+        },
+        {
+          "id": "chrome-tabs",
+          "name": "Chrome tab handlers",
+          "layer": "extension",
+          "description": "Maps opaque IDs to Chrome tabs and groups tabs for each agent session.",
+          "paths": [
+            "packages/extension/src/background/handlers/tabs.ts",
+            "packages/extension/src/background/handlers/session-groups.ts",
+            "packages/extension/src/background/index.ts"
+          ]
+        }
+      ],
+      "visual": "workspace"
+    },
+    {
+      "id": "page-observation",
+      "name": "Page observation",
+      "summary": "Shows agents the live page through accessibility text, compact readings, screenshots, and stable element references.",
+      "journey": "An agent asks to observe or find a control in a tab. The extension reads the page, augments accessibility details, and returns an efficient representation with element references. The agent can inspect further before acting.",
+      "dependsOn": [
+        "tab-context"
+      ],
+      "components": [
+        {
+          "id": "observation-tools",
+          "name": "Observation tools",
+          "layer": "entry",
+          "description": "Declare observe, read, quick-read, screenshot, and element lookup inputs and results.",
+          "paths": [
+            "packages/shared/src/tools.ts"
+          ]
+        },
+        {
+          "id": "adaptive-observation",
+          "name": "Adaptive observation",
+          "layer": "extension",
+          "description": "Chooses and renders useful page representations for the current tab.",
+          "paths": [
+            "packages/extension/src/background/handlers/observe.ts",
+            "packages/extension/src/background/handlers/read.ts",
+            "packages/extension/src/lib/a11y-augment.ts"
+          ]
+        },
+        {
+          "id": "visual-evidence",
+          "name": "Screenshot capture",
+          "layer": "extension",
+          "description": "Captures browser visuals when page structure alone is insufficient.",
+          "paths": [
+            "packages/extension/src/background/handlers/screenshot.ts",
+            "packages/bridge/src/observe/box-drawing-render.ts"
+          ]
+        },
+        {
+          "id": "element-refs",
+          "name": "Element references",
+          "layer": "extension",
+          "description": "Caches references that connect an observed control to a later action.",
+          "paths": [
+            "packages/extension/src/background/ref-cache.ts",
+            "packages/extension/src/lib/a11y-diff.ts"
+          ]
+        }
+      ],
+      "visual": "observatory"
+    },
+    {
+      "id": "safety-controls",
+      "name": "Safety and user control",
+      "summary": "Limits rapid actions, checks risky destinations, and gives the person a way to gate or disconnect browser control.",
+      "journey": "Before a browser action is forwarded, the bridge applies rate and risk checks. The extension enforces its own blocked chords and can show an approval decision or disconnect when the person chooses.",
+      "dependsOn": [
+        "agent-bridge",
+        "tab-context"
+      ],
+      "components": [
+        {
+          "id": "risk-policy",
+          "name": "Risk gate",
+          "layer": "bridge",
+          "description": "Classifies sensitive domains and actions and applies the configured approval mode.",
+          "paths": [
+            "packages/bridge/src/safety.ts",
+            "packages/bridge/src/risky-domains.ts"
+          ]
+        },
+        {
+          "id": "rate-policy",
+          "name": "Rate limiting",
+          "layer": "bridge",
+          "description": "Caps actions per tab and across the local daemon.",
+          "paths": [
+            "packages/bridge/src/rate-limiter.ts"
+          ]
+        },
+        {
+          "id": "browser-approval",
+          "name": "Extension controls",
+          "layer": "extension",
+          "description": "Handles user approval, connection state, and browser-side safety decisions.",
+          "paths": [
+            "packages/extension/src/background/handlers/safety.ts",
+            "packages/extension/src/popup"
+          ]
+        },
+        {
+          "id": "blocked-chords",
+          "name": "Blocked key chords",
+          "layer": "contracts",
+          "description": "Defines keyboard combinations the browser input layer refuses.",
+          "paths": [
+            "packages/shared/src/destructive-chords.ts"
+          ]
+        }
+      ],
+      "visual": "shield"
+    },
+    {
+      "id": "browser-actions",
+      "name": "Browser actions",
+      "summary": "Navigates, clicks, types, scrolls, and waits in the user's live Chrome tabs.",
+      "journey": "After observing a tab, an agent selects a tab or element and calls an action tool. The bridge validates and forwards it; the extension resolves the target and dispatches trusted CDP input or Chrome navigation, then returns the resulting state change.",
+      "dependsOn": [
+        "page-observation",
+        "safety-controls"
+      ],
+      "components": [
+        {
+          "id": "action-dispatch",
+          "name": "MCP action dispatch",
+          "layer": "bridge",
+          "description": "Validates tool parameters, checks policy, and forwards actions to Chrome.",
+          "paths": [
+            "packages/bridge/src/mcp-server.ts"
+          ]
+        },
+        {
+          "id": "navigation",
+          "name": "Navigation handlers",
+          "layer": "extension",
+          "description": "Opens, navigates, reloads, and moves through tab history.",
+          "paths": [
+            "packages/extension/src/background/handlers/navigation.ts"
+          ]
+        },
+        {
+          "id": "trusted-input",
+          "name": "Trusted input",
+          "layer": "extension",
+          "description": "Resolves elements and drives click, typing, key, hover, and scroll input through CDP where available.",
+          "paths": [
+            "packages/extension/src/background/handlers/input.ts",
+            "packages/extension/src/background/cdp.ts"
+          ]
+        },
+        {
+          "id": "action-effects",
+          "name": "Action effects",
+          "layer": "contracts",
+          "description": "Describes the observed page change returned after state-changing actions.",
+          "paths": [
+            "packages/extension/src/background/effect.ts",
+            "packages/shared/src/effects.ts"
+          ]
+        }
+      ],
+      "visual": "engine"
+    },
+    {
+      "id": "procedures",
+      "name": "Reusable procedures",
+      "summary": "Optionally saves and replays verified browser workflows instead of planning the same steps again.",
+      "journey": "When the procedures feature is enabled, an agent searches local YAML workflows, inspects a match, or authors a new one. The bridge validates locators and bindings, executes steps against the live tab, and records verification and drift health.",
+      "dependsOn": [
+        "page-observation",
+        "browser-actions"
+      ],
+      "components": [
+        {
+          "id": "procedure-skill",
+          "name": "Teaching guide",
+          "layer": "entry",
+          "description": "Guides agents through authoring and verifying reusable workflows.",
+          "paths": [
+            "skills/browserops-teach.md"
+          ]
+        },
+        {
+          "id": "procedure-api",
+          "name": "Procedure tools",
+          "layer": "bridge",
+          "description": "Handles search, read, save, delete, execute, and resume requests.",
+          "paths": [
+            "packages/bridge/src/procedures/handlers.ts",
+            "packages/bridge/src/procedures/search.ts"
+          ]
+        },
+        {
+          "id": "procedure-runner",
+          "name": "Execution engine",
+          "layer": "bridge",
+          "description": "Validates and replays steps with fallbacks, expected outcomes, and health tracking.",
+          "paths": [
+            "packages/bridge/src/procedures/execute.ts",
+            "packages/bridge/src/procedures/validator.ts",
+            "packages/bridge/src/procedures/health.ts"
+          ]
+        },
+        {
+          "id": "procedure-store",
+          "name": "YAML procedure store",
+          "layer": "contracts",
+          "description": "Defines the workflow schema and indexes locally saved procedures.",
+          "paths": [
+            "packages/shared/src/procedures.ts",
+            "packages/bridge/src/procedures/store.ts",
+            "packages/bridge/src/procedures/index-builder.ts"
+          ]
+        }
+      ],
+      "visual": "flow"
+    },
+    {
+      "id": "shared-lore",
+      "name": "Cross-agent lore",
+      "summary": "Optionally stores reusable browser lessons that every connected MCP client can find.",
+      "journey": "A person enables lore, then an agent saves a named markdown lesson. Another agent searches or reads it through the same daemon and can use the learned context in a later session.",
+      "dependsOn": [
+        "agent-bridge"
+      ],
+      "components": [
+        {
+          "id": "feature-toggle",
+          "name": "Feature toggle",
+          "layer": "entry",
+          "description": "Enables optional lore and procedures capabilities through the CLI.",
+          "paths": [
+            "packages/cli/src/commands/feature.ts",
+            "packages/shared/src/features.ts"
+          ]
+        },
+        {
+          "id": "lore-tools",
+          "name": "Lore MCP tools",
+          "layer": "bridge",
+          "description": "Handles save, search, get, and delete requests when lore is enabled.",
+          "paths": [
+            "packages/bridge/src/lore/handlers.ts",
+            "packages/bridge/src/lore/search.ts"
+          ]
+        },
+        {
+          "id": "lore-store",
+          "name": "Local lore store",
+          "layer": "contracts",
+          "description": "Stores named markdown entries and their typed metadata on disk.",
+          "paths": [
+            "packages/bridge/src/lore/store.ts",
+            "packages/shared/src/lore.ts"
+          ]
+        }
+      ],
+      "visual": "vault"
+    },
+    {
+      "id": "health-diagnostics",
+      "name": "Health and diagnostics",
+      "summary": "Explains connection problems and records bounded operational evidence for troubleshooting.",
+      "journey": "A person runs status, doctor, or logs to inspect the daemon, token, extension, and client setup. The bridge logs failures and optional traces; telemetry only includes allowlisted operational fields and respects opt-out settings.",
+      "dependsOn": [
+        "agent-bridge"
+      ],
+      "components": [
+        {
+          "id": "health-cli",
+          "name": "Status and doctor",
+          "layer": "entry",
+          "description": "Reports daemon and extension state and checks common setup failures.",
+          "paths": [
+            "packages/cli/src/commands/status.ts",
+            "packages/cli/src/commands/doctor.ts",
+            "packages/cli/src/commands/logs.ts"
+          ]
+        },
+        {
+          "id": "bridge-logs",
+          "name": "Logs and traces",
+          "layer": "bridge",
+          "description": "Records bridge events and optional action traces for debugging.",
+          "paths": [
+            "packages/bridge/src/logger.ts",
+            "packages/bridge/src/trace-writer.ts"
+          ]
+        },
+        {
+          "id": "telemetry-policy",
+          "name": "Telemetry policy",
+          "layer": "bridge",
+          "description": "Applies opt-out settings and an event-field allowlist before anonymous usage reporting.",
+          "paths": [
+            "packages/bridge/src/telemetry/redact.ts",
+            "packages/bridge/src/telemetry/opt-out.ts",
+            "packages/bridge/src/telemetry/index.ts"
+          ]
+        }
+      ],
+      "visual": "observatory"
+    }
+  ]
+}
