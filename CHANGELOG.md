@@ -22,6 +22,7 @@ Before 1.0, the `0.MINOR.PATCH` line follows: `MINOR` for breaking changes, `PAT
 
 ### Fixed
 
+- MCP JSON installers (Cursor, Windsurf, Continue, Claude Code fallback) compared a compact `JSON.stringify(before)` against a pretty-printed `JSON.stringify(after, null, 2)`. The strings never matched for non-empty configs, so `changed: false` was unreachable and every `browserops sync mcp` / re-init rewrote the client config and created a `.bak.*` file. Equality now uses the same serializer on both sides.
 - `mapStepDoToToolName` in `packages/bridge/src/procedures/execute.ts` had a duplicate `case "procedure_call"` branch (dead code). Replaced with an exhaustive `default` arm.
 - 3 unhandled promise rejections in extension UI handlers (`onboard/index.ts:126`, `popup/index.ts:150`, `background/index.ts:355`).
 - Unused imports and dead-code sweep across CLI, bridge, and extension packages (`pnpm lint` now exits 0).

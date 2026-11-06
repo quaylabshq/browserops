@@ -81,10 +81,13 @@ export const claudeCodeInstaller: ClientInstaller = {
       if (spec.env && Object.keys(spec.env).length > 0) entry["env"] = spec.env;
       existing.mcpServers["browserops"] = entry;
 
-      const after = JSON.stringify(existing, null, 2);
-      if (before === after) {
+      // Compare with the same serializer used for `before`. Pretty-printing
+      // here made the equality check unreachable for non-empty configs.
+      if (before === JSON.stringify(existing)) {
         return { changed: false, configPath: CONFIG_PATH, message: "no change" };
       }
+
+      const after = JSON.stringify(existing, null, 2);
 
       await mkdir(dirname(CONFIG_PATH), { recursive: true });
       const backupPath = await backup(CONFIG_PATH);

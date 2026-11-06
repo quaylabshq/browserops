@@ -65,11 +65,14 @@ export const cursorInstaller: ClientInstaller = {
     if (spec.env && Object.keys(spec.env).length > 0) entry["env"] = spec.env;
     existing.mcpServers["browserops"] = entry;
 
-    const after = JSON.stringify(existing, null, 2);
-
-    if (before === after) {
+    // Compare with the same serializer used for `before`. Pretty-printing
+    // here made the equality check unreachable, so every re-run of
+    // `browserops sync mcp` / init rewrote mcp.json and dropped a .bak.
+    if (before === JSON.stringify(existing)) {
       return { changed: false, configPath: CONFIG_PATH, message: "no change" };
     }
+
+    const after = JSON.stringify(existing, null, 2);
 
     if (dryRun) {
       return { changed: true, configPath: CONFIG_PATH, message: `would merge ${CONFIG_PATH}` };
@@ -96,6 +99,11 @@ export const cursorInstaller: ClientInstaller = {
     delete existing.mcpServers["browserops"];
     const backupPath = await backup(CONFIG_PATH);
     await atomicWrite(CONFIG_PATH, JSON.stringify(existing, null, 2) + "\n");
-    return { changed: true, configPath: CONFIG_PATH, backupPath, message: `removed from ${CONFIG_PATH}` };
+    return {
+      changed: true,
+      configPath: CONFIG_PATH,
+      backupPath,
+      message: `removed from ${CONFIG_PATH}`,
+    };
   },
 };
