@@ -39,10 +39,13 @@ async function readConfig(path: string): Promise<ContinueConfig> {
 
 function isBrowseropsEntry(s: unknown, specCommand: string): boolean {
   if (typeof s !== "object" || s === null) return false;
-  const transport = (s as Record<string, unknown>)["transport"] as Record<string, unknown> | undefined;
+  const transport = (s as Record<string, unknown>)["transport"] as
+    | Record<string, unknown>
+    | undefined;
   const cmd = transport?.["command"];
   if (typeof cmd !== "string") return false;
-  if (cmd.includes("browserops-shim") || cmd.includes("browserops-bridge") || cmd === specCommand) return true;
+  if (cmd.includes("browserops-shim") || cmd.includes("browserops-bridge") || cmd === specCommand)
+    return true;
   // command may be "node" with args pointing at the bridge dist
   const args = transport?.["args"];
   if (Array.isArray(args)) {
@@ -82,7 +85,8 @@ export const continueInstaller: ClientInstaller = {
     const before = JSON.stringify(existing);
 
     existing.experimental = existing.experimental ?? {};
-    const servers: Array<Record<string, unknown>> = existing.experimental.modelContextProtocolServers ?? [];
+    const servers: Array<Record<string, unknown>> =
+      existing.experimental.modelContextProtocolServers ?? [];
 
     const newEntry: Record<string, unknown> = {
       transport: {
@@ -100,11 +104,15 @@ export const continueInstaller: ClientInstaller = {
     }
 
     existing.experimental.modelContextProtocolServers = servers;
-    const after = JSON.stringify(existing, null, 2);
 
-    if (before === after) {
+    // Compare with the same serializer used for `before`. Pretty-printing
+    // here made the equality check unreachable, so every re-run rewrote
+    // config.json and dropped a .bak even when the entry was unchanged.
+    if (before === JSON.stringify(existing)) {
       return { changed: false, configPath, message: "no change" };
     }
+
+    const after = JSON.stringify(existing, null, 2);
 
     if (dryRun) {
       return { changed: true, configPath, message: `would merge ${configPath}` };
