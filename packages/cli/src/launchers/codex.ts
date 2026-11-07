@@ -12,6 +12,19 @@ function resolveBin(name: string): string | null {
   return bin.length > 0 ? bin : null;
 }
 
+export function supportsFullAuto(
+  bin: string,
+  spawner: (command: string, args: readonly string[], options: any) => any = spawnSync,
+): boolean {
+  try {
+    const help = spawner(bin, ["exec", "--help"], { encoding: "utf8" });
+    const text = (help?.stdout ?? "") + (help?.stderr ?? "");
+    return text.includes("--full-auto");
+  } catch {
+    return false;
+  }
+}
+
 export async function runCodexLauncher(task: string): Promise<void> {
   const result = await ensureDaemonRunning({});
   if (result.alreadyRunning) {
@@ -31,7 +44,9 @@ export async function runCodexLauncher(task: string): Promise<void> {
   // `codex exec` is the non-interactive one-shot form. --full-auto skips
   // approval prompts but keeps the codex sandbox on; browser actions tunnel
   // through the bridge WebSocket and aren't affected by the sandbox.
-  const argv = safeMode ? ["exec", prompt] : ["exec", "--full-auto", prompt];
+  // Older versions of Codex CLI do not accept `--full-auto`; probe before passing it.
+  const hasFullAuto = !safeMode && supportsFullAuto(bin);
+  const argv = hasFullAuto ? ["exec", "--full-auto", prompt] : ["exec", prompt];
   const child = spawn(bin, argv, { stdio: "inherit" });
 
   await new Promise<void>((resolve, reject) => {
